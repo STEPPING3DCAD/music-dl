@@ -218,6 +218,22 @@ class TestAppJsFeatureMarkers:
         assert "className: 'update-notification-btn',\n    type: 'button'," in js
         assert "_openExternal(data.release_url)" in js
 
+    def test_updater_settings_exposes_staged_install_action(self):
+        js = (STATIC_DIR / "app.js").read_text()
+        assert "us.status === 'ready_to_install'" in js
+        assert "className: 'updater-btn-install', type: 'button'" in js
+        assert "installBtn.onclick = () => installUpdate()" in js
+
+    def test_web_update_card_exposes_copyable_install_commands(self):
+        js = (STATIC_DIR / "app.js").read_text()
+        assert "function _updateInstallCommands()" in js
+        assert "scripts/install.sh | bash" in js
+        assert "scripts/install.ps1 | iex" in js
+        assert "function _fallbackCopyText(text)" in js
+        assert "Copy install command" in js
+        assert "Copy Windows command" in js
+        assert "Copy macOS/Linux command" in js
+
     def test_tauri_updater_state_is_normalized_for_frontend(self):
         js = (STATIC_DIR / "app.js").read_text()
         assert "function _normalizeUpdaterState(us)" in js

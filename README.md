@@ -192,6 +192,10 @@ bunx tauri build --bundles dmg
 
 ### Updating
 
+- Installed desktop apps can use the in-app update panel. Tauri builds stage
+  the signed update and then show `Restart & Install`. Browser/headless mode
+  shows a copyable install command instead because the browser can be served by
+  Docker, SSH, NAS, or another host.
 - **macOS/Linux desktop:** rerun the same `install.sh` command.
 - **Windows:** rerun the same PowerShell command and follow the MSI installer.
 - **Headless/Docker:** rerun the same `install-docker.sh` command.

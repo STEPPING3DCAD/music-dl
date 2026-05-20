@@ -96,6 +96,10 @@ Manual release assets are still available below:
 
 ### Updating
 
+- Installed desktop apps can use the in-app update panel. Tauri builds stage
+  the signed update and then show `Restart & Install`. Browser/headless mode
+  shows a copyable install command instead because the browser can be served by
+  Docker, SSH, NAS, or another host.
 - macOS/Linux desktop users: rerun the same `install.sh` command.
 - Windows users: rerun the same PowerShell command and follow the MSI installer.
 - Headless/Docker users: rerun the same `install-docker.sh` command.
