@@ -24,6 +24,10 @@
     curl -fsSL https://raw.githubusercontent.com/alfdav/music-dl/master/scripts/install.sh | bash
   INSTALL (Windows PowerShell):
     irm https://raw.githubusercontent.com/alfdav/music-dl/master/scripts/install.ps1 | iex
+  INSTALL (Headless/NAS):
+    curl -fsSL https://raw.githubusercontent.com/alfdav/music-dl/master/scripts/install-docker.sh | bash
+  INTERNAL LATEST (macOS from master):
+    curl -fsSL https://raw.githubusercontent.com/alfdav/music-dl/master/scripts/install-macos-local.sh | bash
   INTERNAL LATEST (Windows from master):
     irm https://raw.githubusercontent.com/alfdav/music-dl/master/scripts/install-windows-local.ps1 | iex
 
@@ -32,10 +36,10 @@
 
   DESIGN:
     Read DESIGN.md before UI work. Keep DESIGN.md, tidaldl-py/docs/design-system.md,
-    and tidal_dl/gui/static/style.css aligned.
+    and tidaldl-py/tidal_dl/gui/static/style.css aligned.
 
   Repository: https://github.com/alfdav/music-dl
-  License: MIT
+  License: Apache-2.0
 -->
 
 > **Using an AI assistant?** Paste the block below into Claude Code, Codex, Cursor, or any LLM tool.
@@ -59,9 +63,9 @@ INTERNAL LATEST (macOS):
 INTERNAL LATEST (Windows 10/11):
   irm https://raw.githubusercontent.com/alfdav/music-dl/master/scripts/install-windows-local.ps1 | iex
 
-DEV:   cd tidaldl-py && uv sync && music-dl gui     # http://localhost:8765
+DEV:   cd tidaldl-py && uv sync && music-dl gui          # http://localhost:8765
 TEST:  cd tidaldl-py && uv run --extra test pytest
-BUILD: cd tidaldl-py && uv sync && uv pip install pyinstaller && bun install && bunx tauri build --bundles dmg
+BUILD: cd tidaldl-py && uv sync --extra build && bun install && bunx tauri build --bundles dmg
 
 STACK: Python 3.12+, FastAPI, vanilla JS, Tauri v2, Bun/discord.js for the optional bot.
 REPO:  monorepo — Python app under tidaldl-py/, Discord bot under apps/discord-bot/.
@@ -69,11 +73,11 @@ REPO:  monorepo — Python app under tidaldl-py/, Discord bot under apps/discord
 KEY PATHS:
   DESIGN.md                         — agent-readable design tokens and visual identity contract
   tidaldl-py/docs/design-system.md  — detailed UI component/layout/animation rules
-  tidal_dl/gui/static/{app.js,style.css,index.html} — frontend (no framework)
-  tidal_dl/gui/__init__.py    — FastAPI app factory
-  tidal_dl/gui/api/           — all API routes
-  tidal_dl/gui/security.py    — CSRF, path validation, host validation
-  src-tauri/src/lib.rs        — Tauri sidecar spawn + health poll
+  tidaldl-py/tidal_dl/gui/static/{app.js,style.css,index.html} — frontend (no framework)
+  tidaldl-py/tidal_dl/gui/__init__.py    — FastAPI app factory
+  tidaldl-py/tidal_dl/gui/api/           — all API routes
+  tidaldl-py/tidal_dl/gui/security.py    — CSRF, path validation, host validation
+  tidaldl-py/src-tauri/src/lib.rs        — Tauri sidecar spawn + health poll
   apps/discord-bot/           — optional private Discord voice bot
 
 RULES:
@@ -184,7 +188,7 @@ See [Building the Desktop App](#building-the-desktop-app) for the full prerequis
 
 ```shell
 cd tidaldl-py
-uv sync && uv pip install pyinstaller
+uv sync --extra build
 bun install
 bunx tauri build --bundles dmg
 # Output: src-tauri/target/release/bundle/dmg/
@@ -275,13 +279,11 @@ Run `music-dl --help` for the full list.
 
 If music-dl breaks, open a GitHub issue with the bug template. The [bug reporting guide](docs/bug-reporting.md) lists the local state, logs, and safe commands that help us avoid generic follow-up questions. If you use an AI assistant, point it at that guide and ask it to fill the issue from real evidence on your machine.
 
+The GUI also includes a static **Report bug** link in the app chrome and no-JavaScript fallback. It opens the GitHub bug report template directly, so users can still file a report when local API calls or app state are broken.
+
 ## Configuration
 
 Settings are managed from the in-app **Settings** page. The config file lives at `~/.config/music-dl/settings.json`.
-
-## Bug Reports
-
-The GUI includes a static **Report bug** link in the app chrome and no-JavaScript fallback. It opens the GitHub bug report template directly, so users can still file a report when local API calls or app state are broken.
 
 | Setting | Default | What it does |
 | --- | --- | --- |
@@ -372,7 +374,7 @@ docker build -f docker/Dockerfile -t music-dl .
 Prepare stable release metadata from the repository root:
 
 ```shell
-python scripts/release_version.py bump patch
+uv run --project tidaldl-py python scripts/release_version.py bump patch
 ```
 
 Use `bump minor`, `bump major`, or `set X.Y.Z` when needed. The script updates
@@ -404,7 +406,7 @@ sudo apt install libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
 **Build:**
 ```shell
 cd tidaldl-py
-uv sync && uv pip install pyinstaller
+uv sync --extra build
 bun install
 # Linux:
 bunx tauri build          # outputs .AppImage + .deb

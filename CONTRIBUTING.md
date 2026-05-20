@@ -45,7 +45,7 @@ Create a branch, make your changes, open a PR against `master`.
 
 ### Packaging
 
-- `pyproject.toml` is the single source of truth
+- Stable release metadata must be changed through `scripts/release_version.py`
 - Static assets must be listed in `[tool.setuptools.package-data]` or Docker breaks
 - Test with `docker build -f docker/Dockerfile -t music-dl .` before merging packaging changes
 
@@ -111,6 +111,14 @@ bun run typecheck
 Blank release notes are a release bug.
 
 macOS DMGs and updater archives are built and attached by GitHub Actions. Windows MSIs are unsigned, so SmartScreen warnings are expected.
+
+Prepare stable release metadata from the repository root:
+
+```shell
+uv run --project tidaldl-py python scripts/release_version.py bump patch
+```
+
+Use `bump minor`, `bump major`, or `set X.Y.Z` when needed. The helper updates Python, Tauri, Rust, changelog, and lockfile version state together, rejects non-SemVer stable versions, and requires an `## Unreleased` changelog section before writing files.
 
 ## Security
 

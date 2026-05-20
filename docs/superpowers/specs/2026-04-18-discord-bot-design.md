@@ -1,5 +1,8 @@
 # Discord Bot Design
 
+> Historical design note. Current bot architecture and setup docs live in
+> `apps/discord-bot/README.md` and `tidaldl-py/docs/bot-onboarding.md`.
+
 Date: 2026-04-18
 Status: Approved for planning
 

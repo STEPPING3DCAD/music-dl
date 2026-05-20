@@ -1,5 +1,8 @@
 # Windows MSI Release Design
 
+> Historical design note. Current release and installer docs live in
+> `README.md`, `CONTRIBUTING.md`, and `docs/release/install-instructions.md`.
+
 Date: 2026-04-24
 
 ## Goal

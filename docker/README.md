@@ -19,7 +19,7 @@ Open [http://localhost:8765](http://localhost:8765). Done.
 Manual source checkout still works:
 
 ```shell
-git clone https://github.com/alfdav/music-dl.git
+git clone git@github.com:alfdav/music-dl.git
 cd music-dl
 docker compose -f docker/docker-compose.yml up gui -d
 ```

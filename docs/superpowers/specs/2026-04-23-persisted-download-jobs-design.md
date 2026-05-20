@@ -1,5 +1,8 @@
 # Persisted Download Jobs Design
 
+> Historical design note. Current download job behavior is documented in
+> `tidaldl-py/docs/backend-guide.md`.
+
 Date: 2026-04-23
 
 ## Goal

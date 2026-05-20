@@ -1,5 +1,8 @@
 # Daemon Supervisor Design
 
+> Historical design note. Current daemon behavior is documented in
+> `tidaldl-py/docs/backend-guide.md`.
+
 Date: 2026-04-23
 Status: Approved for implementation planning
 
