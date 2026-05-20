@@ -14,18 +14,37 @@
  * path, consulted by both writer and reader.
  */
 
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
 import { getBotEnvPath } from "./wizard/paths";
 
 const envPath = getBotEnvPath();
 if (existsSync(envPath)) {
-  // process.loadEnvFile (Node 20.12+) mirrors what `--env-file=` does
-  // internally. Non-existent files would throw ENOENT, so gate on
-  // existsSync: a missing file means either first-run or a misplaced
-  // config, both of which parseConfig() will surface with a clear
-  // "Missing required configuration" message listing the exact keys.
-  process.loadEnvFile(envPath);
+  loadEnvFile(envPath);
 }
 
 await import("./index");
+
+function loadEnvFile(path: string): void {
+  const body = readFileSync(path, "utf8");
+  for (const rawLine of body.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+
+    const separator = line.indexOf("=");
+    if (separator <= 0) continue;
+
+    const key = line.slice(0, separator).trim();
+    const rawValue = line.slice(separator + 1).trim();
+    process.env[key] = parseEnvValue(rawValue);
+  }
+}
+
+function parseEnvValue(value: string): string {
+  if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
+    return value
+      .slice(1, -1)
+      .replace(/\\(["\\])/g, "$1");
+  }
+  return value;
+}

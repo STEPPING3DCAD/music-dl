@@ -1,7 +1,10 @@
 import { describe, expect, mock, test } from "bun:test";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import type { BotConfig } from "./config";
-import { buildControllerPanel, handleControllerInteraction } from "./controller";
+import { buildControllerPanel, handleControllerInteraction, postOrUpdateControllerPanel } from "./controller";
 import type { MusicDlClient } from "./musicDlClient";
 import { QueueState } from "./queue";
 import type { Playback, VoiceManager } from "./player";
@@ -50,7 +53,9 @@ function makeDeps(overrides: Partial<CommandDeps> = {}): CommandDeps {
     skip: mock(async () => null),
     stop: mock(() => {}),
   };
-  const voice: Partial<VoiceManager> = {};
+  const voice: Partial<VoiceManager> = {
+    join: mock(async () => ({}) as never),
+  };
 
   return {
     config: makeConfig(),
@@ -80,6 +85,28 @@ function makeSelectInteraction(value = "pl1") {
   };
 }
 
+function makeButtonInteraction(customId = "djai:queue") {
+  const calls: unknown[] = [];
+  return {
+    guildId: "g-ok",
+    channelId: "c-ok",
+    user: { id: "u-ok" },
+    member: { voice: { channel: { id: "v-ok", name: "La Radio", guild: { id: "g-ok" } } } },
+    channel: { id: "c-ok", send: mock(async () => null) },
+    isButton: () => true,
+    isStringSelectMenu: () => false,
+    isModalSubmit: () => false,
+    customId,
+    deferred: false,
+    replied: false,
+    reply: mock(async (payload: unknown) => calls.push(payload)),
+    deferReply: mock(async (payload: unknown) => calls.push(payload)),
+    editReply: mock(async (payload: unknown) => calls.push(payload)),
+    followUp: mock(async (payload: unknown) => calls.push(payload)),
+    _calls: calls,
+  };
+}
+
 describe("DJAI controller panel", () => {
   test("panel exposes human playback controls", () => {
     const deps = makeDeps();
@@ -89,8 +116,37 @@ describe("DJAI controller panel", () => {
     expect(panel.content).toContain("Repeat: all");
     const json = JSON.stringify(panel.components.map((row) => row.toJSON()));
     expect(json).toContain("Search");
+    expect(json).toContain("Summon");
     expect(json).toContain("Playlists");
     expect(json).toContain("Play/Pause");
+  });
+
+  test("summon button joins the allowed user's current voice channel", async () => {
+    const deps = makeDeps();
+    const interaction = makeButtonInteraction("djai:summon");
+
+    const handled = await handleControllerInteraction(interaction as never, deps);
+
+    expect(handled).toBe(true);
+    expect(deps.voice.join).toHaveBeenCalledWith(
+      interaction.member.voice.channel,
+      interaction.channel,
+    );
+    expect(JSON.stringify(interaction._calls)).toContain("Joined **La Radio**.");
+  });
+
+  test("summon button rejects when the allowed user is not in voice", async () => {
+    const deps = makeDeps();
+    const interaction = {
+      ...makeButtonInteraction("djai:summon"),
+      member: { voice: { channel: null } },
+    };
+
+    const handled = await handleControllerInteraction(interaction as never, deps);
+
+    expect(handled).toBe(true);
+    expect(deps.voice.join).not.toHaveBeenCalled();
+    expect(JSON.stringify(interaction._calls)).toContain("Join a voice channel first");
   });
 
   test("playlist selection queues playlist and defaults repeat to all", async () => {
@@ -108,6 +164,29 @@ describe("DJAI controller panel", () => {
     expect((deps.playback.playCurrent as ReturnType<typeof mock>).mock.calls.length).toBe(1);
   });
 
+  test("playlist selection refreshes saved public panel, not the ephemeral picker", async () => {
+    const postOrUpdate = mock(async () => {});
+    const deps = makeDeps({
+      controller: { postOrUpdate },
+    });
+    const interaction = {
+      ...makeSelectInteraction(),
+      message: {
+        editable: true,
+        edit: mock(async () => {
+          throw new Error("wrong message");
+        }),
+      },
+    };
+
+    const handled = await handleControllerInteraction(interaction as never, deps);
+
+    expect(handled).toBe(true);
+    expect(postOrUpdate).toHaveBeenCalled();
+    expect(interaction.message.edit).not.toHaveBeenCalled();
+    expect(JSON.stringify(interaction._calls)).toContain("Queued playlist in repeat mode: 2 tracks.");
+  });
+
   test("unauthorized control click is rejected", async () => {
     const deps = makeDeps();
     const interaction = makeSelectInteraction();
@@ -118,5 +197,45 @@ describe("DJAI controller panel", () => {
     expect(handled).toBe(true);
     expect(deps.queue.length).toBe(0);
     expect((interaction.followUp as ReturnType<typeof mock>).mock.calls.length).toBe(1);
+  });
+
+  test("controller errors produce private failure instead of timing out", async () => {
+    const deps = makeDeps({
+      queue: {
+        contents: () => {
+          throw new Error("boom");
+        },
+      } as never,
+    });
+    const interaction = makeButtonInteraction();
+
+    const handled = await handleControllerInteraction(interaction as never, deps);
+
+    expect(handled).toBe(true);
+    expect(JSON.stringify(interaction._calls)).toContain("DJAI remote action failed");
+  });
+
+  test("forceNew posts a fresh panel instead of editing old saved state", async () => {
+    const deps = makeDeps();
+    const dir = await mkdtemp(join(tmpdir(), "djai-panel-"));
+    const path = join(dir, "panel.json");
+    await writeFile(path, JSON.stringify({ channelId: "c-ok", messageId: "old-panel" }));
+    const fetchPrevious = mock(async () => ({ edit: mock(async () => {}) }));
+    const send = mock(async () => ({ id: "new-panel" }));
+    const client = {
+      channels: {
+        fetch: mock(async () => ({
+          type: 0,
+          send,
+          messages: { fetch: fetchPrevious },
+        })),
+      },
+    };
+
+    await postOrUpdateControllerPanel(client as never, deps, { forceNew: true }, path);
+
+    expect(fetchPrevious).not.toHaveBeenCalled();
+    expect(send).toHaveBeenCalled();
+    expect(JSON.parse(await readFile(path, "utf8")).messageId).toBe("new-panel");
   });
 });

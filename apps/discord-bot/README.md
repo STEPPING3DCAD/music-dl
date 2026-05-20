@@ -10,15 +10,17 @@ resolve, playable URL, and download job goes through the backend's
 - **Slash commands in one channel, for one user.** `djai`, `summon`, `leave`, `play`,
   `pause`, `resume`, `skip`, `queue`, `nowplaying`, `volume`, `repeat`,
   `download`.
-- **DJAI remote panel.** On startup the bot posts or refreshes one control
-  panel in the allowed channel. Buttons open search, playlist selection,
-  playback controls, queue view, and repeat controls. Only the allowed user
-  can use them.
+- **DJAI remote panel.** On startup the bot refreshes the last control panel
+  when it can. Running `/djai` posts a fresh remote panel in the channel.
+  Buttons open search, summon the bot to the allowed user's current voice
+  channel, playlist selection, playback controls, queue view, and repeat
+  controls. Only the allowed user can use them.
 - **Playlist UX without IDs.** The playlist button shows saved Tidal
   playlists. Selecting one queues it and defaults repeat to `all`.
-- **Voice playback** via `@discordjs/voice` + native `@discordjs/opus` +
-  `libsodium-wrappers`. DAVE (v=8) voice protocol is supported through
-  `@snazzah/davey`.
+- **Voice playback** via `@discordjs/voice`, `libsodium-wrappers`, and an
+  Opus encoder. The bot tries native `@discordjs/opus` first and falls back
+  to `opusscript` when the native binding is not available under Bun. DAVE
+  (v=8) voice protocol is supported through `@snazzah/davey`.
 - **Never downloads on `/play`.** `/play` resolves and queues; `/download`
   is the only command that kicks off a download job.
 - **Visible picker for free-text search.** Up to five numbered-button
@@ -30,10 +32,7 @@ resolve, playable URL, and download job goes through the backend's
 
 ## Requirements
 
-- **Bun 1.2+** for install, tests, and the wizard.
-- **Node.js 20.12+** for `bun run start` (`boot.ts` uses
-  `process.loadEnvFile`). `bun run start:bun` is available for local
-  Bun-only runs.
+- **Bun 1.2+** for install, tests, the wizard, and the bot runtime.
 - **ffmpeg** on `PATH` (voice resampling)
 - A **Discord application + bot token** with `Connect` and `Speak`
   voice permissions in your guild
@@ -42,9 +41,8 @@ resolve, playable URL, and download job goes through the backend's
 ## Setup
 
 The onboarding wizard handles everything — token collection, preflight
-checks (Node version, libsodium, ffmpeg, Opus, Discord token validity,
-guild/channel/user reachability, voice permissions), and atomic file
-writes.
+checks (libsodium, ffmpeg, Opus, Discord token validity, guild/channel/user
+reachability, voice permissions), and atomic file writes.
 
 **Easiest path (from the GUI):**
 
@@ -69,7 +67,9 @@ music-dl gui --setup-bot
 ```
 
 That launches the wizard as a child of the backend, blocks until it's
-done, then starts the web server. See
+done, then starts the web server. The wizard checks libsodium, ffmpeg,
+Opus, Discord token validity, guild/channel/user reachability, and voice
+permissions before writing config. See
 [`../../tidaldl-py/docs/bot-onboarding.md`](../../tidaldl-py/docs/bot-onboarding.md)
 for the full flow.
 
@@ -103,7 +103,10 @@ cd apps/discord-bot
 bun run start     # runs src/boot.ts, which loads the env file and imports src/index.ts
 ```
 
-For a Bun-only local run:
+The desktop GUI launches the same entrypoint directly with
+`bun src/boot.ts` so its PID file tracks the long-running bot process.
+
+The legacy `start:bun` alias is kept for older docs and scripts:
 
 ```bash
 bun run start:bun
@@ -158,7 +161,7 @@ src/
     ├── index.ts         Entry flow: returning-user decision → prompts → preflight → atomic commit
     ├── paths.ts         Canonical env + shared-token paths (must match backend precedence)
     ├── prompts.ts       5 user-supplied values with breadcrumbs + masked token input
-    ├── preflight.ts     Env + Discord checks (Node, libsodium, ffmpeg, Opus, token, guild, channel, user, voice perms)
+    ├── preflight.ts     Env + Discord checks (Bun, libsodium, ffmpeg, Opus encoder, token, guild, channel, user, voice perms)
     ├── envFile.ts       Atomic .env write at mode 0600
     ├── sharedToken.ts   Atomic shared-token write at mode 0600 (crypto.randomBytes(32))
     └── commit.ts        Two-file atomic commit — both land or neither does
@@ -190,6 +193,7 @@ Bot startup
   → post or refresh one DJAI panel in ALLOWED_CHANNEL_ID
   → button/select/modal interactions
   → auth.ensureAuthorized          (guild + channel + user gate)
+  → Summon                         → join allowed user's current voice channel
   → Search                         → modal → /api/bot/play/resolve → track picker
   → Playlists                      → /api/playlists → select → /api/playlists/{id}/tracks
   → queue.append([...])
@@ -220,9 +224,9 @@ a real filesystem, or the real user config directory.
 - **`/summon` cannot connect** — the bot needs `Connect` and `Speak`
   in the target voice channel. If permissions are correct, restart the
   bot to clear any stale Discord voice session from a previous process.
-- **Voice protocol or encryption errors** — run `bun install` in
-  `apps/discord-bot` so `@discordjs/opus`, `libsodium-wrappers`, and
-  `@snazzah/davey` dependencies are present.
+- **Voice protocol, encryption, or Opus errors** — run `bun install` in
+  `apps/discord-bot` so `@discordjs/opus`, `opusscript`,
+  `libsodium-wrappers`, and `@snazzah/davey` dependencies are present.
 - **Wizard exits `75`** — preflight failed too many times and wrote
   nothing. Fix the reported token, guild/channel/user, voice permission,
   or local dependency issue and rerun `music-dl gui --setup-bot`.
@@ -230,7 +234,7 @@ a real filesystem, or the real user config directory.
   Packaged desktop installs include the bot sources and provision them
   under the music-dl config directory. Source checkouts can still set
   `MUSIC_DL_BOT_PATH=/path/to/apps/discord-bot`.
-- **Wizard exits `127`** — Bun or the Node/tsx fallback is unavailable.
+- **Wizard exits `127`** — Bun is unavailable.
   Install Bun, then run `bun install` in `apps/discord-bot`.
 - **Backend returns `401` to every bot request** — the bot and backend
   are using different shared tokens. `MUSIC_DL_BOT_TOKEN` takes

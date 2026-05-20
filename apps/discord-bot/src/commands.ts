@@ -13,6 +13,7 @@ import {
 } from "discord.js";
 
 import type { BotConfig } from "./config";
+import type { PostPanelOptions } from "./controller";
 import type { MusicDlClient, ResolveResult, ResolvedItem } from "./musicDlClient";
 import { MusicDlError } from "./musicDlClient";
 // re-exported to make MusicDlError available within this module
@@ -32,7 +33,7 @@ export interface CommandDeps {
   // Optional override for the picker so tests can substitute a mock
   // without building a full Discord button-collector runtime.
   picker?: typeof runPicker;
-  controller?: { postOrUpdate: () => Promise<void> };
+  controller?: { postOrUpdate: (options?: PostPanelOptions) => Promise<void> };
 }
 
 const REPEAT_CHOICES: ReadonlyArray<{ name: string; value: RepeatMode }> = [
@@ -185,13 +186,11 @@ async function handleDjai(
   interaction: ChatInputCommandInteraction,
   deps: CommandDeps,
 ): Promise<void> {
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   if (deps.controller) {
-    await deps.controller.postOrUpdate();
+    await deps.controller.postOrUpdate({ forceNew: true });
   }
-  await safeReply(interaction, {
-    content: "DJAI remote is active in this channel.",
-    ephemeral: true,
-  });
+  await safeReply(interaction, { content: "DJAI remote is active in this channel." });
 }
 
 async function handleSummon(

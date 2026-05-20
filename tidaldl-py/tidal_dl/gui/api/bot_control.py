@@ -192,7 +192,7 @@ def _start_bot_for_app(app) -> dict:
 
     try:
         proc = subprocess.Popen(
-            [bun, "run", "start"],
+            [bun, "src/boot.ts"],
             cwd=str(root),
             env={**os.environ, "MUSIC_DL_BOT_ENV_PATH": str(env_path)},
             stdout=subprocess.DEVNULL,

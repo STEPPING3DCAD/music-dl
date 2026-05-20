@@ -18,8 +18,6 @@
  */
 
 import { execFile } from "node:child_process";
-import { dirname } from "node:path";
-import { fileURLToPath } from "node:url";
 
 import type { BotEnvKey, BotEnvShape } from "./returningUser";
 
@@ -38,7 +36,6 @@ export interface CheckResult {
 }
 
 export interface PreflightDeps {
-  nodeVersion?: () => string;
   hasLibsodium?: () => Promise<boolean>;
   hasFfmpeg?: () => Promise<boolean>;
   hasOpus?: () => Promise<boolean>;
@@ -46,12 +43,6 @@ export interface PreflightDeps {
    *  intentionally not probed; see module-level note). */
   fetchImpl?: typeof fetch;
 }
-
-// boot.ts uses process.loadEnvFile, which was added to Node in 20.12.
-// Lower versions pass preflight but crash the bot at startup, so the
-// floor here must match the runtime requirement exactly.
-const MIN_NODE_MAJOR = 20;
-const MIN_NODE_MINOR_ON_MAJOR = 12;
 
 /**
  * Run all preflight checks in dependency order. Short-circuits none — all
@@ -62,7 +53,6 @@ export async function runPreflight(
   deps: PreflightDeps = {},
 ): Promise<CheckResult[]> {
   const results: CheckResult[] = [];
-  results.push(checkNodeVersion(deps.nodeVersion));
   results.push(await checkLibsodium(deps.hasLibsodium));
   results.push(await checkFfmpeg(deps.hasFfmpeg));
   results.push(await checkOpus(deps.hasOpus));
@@ -96,27 +86,6 @@ export async function runPreflight(
 // ----------------------------------------------------------------------
 // Environment checks
 // ----------------------------------------------------------------------
-
-function checkNodeVersion(provider?: () => string): CheckResult {
-  const version = (provider ?? (() => process.version))();
-  const match = /^v(\d+)\.(\d+)/.exec(version);
-  const major = match ? Number(match[1]) : 0;
-  const minor = match ? Number(match[2]) : 0;
-  const passed =
-    major > MIN_NODE_MAJOR ||
-    (major === MIN_NODE_MAJOR && minor >= MIN_NODE_MINOR_ON_MAJOR);
-  const required = `${MIN_NODE_MAJOR}.${MIN_NODE_MINOR_ON_MAJOR}`;
-  return {
-    id: "node-version",
-    label: `Node.js runtime ≥ ${required}`,
-    field: "env",
-    passed,
-    errorMessage: passed ? undefined : `Found ${version}`,
-    remediation: passed
-      ? undefined
-      : `Install Node.js ${required}+ (e.g. via nvm, fnm, or asdf).`,
-  };
-}
 
 async function checkLibsodium(
   provider?: () => Promise<boolean>,
@@ -177,33 +146,46 @@ async function checkOpus(
   const ok = await (provider ?? defaultOpusCheck)();
   return {
     id: "opus",
-    label: "Opus binding (@discordjs/opus) loadable",
+    label: "Opus encoder loadable",
     field: "env",
     passed: ok,
     remediation: ok
       ? undefined
-      : "Reinstall: `bun install` inside apps/discord-bot (this also rebuilds the native opus binding).",
+      : "Reinstall: `bun install` inside apps/discord-bot so @discordjs/opus or opusscript is available.",
   };
 }
 
 async function defaultOpusCheck(): Promise<boolean> {
-  // The bot starts under `node` (package.json `start`: node --import tsx).
-  // The wizard itself runs under `bun`, whose NAPI ABI can differ from the
-  // prebuilt binary fetched during install (e.g. bun v137 vs Node v25 v141).
-  // Checking opus in-process under bun gives a false negative in that case.
-  // Shell out to `node` so the check reflects the actual bot runtime.
-  const botRoot = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
-  return new Promise((resolve) => {
-    execFile(
-      "node",
-      [
-        "-e",
-        "const m = require('@discordjs/opus'); new m.OpusEncoder(48000, 2);",
-      ],
-      { cwd: botRoot, timeout: 5000 },
-      (err) => resolve(err === null),
-    );
-  });
+  if (await canLoadNativeOpus()) return true;
+  return await canLoadOpusScript();
+}
+
+async function canLoadNativeOpus(): Promise<boolean> {
+  try {
+    const mod = await import("@discordjs/opus");
+    const OpusEncoder = (mod as {
+      OpusEncoder?: new (rate: number, channels: number) => unknown;
+    }).OpusEncoder;
+    if (!OpusEncoder) return false;
+    new OpusEncoder(48000, 2);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function canLoadOpusScript(): Promise<boolean> {
+  try {
+    const mod = await import("opusscript");
+    const OpusScript = (mod as {
+      default?: new (rate: 48000, channels: number) => unknown;
+    }).default;
+    if (!OpusScript) return false;
+    new OpusScript(48000, 2);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // ----------------------------------------------------------------------

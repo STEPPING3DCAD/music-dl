@@ -11,6 +11,7 @@ import {
   type ButtonInteraction,
   type ChatInputCommandInteraction,
   type Client,
+  type GuildMember,
   type Interaction,
   type Message,
   type ModalSubmitInteraction,
@@ -26,6 +27,7 @@ import { getConfigDir } from "./wizard/paths";
 
 const ID = {
   search: "djai:search",
+  summon: "djai:summon",
   playPause: "djai:playpause",
   skip: "djai:skip",
   stop: "djai:stop",
@@ -59,6 +61,7 @@ export function buildControllerPanel(deps: CommandDeps): PanelPayload {
 
   const row1 = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder().setCustomId(ID.search).setLabel("Search").setEmoji("🔎").setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId(ID.summon).setLabel("Summon").setEmoji("📡").setStyle(ButtonStyle.Success),
     new ButtonBuilder().setCustomId(ID.playPause).setLabel("Play/Pause").setEmoji("⏯️").setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId(ID.skip).setLabel("Skip").setEmoji("⏭️").setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId(ID.stop).setLabel("Stop").setEmoji("⏹️").setStyle(ButtonStyle.Danger),
@@ -92,15 +95,20 @@ export async function handleControllerInteraction(
     return true;
   }
 
-  if (interaction.isButton()) {
-    await handleButton(interaction, deps);
-    return true;
+  try {
+    if (interaction.isButton()) {
+      await handleButton(interaction, deps);
+      return true;
+    }
+    if (interaction.isStringSelectMenu()) {
+      await handleSelect(interaction, deps);
+      return true;
+    }
+    await handleModal(interaction, deps);
+  } catch (error) {
+    deps.logger?.error("controller interaction failed:", error);
+    await replyPrivate(interaction, "DJAI remote action failed. Try again.");
   }
-  if (interaction.isStringSelectMenu()) {
-    await handleSelect(interaction, deps);
-    return true;
-  }
-  await handleModal(interaction, deps);
   return true;
 }
 
@@ -111,6 +119,9 @@ async function handleButton(
   switch (interaction.customId) {
     case ID.search:
       await interaction.showModal(buildSearchModal());
+      return;
+    case ID.summon:
+      await summonToUserVoice(interaction, deps);
       return;
     case ID.playlists:
       await showPlaylistPicker(interaction, deps);
@@ -141,6 +152,27 @@ async function handleButton(
   }
 }
 
+async function summonToUserVoice(
+  interaction: ButtonInteraction,
+  deps: CommandDeps,
+): Promise<void> {
+  const member = interaction.member as GuildMember | null;
+  const voiceChannel = member?.voice?.channel ?? null;
+  if (!voiceChannel) {
+    await replyPrivate(interaction, "Join a voice channel first, then use Summon.");
+    return;
+  }
+  const textChannel = interaction.channel;
+  if (!textChannel) {
+    await replyPrivate(interaction, "I can only join from a text channel.");
+    return;
+  }
+
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  await deps.voice.join(voiceChannel, textChannel);
+  await interaction.editReply(`Joined **${voiceChannel.name}**.`);
+}
+
 async function handleSelect(
   interaction: StringSelectMenuInteraction,
   deps: CommandDeps,
@@ -151,7 +183,7 @@ async function handleSelect(
     const items = await deps.client.playlistItems(playlistId);
     deps.queue.setRepeat("all");
     await queueItemsAndMaybeStart(deps, items);
-    await refreshPanel(interaction, deps);
+    await refreshSavedPanel(deps);
     await interaction.followUp({
       content: `Queued playlist in repeat mode: ${items.length} tracks.`,
       flags: MessageFlags.Ephemeral,
@@ -170,7 +202,7 @@ async function handleSelect(
       return;
     }
     await queueItemsAndMaybeStart(deps, [choice]);
-    await refreshPanel(interaction, deps);
+    await refreshSavedPanel(deps);
     await interaction.followUp({
       content: `Queued: **${choice.title}** - ${choice.artist}`,
       flags: MessageFlags.Ephemeral,
@@ -205,14 +237,14 @@ async function handleModal(
       return;
     }
     await queueItemsAndMaybeStart(deps, [choices[0]]);
-    await refreshPanel(interaction, deps);
+    await refreshSavedPanel(deps);
     await interaction.editReply(`Queued: **${choices[0].title}** - ${choices[0].artist}`);
     return;
   }
 
   if (result.kind === "playlist") deps.queue.setRepeat("all");
   await queueItemsAndMaybeStart(deps, result.items);
-  await refreshPanel(interaction, deps);
+  await refreshSavedPanel(deps);
   await interaction.editReply(
     result.kind === "playlist"
       ? `Queued playlist in repeat mode: ${result.items.length} tracks.`
@@ -297,7 +329,22 @@ async function refreshPanel(
   deps: CommandDeps,
 ): Promise<void> {
   if (interaction.message?.editable) {
-    await interaction.message.edit(buildControllerPanel(deps));
+    try {
+      await interaction.message.edit(buildControllerPanel(deps));
+      return;
+    } catch (error) {
+      deps.logger?.error("controller panel refresh failed:", error);
+    }
+  }
+  await refreshSavedPanel(deps);
+}
+
+async function refreshSavedPanel(deps: CommandDeps): Promise<void> {
+  if (!deps.controller) return;
+  try {
+    await deps.controller.postOrUpdate();
+  } catch (error) {
+    deps.logger?.error("controller saved panel refresh failed:", error);
   }
 }
 
@@ -339,6 +386,10 @@ interface PanelState {
   messageId: string;
 }
 
+export interface PostPanelOptions {
+  forceNew?: boolean;
+}
+
 export function panelStatePath(env: NodeJS.ProcessEnv = process.env): string {
   return join(getConfigDir(env), "discord-bot-panel.json");
 }
@@ -346,18 +397,21 @@ export function panelStatePath(env: NodeJS.ProcessEnv = process.env): string {
 export async function postOrUpdateControllerPanel(
   client: Client,
   deps: CommandDeps,
+  options: PostPanelOptions = {},
   path = panelStatePath(),
 ): Promise<void> {
   const channel = await client.channels.fetch(deps.config.allowedChannelId);
   if (!channel || channel.type === ChannelType.DM || !("send" in channel)) return;
 
   const payload = buildControllerPanel(deps);
-  const state = await readPanelState(path);
-  if (state?.channelId === deps.config.allowedChannelId && "messages" in channel) {
-    const previous = await channel.messages.fetch(state.messageId).catch(() => null);
-    if (previous) {
-      await previous.edit(payload);
-      return;
+  if (!options.forceNew) {
+    const state = await readPanelState(path);
+    if (state?.channelId === deps.config.allowedChannelId && "messages" in channel) {
+      const previous = await channel.messages.fetch(state.messageId).catch(() => null);
+      if (previous) {
+        await previous.edit(payload);
+        return;
+      }
     }
   }
 

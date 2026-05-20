@@ -28,8 +28,8 @@ music-dl gui --setup-bot
        ├─ isatty(stdin)?  no → print hint, continue to server
        └─ dispatch_wizard()
             ├─ resolve bot root (MUSIC_DL_BOT_PATH or …/apps/discord-bot)
-            ├─ prefer `bun run wizard`; fall back to `node --import tsx <cli.ts>`
-            ├─ probe tsx resolvability before spawning node (CODEX-P3)
+            ├─ run `bun run wizard`
+            ├─ report missing Bun as runtime-missing
             └─ subprocess.run(..., cwd=bot_root)  — inherits stdio
 ```
 
@@ -39,7 +39,7 @@ Exit code mapping (see `bot_first_run.run_setup_force`):
 | --- | --- | --- |
 | 0 | Wizard completed cleanly | "Bot setup complete." |
 | 126 | Bot sources not locatable | "Set `MUSIC_DL_BOT_PATH`..." |
-| 127 | No bun and no usable node+tsx | "Install bun, or `bun install` in apps/discord-bot" |
+| 127 | Bun unavailable | "Install bun, or `bun install` in apps/discord-bot" |
 | other | Wizard aborted / preflight never passed | "Retry later with `music-dl gui --setup-bot`" |
 
 **Server startup is never aborted by wizard failure.** The backend
@@ -52,15 +52,7 @@ cd apps/discord-bot
 bun run wizard
 ```
 
-Or the backend-compatible fallback for Node-only environments:
-
-```bash
-cd apps/discord-bot
-node --import tsx src/wizard/cli.ts
-```
-
-No difference in behavior — the CLI is just a thin entry on top of
-`runWizard()` in `src/wizard/index.ts`.
+The CLI is a thin entry on top of `runWizard()` in `src/wizard/index.ts`.
 
 ## First-run hint (non-blocking)
 
@@ -127,10 +119,10 @@ identifiers are echoed normally for visual confirmation.
 
 | Check | Field tied to failure | Why |
 | --- | --- | --- |
-| Node ≥ 20.12 | `env` | `boot.ts` uses `process.loadEnvFile` (added in 20.12). Preflight enforces the same floor the bot actually requires. |
+| Bun ≥ 1.2 | `runtime` | `boot.ts` runs under Bun and loads the wizard-written env file directly. |
 | `libsodium-wrappers` loadable | `env` | Voice encryption |
 | `ffmpeg` on `PATH` | `env` | Audio decoding |
-| `@discordjs/opus` loadable | `env` | Voice encoding |
+| Opus encoder loadable (`@discordjs/opus` or `opusscript`) | `env` | Voice encoding |
 | Discord token resolves to a bot identity | `DISCORD_TOKEN` | Token validity |
 | Application ID matches token | `DISCORD_APPLICATION_ID` | Mis-paired credentials |
 | Bot is a member of the allowed guild | `ALLOWED_GUILD_ID` | Catches "bot not invited" |
@@ -184,7 +176,7 @@ sequenceDiagram
 
     W->>FS: write bot-shared-token (0600, atomic)
     W->>FS: write discord-bot.env (0600, atomic, contains MUSIC_DL_BOT_TOKEN)
-    BOT->>FS: loadEnvFile(getBotEnvPath()) on startup
+    BOT->>FS: load getBotEnvPath() env file on startup
     BOT->>B: POST /api/bot/* with Authorization: Bearer <token>
     B->>B: resolve_bot_shared_token()
     alt env MUSIC_DL_BOT_TOKEN non-empty
@@ -224,6 +216,10 @@ Files inside the config dir:
 > `.env` in `cwd`. Matching the wizard's write path here closes the
 > cwd-vs-config-dir divergence that would otherwise silently split
 > state between writer and reader.
+
+The desktop Start Discord Bot control launches `bun src/boot.ts`
+directly from `discord-bot-runtime/` so the recorded PID belongs to the
+long-running bot process.
 
 ### Rotating the shared token
 

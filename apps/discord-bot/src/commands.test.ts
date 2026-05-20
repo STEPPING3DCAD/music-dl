@@ -180,6 +180,25 @@ describe("command registration", () => {
     const unknown = names.filter((n) => !COMMAND_NAMES.includes(n as never));
     expect(unknown).toEqual([]);
   });
+
+  test("/djai defers before refreshing remote panel", async () => {
+    const interaction = makeInteraction({ commandName: "djai" });
+    let sawDeferred = false;
+    const deps = makeDeps({
+      controller: {
+        postOrUpdate: mock(async () => {
+          sawDeferred = Boolean((interaction as { deferred: boolean }).deferred);
+        }),
+      },
+    });
+
+    await handleInteraction(interaction as never, deps);
+
+    expect(sawDeferred).toBe(true);
+    expect(deps.controller?.postOrUpdate).toHaveBeenCalledWith({ forceNew: true });
+    expect((interaction.deferReply as ReturnType<typeof mock>).mock.calls.length).toBe(1);
+    expect(interaction._replies.at(-1)?.content).toBe("DJAI remote is active in this channel.");
+  });
 });
 
 // ---------------------------------------------------------------------------

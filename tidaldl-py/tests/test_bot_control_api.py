@@ -23,6 +23,7 @@ def _csrf_headers(app) -> dict[str, str]:
 def _write_bot_config(tmp_path: Path, monkeypatch) -> Path:
     env_path = tmp_path / "discord-bot.env"
     token_path = tmp_path / "bot-shared-token"
+    pid_path = tmp_path / "discord-bot.pid"
     bot_root = tmp_path / "discord-bot"
     (bot_root / "src").mkdir(parents=True)
     (bot_root / "node_modules").mkdir()
@@ -45,6 +46,7 @@ def _write_bot_config(tmp_path: Path, monkeypatch) -> Path:
     token_path.write_text("shared\n", encoding="utf-8")
     monkeypatch.setenv("MUSIC_DL_BOT_ENV_PATH", str(env_path))
     monkeypatch.setenv("MUSIC_DL_BOT_TOKEN_PATH", str(token_path))
+    monkeypatch.setenv("MUSIC_DL_BOT_PID_PATH", str(pid_path))
     monkeypatch.setenv("MUSIC_DL_BOT_PATH", str(bot_root))
     return bot_root
 
@@ -71,6 +73,7 @@ def test_bot_control_status_reports_missing_config(
 ) -> None:
     monkeypatch.setenv("MUSIC_DL_BOT_ENV_PATH", str(tmp_path / "discord-bot.env"))
     monkeypatch.setenv("MUSIC_DL_BOT_TOKEN_PATH", str(tmp_path / "bot-shared-token"))
+    monkeypatch.setenv("MUSIC_DL_BOT_PID_PATH", str(tmp_path / "discord-bot.pid"))
     monkeypatch.setenv("MUSIC_DL_BOT_PATH", str(tmp_path / "discord-bot"))
 
     app, client = _client()
@@ -373,7 +376,7 @@ def test_bot_control_start_launches_bun_from_configured_bot_root(
 
     assert resp.status_code == 200
     assert resp.json()["running"] is True
-    assert launched["cmd"] == ["/usr/bin/bun", "run", "start"]
+    assert launched["cmd"] == ["/usr/bin/bun", "src/boot.ts"]
     assert launched["kwargs"]["cwd"] == str(bot_root)
     assert launched["kwargs"]["env"]["MUSIC_DL_BOT_ENV_PATH"] == str(tmp_path / "discord-bot.env")
     assert launched["kwargs"]["start_new_session"] is True
@@ -432,7 +435,7 @@ def test_bot_control_start_replaces_stale_recorded_pid(
 
     assert resp.status_code == 200
     assert resp.json()["running"] is True
-    assert launched["cmd"] == ["/usr/bin/bun", "run", "start"]
+    assert launched["cmd"] == ["/usr/bin/bun", "src/boot.ts"]
     assert launched["kwargs"]["cwd"] == str(bot_root)
     assert pid_path.read_text(encoding="utf-8").strip() == "4321"
 
@@ -549,7 +552,7 @@ def test_bot_control_restart_stops_then_starts_bot(tmp_path: Path, monkeypatch) 
     assert resp.status_code == 200
     assert resp.json()["running"] is True
     assert killed
-    assert launched[0][0] == ["/usr/bin/bun", "run", "start"]
+    assert launched[0][0] == ["/usr/bin/bun", "src/boot.ts"]
     assert launched[0][1]["cwd"] == str(bot_root)
 
 
