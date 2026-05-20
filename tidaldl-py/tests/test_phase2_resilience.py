@@ -18,7 +18,7 @@ from tidalapi import Playlist, Quality, Track
 
 def test_settings_default_download_source():
     settings = Settings()
-    assert settings.download_source == DownloadSource.HIFI_API
+    assert settings.download_source == DownloadSource.OAUTH
     assert settings.download_source_fallback is True
     assert settings.hifi_api_instances == ""
 

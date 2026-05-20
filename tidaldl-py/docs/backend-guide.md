@@ -427,6 +427,8 @@ The worker lazy-loads Tidal config/download dependencies only when it actually e
 | Hi-Fi API | `active_source == HIFI_API` | Custom API client → `HiFiStreamManifest` (URLs, encryption) |
 | OAuth | `active_source == OAUTH` | `tidalapi.Track.get_stream()` → BTS (JSON) or DASH (XML) manifest |
 
+OAuth is the default stream source. Hi-Fi API remains available for custom instances, but public instances are treated as optional and must pass live health checks before use.
+
 Hi-Fi API health is based on a real `/track/` probe for `QUALITY_PROBE_TRACK_ID`; fallback or discovered URLs are not counted as live unless they return the expected stream payload.
 
 ---

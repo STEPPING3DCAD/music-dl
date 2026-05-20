@@ -286,8 +286,8 @@ The GUI includes a static **Report bug** link in the app chrome and no-JavaScrip
 | `quality_audio` | `HI_RES_LOSSLESS` | Preferred audio quality |
 | `skip_existing` | `true` | Skip tracks you already have |
 | `skip_duplicate_isrc` | `true` | Skip tracks with matching ISRC codes |
-| `download_source` | `hifi_api` | Preferred stream source |
-| `download_source_fallback` | `true` | Fall back to OAuth when the preferred source fails |
+| `download_source` | `oauth` | Preferred stream source |
+| `download_source_fallback` | `true` | Fall back to the next source when the preferred source fails |
 
 ## Architecture
 
