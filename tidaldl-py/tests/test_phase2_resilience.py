@@ -81,6 +81,36 @@ def test_hifi_client_circuit_breaker_ttl():
     assert client._is_instance_dead("https://a.invalid") is False
 
 
+def test_hifi_client_live_instances_require_track_payload(monkeypatch):
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"data": {"manifest": "abc"}}
+
+    monkeypatch.setattr("tidal_dl.hifi_api.requests.get", mock.Mock(return_value=Response()))
+
+    client = HiFiApiClient(instances=["https://a.invalid"])
+    assert client.live_instances() == ["https://a.invalid"]
+    assert client.health_check() == "https://a.invalid"
+
+
+def test_hifi_client_live_instances_reject_html_placeholder(monkeypatch):
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            raise ValueError("not json")
+
+    monkeypatch.setattr("tidal_dl.hifi_api.requests.get", mock.Mock(return_value=Response()))
+
+    client = HiFiApiClient(instances=["https://a.invalid"])
+    assert client.live_instances() == []
+    assert HiFiApiClient(instances=["https://a.invalid"]).health_check() is None
+
+
 def test_hifi_stream_manifest_adapter():
     manifest = HiFiStreamManifest(
         urls=["https://example.invalid/seg1", "https://example.invalid/seg2"],

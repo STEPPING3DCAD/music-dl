@@ -20,6 +20,26 @@ def test_settings_status_endpoint_reports_access_and_version(client):
     assert isinstance(data["paths"], list)
 
 
+def test_hifi_status_does_not_count_unhealthy_fallback_instances(monkeypatch):
+    from tidal_dl import hifi_api
+    from tidal_dl.gui.api import settings as settings_api
+
+    class FakeHiFiClient:
+        instances = ["https://one.invalid", "https://two.invalid", "https://three.invalid"]
+
+        def live_instances(self):
+            return []
+
+    monkeypatch.setattr(hifi_api, "HiFiApiClient", lambda timeout=5: FakeHiFiClient())
+
+    data = settings_api.hifi_status()
+    assert data == {
+        "alive": 0,
+        "instances": [],
+        "configured": ["https://one.invalid", "https://two.invalid", "https://three.invalid"],
+    }
+
+
 def test_settings_status_goes_read_only_when_configured_volume_is_unavailable(monkeypatch, clear_singletons):
     from tidal_dl.gui.api import settings as settings_api
 
