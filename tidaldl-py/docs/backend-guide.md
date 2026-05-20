@@ -36,11 +36,11 @@
 | `cli.py` | Typer CLI — subcommands: `gui`, `dl`, `cfg`, `login`, `logout`, `sync`, `import`, `isrc-tag`, `source`, `scan`, `dl_fav` |
 | `config.py` | Singleton config: `Settings`, `Tidal`, `HandlingApp`. Token management, key rotation |
 | `download.py` | Download orchestrator: stream fetch → segment merge → decrypt → tag → register |
-| `api.py` | TIDAL API key management with remote gist fallback |
+| `api.py` | Authenticated tidalapi client key handling |
 | `dash.py` | DASH manifest parser for `dash+xml` stream manifests |
-| `hifi_api.py` | Hi-Fi API client for direct stream access (non-OAuth path) |
+| `hifi_api.py` | Legacy stream-source client retained for compatibility; do not document it as a public user path |
 | `metadata.py` | Mutagen-based metadata writer for FLAC, MP3, and MP4 |
-| `constants.py` | Enums (`DownloadSource`, `MediaType`), quality maps, API keys, chunk sizes |
+| `constants.py` | Enums (`DownloadSource`, `MediaType`), quality maps, chunk sizes |
 | `gui/__init__.py` | FastAPI app factory: middleware stack, static files, CSRF injection |
 | `gui/daemon.py` | Local daemon metadata, port selection, stale metadata cleanup, structured readiness |
 | `gui/server.py` | Uvicorn launcher. Binds `127.0.0.1` only |
@@ -105,7 +105,7 @@ t.stream_lock          # Lock — serializes stream ops during Atmos switching
 - `login_token()` — restore from stored token
 - `login_finalize()` — persist after new login
 - `_ensure_token_fresh(refresh_window_sec=300)` — auto-refresh if expiring within 5 min
-- `_try_login_with_key_rotation()` — tries all managed API keys before tidalapi defaults
+- `_try_login_with_key_rotation()` — keeps authenticated tidalapi login resilient across bundled client credentials
 - Token expiry handles both `float` (timestamp) and `datetime` from tidalapi
 
 ### HandlingApp()
@@ -374,7 +374,7 @@ POST /api/download {track_ids: [123, 456]}
   │    ├─ Fetch track metadata from Tidal
   │    ├─ Update job display fields
   │    ├─ Broadcast SSE: {"type": "progress", "status": "downloading"}
-  │    ├─ Get stream manifest (Hi-Fi API or OAuth)
+  │    ├─ Get stream manifest through the authenticated Tidal session
   │    ├─ Download segments (parallel, up to N)
   │    ├─ Merge segments → single file
   │    ├─ Decrypt if encrypted
@@ -420,16 +420,11 @@ The worker lazy-loads Tidal config/download dependencies only when it actually e
 - Thread-safe (lock-protected)
 - Auto-cleanup on complete success
 
-### Stream Sources
+### Stream Access
 
-| Source | When | How |
-|--------|------|-----|
-| Hi-Fi API | `active_source == HIFI_API` | Custom API client → `HiFiStreamManifest` (URLs, encryption) |
-| OAuth | `active_source == OAUTH` | `tidalapi.Track.get_stream()` → BTS (JSON) or DASH (XML) manifest |
-
-OAuth is the default stream source. Hi-Fi API remains available for custom instances, but public instances are treated as optional and must pass live health checks before use.
-
-Hi-Fi API health is based on a real `/track/` probe for `QUALITY_PROBE_TRACK_ID`; fallback or discovered URLs are not counted as live unless they return the expected stream payload.
+User-facing docs and support should assume authenticated Tidal account access
+only. Legacy alternate stream-source code may still exist for compatibility or
+migration, but it is not a public product path and should not be advertised.
 
 ---
 

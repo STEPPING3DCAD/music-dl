@@ -18,7 +18,7 @@
   It downloads tracks in FLAC/lossless/hi-res quality, manages a local library
   on any drive or NAS, and plays everything in a browser-based GUI with
   waveform visualization. macOS, Linux, and Windows 10/11. No cloud dependency — your files,
-  your hardware, your rules.
+  your hardware, your rules. Requires your own Tidal account.
 
   INSTALL (macOS/Linux):
     curl -fsSL https://raw.githubusercontent.com/alfdav/music-dl/master/scripts/install.sh | bash
@@ -50,7 +50,8 @@
 ```text
 music-dl — local-first Tidal music manager. Downloads lossless/hi-res tracks,
 manages a local library (any drive or NAS), plays everything in a browser GUI.
-macOS, Linux, and Windows 10/11. Free and open-source.
+macOS, Linux, and Windows 10/11. Free and open-source. Requires your own
+Tidal account; music-dl does not provide access to Tidal without one.
 
 INSTALL (macOS/Linux):
   curl -fsSL https://raw.githubusercontent.com/alfdav/music-dl/master/scripts/install.sh | bash
@@ -95,7 +96,9 @@ RULES:
 
 ## What is this?
 
-A local-first music manager that connects to your Tidal account. Search the catalog, download tracks in lossless or hi-res quality, browse your local collection, and play everything directly in the browser. Your files, your NAS, your rules.
+A local-first music manager that connects to your own Tidal account. Search the catalog, download tracks in lossless or hi-res quality, browse your local collection, and play everything directly in the browser. Your files, your NAS, your rules.
+
+music-dl is not a Tidal account bypass. You need an active Tidal account and must sign in before catalog search, streaming, or downloads work.
 
 A **setup wizard** walks you through Tidal login and library configuration on first launch — no config files to edit.
 
@@ -267,7 +270,6 @@ music-dl logout                 # clear stored Tidal credentials
 music-dl sync                   # sync library database
 music-dl import <file>          # import a playlist from CSV/JSON
 music-dl isrc-tag <path>        # write ISRC tags to local audio files
-music-dl source show            # inspect Hi-Fi API/OAuth download source settings
 music-dl scan add <PATH>        # add and scan a local library directory
 music-dl dl_fav tracks --since 2026-01-01  # download favorite tracks incrementally
 music-dl gui --setup-bot        # terminal fallback for Discord bot onboarding
@@ -292,8 +294,6 @@ Settings are managed from the in-app **Settings** page. The config file lives at
 | `quality_audio` | `HI_RES_LOSSLESS` | Preferred audio quality |
 | `skip_existing` | `true` | Skip tracks you already have |
 | `skip_duplicate_isrc` | `true` | Skip tracks with matching ISRC codes |
-| `download_source` | `oauth` | Preferred stream source |
-| `download_source_fallback` | `true` | Fall back to the next source when the preferred source fails |
 
 ## Architecture
 

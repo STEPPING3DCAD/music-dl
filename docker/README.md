@@ -4,6 +4,9 @@ Docker is the simplest way to run music-dl on Linux, a NAS, or any machine witho
 
 The image includes Python 3.12, FFmpeg, and the music-dl package. It runs as a **non-root user** (UID 1000) and binds to **localhost only** by default.
 
+You need your own active Tidal account. music-dl does not provide access to
+Tidal without sign-in.
+
 ---
 
 ## GUI Mode (recommended)
