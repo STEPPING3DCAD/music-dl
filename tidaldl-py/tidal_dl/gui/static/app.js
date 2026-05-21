@@ -6912,6 +6912,49 @@ function _openExternal(url) {
   }
 }
 
+function _fallbackCopyText(text) {
+  const el = h('textarea', { style: { position: 'fixed', left: '-9999px', top: '0' } });
+  el.value = text;
+  document.body.appendChild(el);
+  el.focus();
+  el.select();
+  try {
+    return document.execCommand('copy');
+  } catch {
+    return false;
+  } finally {
+    el.remove();
+  }
+}
+
+function _copyText(text, successMessage) {
+  const onFallback = () => {
+    if (_fallbackCopyText(text)) toast(successMessage, 'success');
+    else toast('Copy failed', 'error');
+  };
+
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(text)
+      .then(() => toast(successMessage, 'success'))
+      .catch(onFallback);
+    return;
+  }
+
+  onFallback();
+}
+
+function _updateInstallCommands() {
+  return {
+    unix: 'curl -fsSL https://raw.githubusercontent.com/alfdav/music-dl/master/scripts/install.sh | bash',
+    windows: 'irm https://raw.githubusercontent.com/alfdav/music-dl/master/scripts/install.ps1 | iex',
+  };
+}
+
+function _preferredUpdateInstallCommand() {
+  const platform = (navigator.userAgentData?.platform || navigator.platform || '').toLowerCase();
+  return platform.includes('win') ? _updateInstallCommands().windows : _updateInstallCommands().unix;
+}
+
 function _showDeviceCodeModal(userCode, verificationUri) {
   _dismissDeviceCodeModal();
   const overlay = h('div', { className: 'modal-overlay', id: 'device-code-modal' });
@@ -8169,11 +8212,19 @@ function renderUpdaterSettings(container, us) {
 
   // Check button
   const busy = us.status === 'checking' || us.status === 'downloading' || us.status === 'installing';
-  const btn = h('button', { className: 'updater-btn-check', disabled: busy },
+  const actions = h('div', { className: 'updater-settings-actions' });
+  const btn = h('button', { className: 'updater-btn-check', type: 'button', disabled: busy },
     document.createTextNode(busy ? 'Please wait…' : 'Check for Updates')
   );
   btn.onclick = () => { if (!busy) checkForUpdates(); };
-  wrap.appendChild(btn);
+  actions.appendChild(btn);
+
+  if (us.status === 'ready_to_install') {
+    const installBtn = h('button', { className: 'updater-btn-install', type: 'button' }, 'Restart & Install');
+    installBtn.onclick = () => installUpdate();
+    actions.appendChild(installBtn);
+  }
+  wrap.appendChild(actions);
 
   container.appendChild(wrap);
 }
@@ -8262,13 +8313,37 @@ function _renderWebUpdaterSettings(container) {
     card.appendChild(textEl('div', notes, 'update-notification-notes'));
   }
   const actions = h('div', { className: 'update-notification-actions' });
+  const commands = _updateInstallCommands();
+  const command = _preferredUpdateInstallCommand();
+  const commandBox = h('code', { className: 'update-install-command' }, command);
+  card.appendChild(commandBox);
+
+  const copyBtn = h('button', {
+    className: 'update-notification-btn',
+    type: 'button',
+  });
+  copyBtn.textContent = 'Copy install command';
+  copyBtn.addEventListener('click', () => _copyText(command, 'Install command copied'));
+  actions.appendChild(copyBtn);
+
   const dlBtn = h('button', {
     className: 'update-notification-btn',
     type: 'button',
   });
-  dlBtn.textContent = 'Download from GitHub';
+  dlBtn.textContent = 'Open release';
   dlBtn.addEventListener('click', () => _openExternal(data.release_url));
   actions.appendChild(dlBtn);
+
+  const otherCommand = command === commands.windows ? commands.unix : commands.windows;
+  const otherLabel = command === commands.windows ? 'Copy macOS/Linux command' : 'Copy Windows command';
+  const otherBtn = h('button', {
+    className: 'update-notification-btn update-notification-btn-secondary',
+    type: 'button',
+  });
+  otherBtn.textContent = otherLabel;
+  otherBtn.addEventListener('click', () => _copyText(otherCommand, 'Install command copied'));
+  actions.appendChild(otherBtn);
+
   card.appendChild(actions);
   container.prepend(card);
 }

@@ -4396,6 +4396,11 @@ body {
 }
 .updater-status.updater-status--error { color: var(--red); }
 .updater-status.updater-status--success { color: var(--green); }
+.updater-settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
 .updater-btn-check {
   padding: 8px 20px;
   border: 1px solid var(--glass-border);
@@ -4409,6 +4414,19 @@ body {
 }
 .updater-btn-check:hover { background: var(--surface-active); }
 .updater-btn-check:disabled { opacity: 0.4; cursor: default; }
+.updater-settings .updater-btn-install {
+  padding: 8px 20px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--bg);
+  font-family: var(--sans);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+.updater-settings .updater-btn-install:hover { opacity: 0.85; }
 
 /* Update notification toast */
 .toast-update {
@@ -4482,8 +4500,23 @@ body {
   margin-bottom: 12px;
   white-space: pre-line;
 }
+.update-install-command {
+  display: block;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  overflow-x: auto;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-hover);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  line-height: 1.45;
+  white-space: nowrap;
+}
 .update-notification-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 10px;
 }
 .update-notification-btn {
@@ -4501,6 +4534,11 @@ body {
   transition: opacity 0.15s;
 }
 .update-notification-btn:hover { opacity: 0.85; }
+.update-notification-btn-secondary {
+  background: var(--surface-hover);
+  color: var(--text);
+  border: 1px solid var(--glass-border);
+}
 
 /* ---- DEVICE CODE RE-AUTH MODAL ---- */
 
