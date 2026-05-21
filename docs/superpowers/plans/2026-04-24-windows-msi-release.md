@@ -1,5 +1,8 @@
 # Windows MSI Release Implementation Plan
 
+> Historical plan. Current release and installer docs live in `README.md`,
+> `CONTRIBUTING.md`, and `docs/release/install-instructions.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add a repeatable GitHub Actions path that builds an unsigned native Windows 10/11 MSI for `music-dl`, with a Windows sidecar health smoke and updated release docs.

@@ -18,6 +18,9 @@ music-dl gui
 
 The web UI opens in your browser and serves the local music library, search, download, and playback flows.
 
+You need your own active Tidal account. music-dl does not provide access to
+Tidal without sign-in.
+
 Tidal sign-in and reconnect can be started directly from the GUI; terminal `music-dl login` remains available for CLI-first use.
 
 The GUI keeps a static **Report bug** link in the app chrome and no-JavaScript fallback. It opens the GitHub bug report template directly without depending on local API calls.
@@ -35,8 +38,6 @@ Desktop builds use the same FastAPI static UI through the Tauri sidecar. The Tau
 ```shell
 music-dl dl <URL> --output ~/Music/inbox
 music-dl dl --list urls.txt
-music-dl source show
-music-dl source instances
 music-dl scan add ~/Music
 music-dl scan --all
 music-dl sync --yes

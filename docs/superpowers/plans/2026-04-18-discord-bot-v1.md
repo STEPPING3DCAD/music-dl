@@ -1,5 +1,9 @@
 # Discord Bot V1 Implementation Plan
 
+> Historical plan. Do not treat unchecked boxes in this file as current work.
+> Current bot docs live in `apps/discord-bot/README.md` and
+> `tidaldl-py/docs/bot-onboarding.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build a private, local-first Discord music bot that uses `music-dl` as the only source-resolution and media-access layer.
