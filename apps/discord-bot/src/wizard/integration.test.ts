@@ -49,7 +49,6 @@ afterEach(async () => {
 
 function happyPreflight() {
   return {
-    nodeVersion: () => "v22.0.0",
     hasLibsodium: async () => true,
     hasFfmpeg: async () => true,
     hasOpus: async () => true,

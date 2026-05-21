@@ -6,8 +6,10 @@
 
 import { beforeEach, describe, expect, test, mock, spyOn } from "bun:test";
 import { EventEmitter } from "node:events";
-import { AudioPlayerStatus } from "@discordjs/voice";
+import { PassThrough } from "node:stream";
+import { AudioPlayerStatus, StreamType } from "@discordjs/voice";
 import * as voiceModule from "@discordjs/voice";
+import * as childProcess from "node:child_process";
 
 import { Playback, VoiceManager } from "./player";
 import { QueueState } from "./queue";
@@ -78,6 +80,7 @@ describe("Playback", () => {
   let client: MusicDlClient;
   let playback: Playback;
   let createResourceSpy: ReturnType<typeof spyOn>;
+  let spawnSpy: ReturnType<typeof spyOn>;
 
   beforeEach(() => {
     player = new MockPlayer();
@@ -86,10 +89,13 @@ describe("Playback", () => {
     client = makeClient();
     // Stub createAudioResource so we don't need a real stream.
     createResourceSpy = spyOn(voiceModule, "createAudioResource").mockImplementation(
-      (url: unknown) => ({
+      (input: unknown) => ({
         volume: { setVolume: () => {} },
-        _url: url,
+        _input: input,
       }) as unknown as ReturnType<typeof voiceModule.createAudioResource>,
+    );
+    spawnSpy = spyOn(childProcess, "spawn").mockImplementation(
+      () => makeFakeTranscoder() as never,
     );
     playback = new Playback(voice, queue, client, {
       logger: { error: () => {} },
@@ -104,9 +110,22 @@ describe("Playback", () => {
     expect((client.playable as ReturnType<typeof mock>).mock.calls).toEqual([
       ["item-1"],
     ]);
+    expect(spawnSpy).toHaveBeenCalledWith(
+      "ffmpeg",
+      expect.arrayContaining([
+        "-i",
+        "http://backend/api/bot/bot-stream/tok-item-1",
+        "-vn",
+        "-ar",
+        "48000",
+        "-f",
+        "s16le",
+      ]),
+      expect.objectContaining({ stdio: ["ignore", "pipe", "pipe"] }),
+    );
     expect(createResourceSpy).toHaveBeenCalledWith(
-      "http://backend/api/bot/bot-stream/tok-item-1",
-      expect.objectContaining({ inlineVolume: true }),
+      expect.any(PassThrough),
+      expect.objectContaining({ inlineVolume: true, inputType: StreamType.Raw }),
     );
     expect(player.played.length).toBe(1);
   });
@@ -116,9 +135,7 @@ describe("Playback", () => {
     queue.append([{ id: "x" }]);
     await playback.playCurrent();
     expect(player.played.length).toBe(1);
-    expect((player.played[0] as { _url: string })._url).toBe(
-      "http://backend/api/bot/bot-stream/tok-x",
-    );
+    expect((player.played[0] as { _input: unknown })._input).toBeInstanceOf(PassThrough);
   });
 
   // R5-AC3: track end advances queue per repeat mode
@@ -275,3 +292,20 @@ describe("Playback", () => {
     expect(logs.some((l) => l.includes("gave up"))).toBe(true);
   });
 });
+
+function makeFakeTranscoder() {
+  const proc = new EventEmitter() as EventEmitter & {
+    stdout: PassThrough;
+    stderr: PassThrough;
+    killed: boolean;
+    kill: ReturnType<typeof mock>;
+  };
+  proc.stdout = new PassThrough();
+  proc.stderr = new PassThrough();
+  proc.killed = false;
+  proc.kill = mock(() => {
+    proc.killed = true;
+    return true;
+  });
+  return proc;
+}

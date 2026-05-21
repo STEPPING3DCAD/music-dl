@@ -65,6 +65,11 @@ function makeInteraction(init: MockInteractionInit) {
         if (v === undefined || v === null) return null;
         return Number(v);
       },
+      getSubcommand: (_required?: boolean) => {
+        const v = opts.subcommand;
+        if (v === undefined || v === null) return null;
+        return String(v);
+      },
     },
     get deferred() {
       return deferred;
@@ -129,6 +134,28 @@ function makeDeps(overrides: Partial<CommandDeps> = {}): CommandDeps {
       started_at: 0,
       finished_at: 1,
     })),
+    playlists: mock(async () => [
+      { id: "p1", name: "Road Mix", num_tracks: 2 },
+      { id: "p2", name: "Night Drive", num_tracks: 1 },
+    ]),
+    playlistItems: mock(async () => [
+      {
+        id: "tidal:1",
+        title: "Song One",
+        artist: "Artist A",
+        source_type: "tidal" as const,
+        local: false,
+        duration: 200,
+      },
+      {
+        id: "tidal:2",
+        title: "Song Two",
+        artist: "Artist B",
+        source_type: "tidal" as const,
+        local: false,
+        duration: 240,
+      },
+    ]),
     absolutize: (r: string) => (r.startsWith("http") ? r : `http://backend${r}`),
   };
 
@@ -160,13 +187,13 @@ function makeDeps(overrides: Partial<CommandDeps> = {}): CommandDeps {
 }
 
 // ---------------------------------------------------------------------------
-// R4-AC13: exactly 12 commands are registered
+// R4-AC13: registered command surface stays explicit
 // ---------------------------------------------------------------------------
 
 describe("command registration", () => {
-  test("exactly 12 commands built", () => {
+  test("exactly 13 commands built", () => {
     const built = buildCommands();
-    expect(built.length).toBe(12);
+    expect(built.length).toBe(13);
   });
 
   test("command names match the expected set", () => {
@@ -179,6 +206,25 @@ describe("command registration", () => {
     const names = buildCommands().map((c) => c.name);
     const unknown = names.filter((n) => !COMMAND_NAMES.includes(n as never));
     expect(unknown).toEqual([]);
+  });
+
+  test("/djai defers before refreshing remote panel", async () => {
+    const interaction = makeInteraction({ commandName: "djai" });
+    let sawDeferred = false;
+    const deps = makeDeps({
+      controller: {
+        postOrUpdate: mock(async () => {
+          sawDeferred = Boolean((interaction as { deferred: boolean }).deferred);
+        }),
+      },
+    });
+
+    await handleInteraction(interaction as never, deps);
+
+    expect(sawDeferred).toBe(true);
+    expect(deps.controller?.postOrUpdate).toHaveBeenCalledWith({ forceNew: true });
+    expect((interaction.deferReply as ReturnType<typeof mock>).mock.calls.length).toBe(1);
+    expect(interaction._replies.at(-1)?.content).toBe("DJAI remote is active in this channel.");
   });
 });
 
@@ -278,6 +324,86 @@ describe("individual commands", () => {
     await handleInteraction(i as never, deps);
     expect(deps.queue.contents().map((x) => x.id)).toEqual(["a", "b"]);
     expect((deps.client.triggerDownload as ReturnType<typeof mock>).mock.calls.length).toBe(0);
+  });
+
+  test("/playlist list shows saved playlists", async () => {
+    const deps = makeDeps();
+    const i = makeInteraction({
+      commandName: "playlist",
+      options: { subcommand: "list" },
+    });
+
+    await handleInteraction(i as never, deps);
+
+    expect(i._replies.at(-1)?.content).toContain("Road Mix");
+    expect(i._replies.at(-1)?.content).toContain("Night Drive");
+  });
+
+  test("/playlist switch replaces the queue and starts selected playlist", async () => {
+    const deps = makeDeps();
+    deps.queue.append([{ id: "old", title: "Old Track" }]);
+    const i = makeInteraction({
+      commandName: "playlist",
+      options: { subcommand: "switch", name: "Road Mix" },
+    });
+
+    await handleInteraction(i as never, deps);
+
+    expect(deps.queue.contents().map((item) => item.id)).toEqual(["tidal:1", "tidal:2"]);
+    expect(deps.queue.current()?.id).toBe("tidal:1");
+    expect(deps.queue.getRepeat()).toBe("all");
+    expect((deps.playback.playCurrent as ReturnType<typeof mock>).mock.calls.length).toBe(1);
+    expect(i._replies.at(-1)?.content).toContain("Switched to **Road Mix**");
+  });
+
+  test("/playlist add appends playlist without clearing current queue", async () => {
+    const deps = makeDeps();
+    deps.queue.append([{ id: "old", title: "Old Track" }]);
+    const i = makeInteraction({
+      commandName: "playlist",
+      options: { subcommand: "add", name: "p1" },
+    });
+
+    await handleInteraction(i as never, deps);
+
+    expect(deps.queue.contents().map((item) => item.id)).toEqual(["old", "tidal:1", "tidal:2"]);
+    expect(deps.queue.current()?.id).toBe("old");
+    expect(deps.queue.getRepeat()).toBe("all");
+    expect(deps.playback.playCurrent).not.toHaveBeenCalled();
+    expect(i._replies.at(-1)?.content).toContain("Added **Road Mix**");
+  });
+
+  test("/playlist add starts playback when queue is empty", async () => {
+    const deps = makeDeps();
+    const i = makeInteraction({
+      commandName: "playlist",
+      options: { subcommand: "add", name: "Road" },
+    });
+
+    await handleInteraction(i as never, deps);
+
+    expect(deps.queue.contents().map((item) => item.id)).toEqual(["tidal:1", "tidal:2"]);
+    expect((deps.playback.playCurrent as ReturnType<typeof mock>).mock.calls.length).toBe(1);
+  });
+
+  test("/playlist switch does not clear queue for empty playlist", async () => {
+    const deps = makeDeps({
+      client: {
+        ...makeDeps().client,
+        playlistItems: mock(async () => []),
+      } as never,
+    });
+    deps.queue.append([{ id: "old", title: "Old Track" }]);
+    const i = makeInteraction({
+      commandName: "playlist",
+      options: { subcommand: "switch", name: "Road Mix" },
+    });
+
+    await handleInteraction(i as never, deps);
+
+    expect(deps.queue.contents().map((item) => item.id)).toEqual(["old"]);
+    expect(deps.playback.playCurrent).not.toHaveBeenCalled();
+    expect(i._replies.at(-1)?.content).toBe("No playable items in that playlist.");
   });
 
   test("/play with multi-choice result invokes picker", async () => {

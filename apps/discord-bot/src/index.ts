@@ -21,6 +21,7 @@ import { buildCommands, handleInteraction } from "./commands";
 import {
   handleControllerInteraction,
   postOrUpdateControllerPanel,
+  type PostPanelOptions,
 } from "./controller";
 
 async function main(): Promise<void> {
@@ -50,8 +51,8 @@ async function main(): Promise<void> {
     playback,
     logger,
     controller: {
-      postOrUpdate: async () => {
-        await postOrUpdateControllerPanel(client, deps);
+      postOrUpdate: async (options?: PostPanelOptions) => {
+        await postOrUpdateControllerPanel(client, deps, options);
       },
     },
   };

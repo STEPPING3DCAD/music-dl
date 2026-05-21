@@ -66,7 +66,6 @@ function happyPathFetch(): typeof fetch {
 }
 
 const GOOD_DEPS = {
-  nodeVersion: () => "v22.0.0",
   hasLibsodium: async () => true,
   hasFfmpeg: async () => true,
   hasOpus: async () => true,
@@ -77,23 +76,12 @@ describe("wizard R6 — preflight orchestrator", () => {
   it("all checks pass on a healthy stack", async () => {
     const results = await runPreflight(GOOD_VALUES, GOOD_DEPS);
     expect(failedChecks(results)).toEqual([]);
-    // 10 env+Discord checks total: node/libsodium/ffmpeg/opus +
+    // 9 env+Discord checks total: libsodium/ffmpeg/opus +
     // token/app/guild/channel/user/voice. No backend-reachable check —
     // the wizard runs standalone; backend handshake is verified by the
     // backend itself on startup (see server.py).
-    expect(results.length).toBe(10);
+    expect(results.length).toBe(9);
     expect(results.find((r) => r.id === "backend-reachable")).toBeUndefined();
-  });
-
-  it("AC1: Node version below minimum reports env failure with remediation", async () => {
-    const results = await runPreflight(GOOD_VALUES, {
-      ...GOOD_DEPS,
-      nodeVersion: () => "v16.19.0",
-    });
-    const fail = results.find((r) => r.id === "node-version");
-    expect(fail?.passed).toBe(false);
-    expect(fail?.field).toBe("env");
-    expect(fail?.remediation).toContain("Node.js");
   });
 
   it("AC1: libsodium missing reports env failure", async () => {
