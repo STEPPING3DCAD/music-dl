@@ -181,11 +181,15 @@ async function handleSelect(
     await interaction.deferUpdate();
     const playlistId = interaction.values[0];
     const items = await deps.client.playlistItems(playlistId);
+    if (items.length === 0) {
+      await interaction.followUp({ content: "No playable items in that playlist.", flags: MessageFlags.Ephemeral });
+      return;
+    }
     deps.queue.setRepeat("all");
-    await queueItemsAndMaybeStart(deps, items);
+    await switchToItems(deps, items);
     await refreshSavedPanel(deps);
     await interaction.followUp({
-      content: `Queued playlist in repeat mode: ${items.length} tracks.`,
+      content: `Switched playlist in repeat mode: ${items.length} tracks.`,
       flags: MessageFlags.Ephemeral,
     });
     return;
@@ -243,11 +247,19 @@ async function handleModal(
   }
 
   if (result.kind === "playlist") deps.queue.setRepeat("all");
-  await queueItemsAndMaybeStart(deps, result.items);
+  if (result.kind === "playlist") {
+    if (result.items.length === 0) {
+      await interaction.editReply("No playable items in that playlist.");
+      return;
+    }
+    await switchToItems(deps, result.items);
+  } else {
+    await queueItemsAndMaybeStart(deps, result.items);
+  }
   await refreshSavedPanel(deps);
   await interaction.editReply(
     result.kind === "playlist"
-      ? `Queued playlist in repeat mode: ${result.items.length} tracks.`
+      ? `Switched playlist in repeat mode: ${result.items.length} tracks.`
       : `Queued: **${result.items[0]?.title ?? query}**`,
   );
 }
@@ -260,6 +272,15 @@ export async function queueItemsAndMaybeStart(
   const wasEmpty = deps.queue.length === 0;
   deps.queue.append(items as unknown as Parameters<typeof deps.queue.append>[0]);
   if (wasEmpty) await deps.playback.playCurrent();
+}
+
+async function switchToItems(
+  deps: CommandDeps,
+  items: ResolvedItem[],
+): Promise<void> {
+  deps.queue.clear();
+  deps.queue.append(items as unknown as Parameters<typeof deps.queue.append>[0]);
+  await deps.playback.playCurrent();
 }
 
 function buildSearchModal(): ModalBuilder {

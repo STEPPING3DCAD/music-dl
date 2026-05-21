@@ -16,7 +16,8 @@ resolve, playable URL, and download job goes through the backend's
   channel, playlist selection, playback controls, queue view, and repeat
   controls. Only the allowed user can use them.
 - **Playlist UX without IDs.** The playlist button shows saved Tidal
-  playlists. Selecting one queues it and defaults repeat to `all`.
+  playlists. Selecting one replaces the current queue, starts that
+  playlist, and defaults repeat to `all`.
 - **Voice playback** via `@discordjs/voice`, `libsodium-wrappers`, and an
   Opus encoder. The bot tries native `@discordjs/opus` first and falls back
   to `opusscript` when the native binding is not available under Bun. DAVE
@@ -196,8 +197,8 @@ Bot startup
   → Summon                         → join allowed user's current voice channel
   → Search                         → modal → /api/bot/play/resolve → track picker
   → Playlists                      → /api/playlists → select → /api/playlists/{id}/tracks
-  → queue.append([...])
-  → playlist selection sets repeat all by default
+  → queue.clear() + queue.append([...])
+  → playlist selection starts immediately and sets repeat all by default
 ```
 
 ## Testing

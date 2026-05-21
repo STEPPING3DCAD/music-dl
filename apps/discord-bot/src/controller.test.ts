@@ -149,7 +149,7 @@ describe("DJAI controller panel", () => {
     expect(JSON.stringify(interaction._calls)).toContain("Join a voice channel first");
   });
 
-  test("playlist selection queues playlist and defaults repeat to all", async () => {
+  test("playlist selection switches playlist and defaults repeat to all", async () => {
     const deps = makeDeps();
     deps.queue.setRepeat("off");
 
@@ -160,8 +160,45 @@ describe("DJAI controller panel", () => {
 
     expect(handled).toBe(true);
     expect(deps.queue.length).toBe(2);
+    expect(deps.queue.current()?.id).toBe("tidal:1");
     expect(deps.queue.getRepeat()).toBe("all");
     expect((deps.playback.playCurrent as ReturnType<typeof mock>).mock.calls.length).toBe(1);
+  });
+
+  test("playlist selection replaces the old queue and restarts playback", async () => {
+    const deps = makeDeps();
+    deps.queue.append([{ id: "old", title: "Old Track" }]);
+
+    const handled = await handleControllerInteraction(
+      makeSelectInteraction() as never,
+      deps,
+    );
+
+    expect(handled).toBe(true);
+    expect(deps.queue.contents().map((item) => item.id)).toEqual(["tidal:1", "tidal:2"]);
+    expect(deps.queue.current()?.id).toBe("tidal:1");
+    expect((deps.playback.playCurrent as ReturnType<typeof mock>).mock.calls.length).toBe(1);
+  });
+
+  test("empty playlist selection does not clear the current queue", async () => {
+    const deps = makeDeps({
+      client: {
+        playlists: mock(async () => []),
+        playlistItems: mock(async () => []),
+      } as never,
+    });
+    deps.queue.append([{ id: "old", title: "Old Track" }]);
+    const interaction = makeSelectInteraction();
+
+    const handled = await handleControllerInteraction(
+      interaction as never,
+      deps,
+    );
+
+    expect(handled).toBe(true);
+    expect(deps.queue.contents().map((item) => item.id)).toEqual(["old"]);
+    expect(deps.playback.playCurrent).not.toHaveBeenCalled();
+    expect(JSON.stringify(interaction._calls)).toContain("No playable items in that playlist.");
   });
 
   test("playlist selection refreshes saved public panel, not the ephemeral picker", async () => {
@@ -184,7 +221,7 @@ describe("DJAI controller panel", () => {
     expect(handled).toBe(true);
     expect(postOrUpdate).toHaveBeenCalled();
     expect(interaction.message.edit).not.toHaveBeenCalled();
-    expect(JSON.stringify(interaction._calls)).toContain("Queued playlist in repeat mode: 2 tracks.");
+    expect(JSON.stringify(interaction._calls)).toContain("Switched playlist in repeat mode: 2 tracks.");
   });
 
   test("unauthorized control click is rejected", async () => {
