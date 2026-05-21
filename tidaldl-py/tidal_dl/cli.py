@@ -6,7 +6,7 @@ from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from types import FrameType
-from typing import Annotated, Any, Protocol, cast
+from typing import TYPE_CHECKING, Annotated, Any, Protocol, cast
 from urllib.parse import urlparse
 
 import requests
@@ -44,6 +44,9 @@ from tidal_dl.helper.tidal import (
 from tidal_dl.helper.wrapper import LoggerWrapped
 from tidal_dl.hifi_api import HiFiApiClient
 from tidal_dl.model.cfg import HelpSettings
+
+if TYPE_CHECKING:
+    from tidal_dl.helper.isrc_index import IsrcIndex
 
 app = typer.Typer(context_settings={"help_option_names": ["-h", "--help"]}, add_completion=True)
 app_source = typer.Typer(
@@ -535,7 +538,7 @@ def settings_management(
 
 
 def _resolve_session(ctx: typer.Context) -> bool:
-    """Resolve the download source (Hi-Fi API preferred, silent OAuth fallback).
+    """Resolve the configured download source.
 
     Used internally by commands that need a TIDAL session but don't require
     explicit OAuth login. Sets up ctx.obj[CTX_TIDAL].
@@ -756,7 +759,7 @@ def sync(
         console.print("[yellow]No playlists selected. Nothing to do.[/yellow]")
         raise typer.Exit()
 
-    # Download — reuse existing pipeline (Hi-Fi API default, full dedup + M3U rebuild)
+    # Download — reuse existing pipeline (full dedup + M3U rebuild)
     result = _download(ctx, urls, try_login=False)
     if not result:
         raise typer.Exit(code=1)

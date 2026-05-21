@@ -28,7 +28,7 @@ class Settings(DataClassJsonMixin):
     download_base_path: str = "~/download"
     quality_audio: Quality = cast(Quality, Quality.hi_res_lossless)
     quality_video: QualityVideo = QualityVideo.P1080
-    download_source: DownloadSource = DownloadSource.HIFI_API
+    download_source: DownloadSource = DownloadSource.OAUTH
     download_source_fallback: bool = True
     hifi_api_instances: str = ""
     download_dolby_atmos: bool = False
@@ -86,13 +86,13 @@ class HelpSettings(DataClassJsonMixin):
     )
     quality_video: str = 'Desired video download quality: "360", "480", "720", "1080"'
     download_source: str = (
-        "Preferred download source: 'hifi_api' (public proxy instances) or 'oauth' (your personal TIDAL session)."
+        "Preferred download source: 'oauth' (your personal TIDAL session) or 'hifi_api' (custom Hi-Fi API instances)."
     )
     download_source_fallback: str = (
         "If enabled, automatically fallback to the next source when the preferred source is unavailable."
     )
     hifi_api_instances: str = (
-        "Comma-separated Hi-Fi API instances. Empty means auto-discover from live uptime trackers."
+        "Comma-separated custom Hi-Fi API instances. Empty means auto-discover from live uptime trackers."
     )
     download_dolby_atmos: str = "Download Dolby Atmos audio streams if available."
     format_album: str = "Where to download albums and how to name the items."

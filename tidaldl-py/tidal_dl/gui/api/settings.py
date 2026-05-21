@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import threading
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -153,8 +154,6 @@ def auth_status() -> dict:
     return {"logged_in": logged_in, "username": username}
 
 
-import threading
-
 _login_lock = threading.Lock()
 _login_state = {"status": "idle"}  # idle | pending | success | failed
 
@@ -239,11 +238,10 @@ def hifi_status() -> dict:
 
     try:
         client = HiFiApiClient(timeout=5)
-        instances = client.instances
-        alive = len(instances)
-        return {"alive": alive, "instances": instances}
+        live = client.live_instances()
+        return {"alive": len(live), "instances": live, "configured": client.instances}
     except Exception:
-        return {"alive": 0, "instances": []}
+        return {"alive": 0, "instances": [], "configured": []}
 
 
 @router.get("/settings")
@@ -339,7 +337,7 @@ def update_settings(update: SettingsUpdate) -> dict:
 
     _VALID_QUALITIES = {"NORMAL", "HIGH", "LOSSLESS", "HI_RES", "HI_RES_LOSSLESS"}
     if "quality_audio" in updates and updates["quality_audio"] not in _VALID_QUALITIES:
-        raise HTTPException(status_code=400, detail=f"Invalid quality_audio value")
+        raise HTTPException(status_code=400, detail="Invalid quality_audio value")
 
     if "download_base_path" in updates:
         path = updates["download_base_path"]

@@ -3,12 +3,18 @@ from __future__ import annotations
 import base64
 import json
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Any
 
 import requests
 
-from tidal_dl.constants import HIFI_API_FALLBACK_INSTANCES, HIFI_UPTIME_TRACKER_URLS, REQUESTS_TIMEOUT_SEC
+from tidal_dl.constants import (
+    HIFI_API_FALLBACK_INSTANCES,
+    HIFI_UPTIME_TRACKER_URLS,
+    QUALITY_PROBE_TRACK_ID,
+    REQUESTS_TIMEOUT_SEC,
+)
 from tidal_dl.dash import parse_manifest
 
 
@@ -154,15 +160,36 @@ class HiFiApiClient:
         raise requests.RequestException("Hi-Fi API request failed")
 
     def health_check(self) -> str | None:
-        for instance in self._iter_live_instances():
+        live = self.live_instances()
+        return live[0] if live else None
+
+    def live_instances(self) -> list[str]:
+        instances = self._iter_live_instances()
+        if not instances:
+            return []
+
+        def is_live(instance: str) -> bool:
             try:
-                response = requests.get(instance + "/", timeout=self.timeout)
+                response = requests.get(
+                    f"{instance}/track/",
+                    params={"id": QUALITY_PROBE_TRACK_ID, "quality": "LOSSLESS"},
+                    timeout=self.timeout,
+                )
                 response.raise_for_status()
-                return instance
-            except requests.RequestException:
+                payload = response.json()
+                return isinstance(payload, dict) and isinstance(payload.get("data"), dict)
+            except (requests.RequestException, ValueError):
                 self._mark_instance_dead(instance)
-                continue
-        return None
+                return False
+
+        live: list[str] = []
+        with ThreadPoolExecutor(max_workers=min(len(instances), 8)) as executor:
+            futures = {executor.submit(is_live, instance): instance for instance in instances}
+            for future in as_completed(futures):
+                instance = futures[future]
+                if future.result():
+                    live.append(instance)
+        return [instance for instance in instances if instance in live]
 
     def track_info(self, track_id: int) -> dict[str, Any]:
         return self._request_with_rotation("/info/", params={"id": track_id})
