@@ -8,16 +8,19 @@ resolve, playable URL, and download job goes through the backend's
 ## What it does
 
 - **Slash commands in one channel, for one user.** `djai`, `summon`, `leave`, `play`,
-  `pause`, `resume`, `skip`, `queue`, `nowplaying`, `volume`, `repeat`,
-  `download`.
+  `playlist`, `pause`, `resume`, `skip`, `queue`, `nowplaying`, `volume`,
+  `repeat`, `download`.
 - **DJAI remote panel.** On startup the bot refreshes the last control panel
   when it can. Running `/djai` posts a fresh remote panel in the channel.
   Buttons open search, summon the bot to the allowed user's current voice
-  channel, playlist selection, playback controls, queue view, and repeat
-  controls. Only the allowed user can use them.
-- **Playlist UX without IDs.** The playlist button shows saved Tidal
-  playlists. Selecting one replaces the current queue, starts that
-  playlist, and defaults repeat to `all`.
+  channel, playlist replace/add pickers, playback controls, queue view, and
+  repeat controls. Only the allowed user can use them.
+- **Playlist UX without IDs.** The playlist buttons show saved Tidal
+  playlists. Selecting one from Playlists replaces the current queue, starts
+  that playlist, and defaults repeat to `all`. Selecting one from Add Playlist
+  appends it without clearing the current queue and also defaults repeat to
+  `all`. `/playlist list`, `/playlist switch`, and `/playlist add` provide
+  the same saved-playlist control from slash commands.
 - **Voice playback** via `@discordjs/voice`, `libsodium-wrappers`, and an
   Opus encoder. The bot tries native `@discordjs/opus` first and falls back
   to `opusscript` when the native binding is not available under Bun. DAVE
@@ -121,7 +124,7 @@ initial integration.
 On startup you should see:
 
 ```
-Registered 12 slash commands.
+Registered 13 slash commands.
 Logged in as <bot-name>#<discriminator>.
 ```
 
@@ -151,7 +154,7 @@ src/
 ├── index.ts             Discord client + slash registration + interaction dispatch
 ├── config.ts            parseConfig() — validates the 7 required env vars, fails fast
 ├── auth.ts              ensureAuthorized() — guild + channel + user gate
-├── commands.ts          11 slash commands + download polling + batch reply serialization
+├── commands.ts          slash commands + download polling + batch reply serialization
 ├── musicDlClient.ts     Typed HTTP client for /api/bot/* (resolve, playable, download, status)
 ├── queue.ts             Pure queue state machine (no Discord deps) — append, advance, repeat modes
 ├── player.ts            VoiceManager (voice lifecycle, ghost-session cleanup) + Playback (queue ↔ audio player)
@@ -187,6 +190,26 @@ Discord interaction
 No filesystem access, no Tidal API, no `ytdl`/remote resolution —
 everything routes through the backend.
 
+### Request flow for `/playlist`
+
+```
+/playlist list
+  → /api/playlists
+  → show saved playlists
+
+/playlist switch name:<playlist>
+  → /api/playlists → match name or ID → /api/playlists/{id}/tracks
+  → queue.clear() + queue.append([...])
+  → playback.playCurrent
+  → repeat all
+
+/playlist add name:<playlist>
+  → /api/playlists → match name or ID → /api/playlists/{id}/tracks
+  → queue.append([...])
+  → playback.playCurrent only if queue was empty
+  → repeat all
+```
+
 ### DJAI remote flow
 
 ```
@@ -199,6 +222,9 @@ Bot startup
   → Playlists                      → /api/playlists → select → /api/playlists/{id}/tracks
   → queue.clear() + queue.append([...])
   → playlist selection starts immediately and sets repeat all by default
+  → Add Playlist                   → /api/playlists → select → /api/playlists/{id}/tracks
+  → queue.append([...])
+  → repeat all
 ```
 
 ## Testing

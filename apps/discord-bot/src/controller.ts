@@ -32,9 +32,11 @@ const ID = {
   skip: "djai:skip",
   stop: "djai:stop",
   playlists: "djai:playlists",
+  playlistsAdd: "djai:playlists-add",
   queue: "djai:queue",
   repeat: "djai:repeat",
   playlistSelect: "djai:playlist",
+  playlistAddSelect: "djai:playlist-add",
   searchModal: "djai:search-modal",
   searchQuery: "query",
   searchResult: "djai:search-result",
@@ -68,6 +70,7 @@ export function buildControllerPanel(deps: CommandDeps): PanelPayload {
   );
   const row2 = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder().setCustomId(ID.playlists).setLabel("Playlists").setEmoji("🎛️").setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId(ID.playlistsAdd).setLabel("Add Playlist").setEmoji("➕").setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId(ID.queue).setLabel("Queue").setEmoji("📜").setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId(ID.repeat).setLabel("Repeat").setEmoji("🔁").setStyle(ButtonStyle.Secondary),
   );
@@ -124,7 +127,10 @@ async function handleButton(
       await summonToUserVoice(interaction, deps);
       return;
     case ID.playlists:
-      await showPlaylistPicker(interaction, deps);
+      await showPlaylistPicker(interaction, deps, "replace");
+      return;
+    case ID.playlistsAdd:
+      await showPlaylistPicker(interaction, deps, "append");
       return;
     case ID.playPause:
       await interaction.deferUpdate();
@@ -177,8 +183,9 @@ async function handleSelect(
   interaction: StringSelectMenuInteraction,
   deps: CommandDeps,
 ): Promise<void> {
-  if (interaction.customId === ID.playlistSelect) {
+  if (interaction.customId === ID.playlistSelect || interaction.customId === ID.playlistAddSelect) {
     await interaction.deferUpdate();
+    const append = interaction.customId === ID.playlistAddSelect;
     const playlistId = interaction.values[0];
     const items = await deps.client.playlistItems(playlistId);
     if (items.length === 0) {
@@ -186,10 +193,16 @@ async function handleSelect(
       return;
     }
     deps.queue.setRepeat("all");
-    await switchToItems(deps, items);
+    if (append) {
+      await queueItemsAndMaybeStart(deps, items);
+    } else {
+      await switchToItems(deps, items);
+    }
     await refreshSavedPanel(deps);
     await interaction.followUp({
-      content: `Switched playlist in repeat mode: ${items.length} tracks.`,
+      content: append
+        ? `Added playlist to queue: ${items.length} tracks.`
+        : `Switched playlist in repeat mode: ${items.length} tracks.`,
       flags: MessageFlags.Ephemeral,
     });
     return;
@@ -301,6 +314,7 @@ function buildSearchModal(): ModalBuilder {
 async function showPlaylistPicker(
   interaction: ButtonInteraction,
   deps: CommandDeps,
+  mode: "replace" | "append",
 ): Promise<void> {
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   const playlists = (await deps.client.playlists()).slice(0, 25);
@@ -310,18 +324,22 @@ async function showPlaylistPicker(
   }
   const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
     new StringSelectMenuBuilder()
-      .setCustomId(ID.playlistSelect)
-      .setPlaceholder("Pick playlist to play on repeat")
+      .setCustomId(mode === "append" ? ID.playlistAddSelect : ID.playlistSelect)
+      .setPlaceholder(mode === "append" ? "Pick playlist to add to queue" : "Pick playlist to play on repeat")
       .addOptions(
         playlists.map((playlist) => ({
           label: truncate(playlist.name || "Untitled playlist", 100),
-          description: `${playlist.num_tracks} tracks - repeats by default`,
+          description: mode === "append"
+            ? `${playlist.num_tracks} tracks - adds to queue`
+            : `${playlist.num_tracks} tracks - repeats by default`,
           value: playlist.id,
         })),
       ),
   );
   await interaction.editReply({
-    content: "Pick playlist. DJAI will repeat it by default.",
+    content: mode === "append"
+      ? "Pick playlist to add to queue."
+      : "Pick playlist. DJAI will repeat it by default.",
     components: [row],
   });
 }

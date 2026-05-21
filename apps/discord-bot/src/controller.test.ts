@@ -85,6 +85,13 @@ function makeSelectInteraction(value = "pl1") {
   };
 }
 
+function makeAppendSelectInteraction(value = "pl1") {
+  return {
+    ...makeSelectInteraction(value),
+    customId: "djai:playlist-add",
+  };
+}
+
 function makeButtonInteraction(customId = "djai:queue") {
   const calls: unknown[] = [];
   return {
@@ -118,6 +125,7 @@ describe("DJAI controller panel", () => {
     expect(json).toContain("Search");
     expect(json).toContain("Summon");
     expect(json).toContain("Playlists");
+    expect(json).toContain("Add Playlist");
     expect(json).toContain("Play/Pause");
   });
 
@@ -178,6 +186,48 @@ describe("DJAI controller panel", () => {
     expect(deps.queue.contents().map((item) => item.id)).toEqual(["tidal:1", "tidal:2"]);
     expect(deps.queue.current()?.id).toBe("tidal:1");
     expect((deps.playback.playCurrent as ReturnType<typeof mock>).mock.calls.length).toBe(1);
+  });
+
+  test("add playlist button opens append picker", async () => {
+    const deps = makeDeps();
+    const interaction = makeButtonInteraction("djai:playlists-add");
+
+    const handled = await handleControllerInteraction(interaction as never, deps);
+
+    expect(handled).toBe(true);
+    expect(JSON.stringify(interaction._calls)).toContain("Pick playlist to add to queue");
+    expect(JSON.stringify(interaction._calls)).toContain("djai:playlist-add");
+  });
+
+  test("playlist add selection appends without clearing current queue", async () => {
+    const deps = makeDeps();
+    deps.queue.append([{ id: "old", title: "Old Track" }]);
+
+    const handled = await handleControllerInteraction(
+      makeAppendSelectInteraction() as never,
+      deps,
+    );
+
+    expect(handled).toBe(true);
+    expect(deps.queue.contents().map((item) => item.id)).toEqual(["old", "tidal:1", "tidal:2"]);
+    expect(deps.queue.current()?.id).toBe("old");
+    expect(deps.queue.getRepeat()).toBe("all");
+    expect((deps.playback.playCurrent as ReturnType<typeof mock>).mock.calls.length).toBe(0);
+  });
+
+  test("playlist add selection starts playback when queue was empty", async () => {
+    const deps = makeDeps();
+    const interaction = makeAppendSelectInteraction();
+
+    const handled = await handleControllerInteraction(
+      interaction as never,
+      deps,
+    );
+
+    expect(handled).toBe(true);
+    expect(deps.queue.contents().map((item) => item.id)).toEqual(["tidal:1", "tidal:2"]);
+    expect((deps.playback.playCurrent as ReturnType<typeof mock>).mock.calls.length).toBe(1);
+    expect(JSON.stringify(interaction._calls)).toContain("Added playlist to queue: 2 tracks.");
   });
 
   test("empty playlist selection does not clear the current queue", async () => {

@@ -1,7 +1,7 @@
 /**
  * Slash command registration + dispatch (R4).
  *
- * Exactly 12 commands are defined. Each handler runs ensureAuthorized
+ * Exactly 13 commands are defined. Each handler runs ensureAuthorized
  * before doing any work, and /play never triggers a download.
  */
 
@@ -42,7 +42,7 @@ const REPEAT_CHOICES: ReadonlyArray<{ name: string; value: RepeatMode }> = [
   { name: "all", value: "all" },
 ];
 
-/** Definitions for exactly 12 slash commands (R4-AC13). */
+/** Definitions for exactly 13 slash commands (R4-AC13). */
 export function buildCommands() {
   return [
     new SlashCommandBuilder()
@@ -59,6 +59,26 @@ export function buildCommands() {
       .setDescription("Resolve and queue a track, playlist, or search result")
       .addStringOption((o) =>
         o.setName("query").setDescription("URL, playlist name, or search text").setRequired(true),
+      ),
+    new SlashCommandBuilder()
+      .setName("playlist")
+      .setDescription("List, switch to, or add a saved playlist")
+      .addSubcommand((s) => s.setName("list").setDescription("Show saved playlists"))
+      .addSubcommand((s) =>
+        s
+          .setName("switch")
+          .setDescription("Replace the queue with a saved playlist")
+          .addStringOption((o) =>
+            o.setName("name").setDescription("Playlist name or ID").setRequired(true),
+          ),
+      )
+      .addSubcommand((s) =>
+        s
+          .setName("add")
+          .setDescription("Append a saved playlist to the queue")
+          .addStringOption((o) =>
+            o.setName("name").setDescription("Playlist name or ID").setRequired(true),
+          ),
       ),
     new SlashCommandBuilder()
       .setName("pause")
@@ -111,6 +131,7 @@ export const COMMAND_NAMES = [
   "summon",
   "leave",
   "play",
+  "playlist",
   "pause",
   "resume",
   "skip",
@@ -147,6 +168,8 @@ export async function handleInteraction(
         return await handleLeave(interaction, deps);
       case "play":
         return await handlePlay(interaction, deps);
+      case "playlist":
+        return await handlePlaylist(interaction, deps);
       case "pause":
         return await handlePause(interaction, deps);
       case "resume":
@@ -296,6 +319,62 @@ async function handlePlay(
   }
   const label = result.kind === "playlist" ? "Queued playlist" : "Queued";
   await queueAndMaybeStart(interaction, deps, items, label);
+}
+
+async function handlePlaylist(
+  interaction: ChatInputCommandInteraction,
+  deps: CommandDeps,
+): Promise<void> {
+  const action = interaction.options.getSubcommand(true);
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+  if (action === "list") {
+    const playlists = await deps.client.playlists();
+    if (playlists.length === 0) {
+      await safeEdit(interaction, "No Tidal playlists found.");
+      return;
+    }
+    const lines = playlists
+      .slice(0, 25)
+      .map((playlist, index) => `${index + 1}. ${playlist.name} (${playlist.num_tracks} tracks)`);
+    await safeEdit(interaction, lines.join("\n").slice(0, 1900));
+    return;
+  }
+
+  const query = interaction.options.getString("name", true).trim();
+  if (!query) {
+    await safeEdit(interaction, "Playlist name cannot be empty.");
+    return;
+  }
+
+  const playlist = await findSavedPlaylist(deps, query);
+  if (!playlist) {
+    await safeEdit(interaction, `No saved playlist found for "${query}".`);
+    return;
+  }
+
+  const items = await deps.client.playlistItems(playlist.id);
+  if (items.length === 0) {
+    await safeEdit(interaction, "No playable items in that playlist.");
+    return;
+  }
+
+  deps.queue.setRepeat("all");
+  if (action === "switch") {
+    deps.queue.clear();
+    deps.queue.append(items as unknown as Parameters<typeof deps.queue.append>[0]);
+    await deps.playback.playCurrent();
+    await safeEdit(interaction, `Switched to **${playlist.name}** in repeat mode: ${items.length} tracks.`);
+    return;
+  }
+
+  if (action === "add") {
+    await appendAndMaybeStart(deps, items);
+    await safeEdit(interaction, `Added **${playlist.name}** to queue: ${items.length} tracks.`);
+    return;
+  }
+
+  await safeEdit(interaction, `Unknown playlist action: ${action}`);
 }
 
 async function handlePause(
@@ -531,6 +610,27 @@ async function queueAndMaybeStart(
     ? `${label}: **${items[0].title}** — ${items[0].artist}`
     : `${label}: ${items.length} items`;
   await safeEdit(interaction, headline);
+}
+
+async function appendAndMaybeStart(
+  deps: CommandDeps,
+  items: ResolvedItem[],
+): Promise<void> {
+  const wasEmpty = deps.queue.length === 0;
+  deps.queue.append(items as unknown as Parameters<typeof deps.queue.append>[0]);
+  if (wasEmpty) await deps.playback.playCurrent();
+}
+
+async function findSavedPlaylist(
+  deps: CommandDeps,
+  query: string,
+) {
+  const playlists = await deps.client.playlists();
+  const normalized = query.toLowerCase();
+  return playlists.find((playlist) => playlist.id === query)
+    ?? playlists.find((playlist) => playlist.name.toLowerCase() === normalized)
+    ?? playlists.find((playlist) => playlist.name.toLowerCase().includes(normalized))
+    ?? null;
 }
 
 function formatChoices(choices: ResolvedItem[]): string {
