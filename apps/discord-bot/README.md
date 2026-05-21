@@ -183,7 +183,8 @@ Discord interaction
   → queue.append([...])
   → playback.playCurrent           (only if queue was empty)
      → musicDlClient.playable(id)  → POST /api/bot/playable
-     → createAudioResource(url)
+     → ffmpeg -vn → 48 kHz stereo PCM
+     → createAudioResource(pcm, StreamType.Raw)
      → VoiceManager.player.play(resource)
 ```
 

@@ -13,6 +13,7 @@ import {
   getVoiceConnection,
   VoiceConnectionStatus,
   AudioPlayerStatus,
+  StreamType,
   entersState,
   createAudioPlayer,
   createAudioResource,
@@ -21,6 +22,9 @@ import {
   type AudioResource,
 } from "@discordjs/voice";
 import type { VoiceBasedChannel, TextBasedChannel } from "discord.js";
+import * as childProcess from "node:child_process";
+import type { ChildProcessByStdio } from "node:child_process";
+import type { Readable } from "node:stream";
 import type { MusicDlClient } from "./musicDlClient";
 import type { QueueState, QueueItem } from "./queue";
 
@@ -170,6 +174,8 @@ export interface PlaybackOptions {
   };
 }
 
+type AudioTranscoder = ChildProcessByStdio<null, Readable, Readable>;
+
 /**
  * Wires QueueState + MusicDlClient to the VoiceManager's AudioPlayer.
  *
@@ -179,6 +185,7 @@ export interface PlaybackOptions {
  */
 export class Playback {
   private currentResource: AudioResource | null = null;
+  private currentTranscoder: AudioTranscoder | null = null;
   private currentVolume = 1.0;
   private stopping = false;
   private readonly logger: { error: (...args: unknown[]) => void };
@@ -221,10 +228,21 @@ export class Playback {
     // R5-AC6/AC7: always through MusicDlClient, never direct.
     const playable = await this.client.playable(item.id);
     const absoluteUrl = this.client.absolutize(playable.url);
+    this.destroyCurrentTranscoder();
 
-    const resource = createAudioResource(absoluteUrl, {
+    const transcoder = createDiscordPcmStream(absoluteUrl);
+    this.currentTranscoder = transcoder;
+    transcoder.stderr.on("data", (chunk) => {
+      const message = String(chunk).trim();
+      if (message) this.logger.error("ffmpeg:", message);
+    });
+    transcoder.on("error", (error) => {
+      this.logger.error("ffmpeg failed:", error);
+    });
+
+    const resource = createAudioResource(transcoder.stdout, {
       inlineVolume: true,
-      inputType: undefined,
+      inputType: StreamType.Raw,
     });
     resource.volume?.setVolume(this.currentVolume);
 
@@ -281,6 +299,7 @@ export class Playback {
   private stopInternal(): void {
     this.stopping = true;
     this.currentResource = null;
+    this.destroyCurrentTranscoder();
     try {
       this.voice.getPlayer().stop(true);
     } catch {
@@ -329,4 +348,32 @@ export class Playback {
     );
     this.currentResource = null;
   }
+
+  private destroyCurrentTranscoder(): void {
+    if (!this.currentTranscoder) return;
+    try {
+      if (!this.currentTranscoder.killed) this.currentTranscoder.kill("SIGKILL");
+    } catch {
+      // already exited
+    }
+    this.currentTranscoder = null;
+  }
+}
+
+function createDiscordPcmStream(url: string): AudioTranscoder {
+  return childProcess.spawn("ffmpeg", [
+    "-hide_banner",
+    "-loglevel", "error",
+    "-reconnect", "1",
+    "-reconnect_streamed", "1",
+    "-reconnect_delay_max", "5",
+    "-i", url,
+    "-vn",
+    "-ac", "2",
+    "-ar", "48000",
+    "-f", "s16le",
+    "pipe:1",
+  ], {
+    stdio: ["ignore", "pipe", "pipe"],
+  });
 }
