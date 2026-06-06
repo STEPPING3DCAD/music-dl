@@ -20,6 +20,11 @@ __pycache__/
 dist/
 build/
 *.spec
+!tidaldl-py/build/
+tidaldl-py/build/*
+!tidaldl-py/build/pyinstaller/
+tidaldl-py/build/pyinstaller/*
+!tidaldl-py/build/pyinstaller/music-dl-server.spec
 MANIFEST.in
 
 # Compiled binaries
@@ -47,7 +52,6 @@ tidaldl-py/exe/tidal_dl_win.tar.gz
 .github/workflows/continuous-integration-workflow copy.yml
 tidaldl-py/tidal-gui.spec
 .history/
-.gitignore
 /tidaldl-py/tidal_dl_old
 /tidaldl-py/tidal_gui_old
 /tidaldl-py/tidal_gui
