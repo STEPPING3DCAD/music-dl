@@ -449,18 +449,16 @@ def start_upgrade(req: UpgradeStartRequest, request: Request) -> dict:
         errors: list[str] = []
 
         for path, direct_tid in all_items:
-            # If tidal_track_id provided directly (from meta probe), use it
-            # No need to validate path — we already have the Tidal track ID
-            if direct_tid:
-                track_ids.append(direct_tid)
-                upgrade_map[direct_tid] = path
-                continue
-
             row = db.get(path)
             if not row:
                 errors.append(f"Not in library: {path}")
                 continue
 
+            # If tidal_track_id provided directly (from meta probe), use it
+            if direct_tid:
+                track_ids.append(direct_tid)
+                upgrade_map[direct_tid] = path
+                continue
             isrc = row.get("isrc")
             if not isrc:
                 errors.append(f"No ISRC: {path}")

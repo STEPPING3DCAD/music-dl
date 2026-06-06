@@ -190,9 +190,11 @@ def delete_track(req: DeleteTrackRequest) -> dict:
     # Remove from library DB
     db = LibraryDB(Path(path_config_base()) / "library.db")
     db.open()
-    db.remove(str(file_path))
-    db.commit()
-    db.close()
+    try:
+        db.remove(str(file_path))
+        db.commit()
+    finally:
+        db.close()
 
     return {"status": "deleted", "path": str(file_path)}
 
@@ -249,8 +251,10 @@ def clear_history(status: str | None = None) -> dict:
 
     db = LibraryDB(Path(path_config_base()) / "library.db")
     db.open()
-    deleted = db.clear_download_history(status)
-    db.close()
+    try:
+        deleted = db.clear_download_history(status)
+    finally:
+        db.close()
     return {"deleted": deleted}
 
 

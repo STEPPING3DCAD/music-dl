@@ -548,7 +548,7 @@ class TestMigration:
                     "quality_probes", "library_meta", "download_history", "favorites"}
         assert expected.issubset(tables)
 
-    def test_v1_to_v3_migration(self, tmp_path):
+    def test_v1_to_v4_migration(self, tmp_path):
         """Create a v1-style DB, then open with LibraryDB to trigger migration."""
         db_path = tmp_path / "legacy.db"
         conn = sqlite3.connect(str(db_path))
@@ -568,6 +568,31 @@ class TestMigration:
         assert "format" in cols
         assert "play_count" in cols
         assert "genre" in cols
+        assert "waveform" in cols
+        assert "waveform_hires" in cols
+        assert LibraryDB._SCHEMA_VERSION == 4
         row = db.get("/a.flac")
         assert row["artist"] == "X"
         db.close()
+
+    def test_backup_includes_committed_wal_rows(self, tmp_path):
+        from tidal_dl.gui.api.library import _backup_library_db
+
+        db_path = tmp_path / "library.db"
+        db = LibraryDB(db_path)
+        db.open()
+        try:
+            db.record("/music/a.flac", status="tagged", artist="A", title="Song")
+            db.commit()
+
+            backup_path = _backup_library_db(db_path)
+
+            backup = sqlite3.connect(str(backup_path))
+            try:
+                row = backup.execute("SELECT artist FROM scanned WHERE path = ?", ("/music/a.flac",)).fetchone()
+            finally:
+                backup.close()
+        finally:
+            db.close()
+
+        assert row == ("A",)
