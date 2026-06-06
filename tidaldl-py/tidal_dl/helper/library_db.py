@@ -137,7 +137,7 @@ _DOWNLOAD_JOB_FIELDS = {
 class LibraryDB:
     """Thin wrapper around a SQLite scan ledger."""
 
-    _SCHEMA_VERSION = 3
+    _SCHEMA_VERSION = 4
 
     def __init__(self, db_path: pathlib.Path) -> None:
         self._path = db_path

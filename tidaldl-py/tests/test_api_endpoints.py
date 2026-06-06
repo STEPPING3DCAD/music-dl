@@ -200,7 +200,15 @@ class TestUpgradeStart:
         class FakeSettings:
             data = SimpleNamespace(upgrade_target_quality="HI_RES_LOSSLESS")
 
+        class FakeDB:
+            def get(self, path):
+                return {"path": path}
+
+            def close(self):
+                pass
+
         monkeypatch.setattr("tidal_dl.config.Settings", FakeSettings)
+        monkeypatch.setattr("tidal_dl.gui.api.upgrade._get_db", lambda: FakeDB())
 
         resp = client.post(
             "/api/upgrade/start",
@@ -223,6 +231,42 @@ class TestUpgradeStart:
             "errors": [],
         }
         assert client.app.state.download_jobs.snapshot()["queued_count"] == 1
+
+    def test_direct_track_rejects_path_missing_from_library(self, client, monkeypatch):
+        class FakeSettings:
+            data = SimpleNamespace(upgrade_target_quality="HI_RES_LOSSLESS")
+
+        class FakeDB:
+            def get(self, path):
+                return None
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr("tidal_dl.config.Settings", FakeSettings)
+        monkeypatch.setattr("tidal_dl.gui.api.upgrade._get_db", lambda: FakeDB())
+
+        resp = client.post(
+            "/api/upgrade/start",
+            json={
+                "tracks": [
+                    {
+                        "path": "/music/missing.flac",
+                        "tidal_track_id": 456,
+                    }
+                ]
+            },
+            headers=client._headers,
+        )
+
+        assert resp.status_code == 200
+        assert resp.json() == {
+            "status": "queued",
+            "count": 0,
+            "skipped": 0,
+            "errors": ["Not in library: /music/missing.flac"],
+        }
+        assert client.app.state.download_jobs.snapshot()["queued_count"] == 0
 
 
 class TestDownloadTrigger:

@@ -11,6 +11,7 @@ The library lives on a NAS (/Volumes/Music), so scanning is slow. Strategy:
 from __future__ import annotations
 
 import os
+import sqlite3
 import threading
 import time
 from pathlib import Path
@@ -241,6 +242,25 @@ def _scan_directories() -> list[Path]:
     return dirs
 
 
+def _backup_library_db(db_path: Path) -> Path:
+    """Create a consistent rolling SQLite backup, including committed WAL pages."""
+    backup_path = Path(str(db_path) + ".bak")
+    if not db_path.is_file():
+        return backup_path
+
+    source = sqlite3.connect(str(db_path))
+    try:
+        source.execute("PRAGMA busy_timeout=5000")
+        target = sqlite3.connect(str(backup_path))
+        try:
+            source.backup(target)
+        finally:
+            target.close()
+    finally:
+        source.close()
+    return backup_path
+
+
 def _migrate_volume_prefixes(db: LibraryDB, scan_dirs: list[Path]) -> None:
     """Rewrite stored path prefixes when a volume remounts under a different name.
 
@@ -326,11 +346,9 @@ def _background_scan(rescan: bool) -> None:
     try:
         scan_dirs = _scan_directories()
 
-        # Backup DB before scan — single rolling .bak for disaster recovery
-        import shutil
-        db_path = Path(path_config_base()) / "library.db"
-        if db_path.is_file():
-            shutil.copy2(str(db_path), str(db_path) + ".bak")
+        # Backup DB before scan — single rolling .bak for disaster recovery.
+        # Use SQLite backup API so committed WAL pages are included.
+        _backup_library_db(Path(path_config_base()) / "library.db")
 
         # Own connection for the background thread — SQLite doesn't share across threads
         db = LibraryDB(Path(path_config_base()) / "library.db")

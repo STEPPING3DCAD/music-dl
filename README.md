@@ -65,7 +65,7 @@ INTERNAL LATEST (Windows 10/11):
   irm https://raw.githubusercontent.com/alfdav/music-dl/master/scripts/install-windows-local.ps1 | iex
 
 DEV:   cd tidaldl-py && uv sync && music-dl gui          # http://localhost:8765
-TEST:  cd tidaldl-py && uv run --extra test pytest
+TEST:  cd tidaldl-py && PYTHONNOUSERSITE=1 uv run --extra test python -m pytest
 BUILD: cd tidaldl-py && uv sync --extra build && bun install && bunx tauri build --bundles dmg
 
 STACK: Python 3.12+, FastAPI, vanilla JS, Tauri v2, Bun/discord.js for the optional bot.
@@ -346,7 +346,7 @@ music-dl gui
 Run the Python test suite:
 
 ```shell
-uv run --extra test pytest
+PYTHONNOUSERSITE=1 uv run --extra test python -m pytest
 ```
 
 Run the Discord bot checks:
@@ -360,7 +360,7 @@ bun run typecheck
 Run the release smoke coverage from the repository root:
 
 ```shell
-uv run --project tidaldl-py --extra test pytest \
+PYTHONNOUSERSITE=1 uv run --project tidaldl-py --extra test python -m pytest \
   tidaldl-py/tests/test_gui_command.py \
   tidaldl-py/tests/test_gui_api.py \
   tidaldl-py/tests/test_setup.py \

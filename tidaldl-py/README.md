@@ -66,7 +66,7 @@ bot itself.
 From the repository root:
 
 ```shell
-uv run --project tidaldl-py --extra test pytest
+PYTHONNOUSERSITE=1 uv run --project tidaldl-py --extra test python -m pytest
 uv build --project tidaldl-py
 ```
 

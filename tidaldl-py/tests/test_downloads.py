@@ -1,5 +1,8 @@
 """Tests for download pipeline error handling."""
 import logging
+from pathlib import Path
+
+import pytest
 
 
 def test_broadcast_fires_even_when_db_fails():
@@ -56,3 +59,65 @@ def test_logger_captures_db_error(caplog):
 
     assert "database is locked" in caplog.text
     assert "42" in caplog.text
+
+
+def test_delete_track_closes_db_when_remove_fails(tmp_path, monkeypatch):
+    from tidal_dl.gui.api import downloads
+
+    track_path = tmp_path / "track.flac"
+    track_path.write_bytes(b"audio")
+    closed = []
+
+    class FakeSettings:
+        data = type("Data", (), {"download_base_path": str(tmp_path)})()
+
+    class FakeDB:
+        def __init__(self, path):
+            self.path = path
+
+        def open(self):
+            pass
+
+        def remove(self, path):
+            raise RuntimeError("remove failed")
+
+        def commit(self):
+            pass
+
+        def close(self):
+            closed.append(True)
+
+    monkeypatch.setattr("tidal_dl.config.Settings", FakeSettings)
+    monkeypatch.setattr("tidal_dl.helper.library_db.LibraryDB", FakeDB)
+    monkeypatch.setattr("tidal_dl.gui.security.validate_audio_path", lambda path, allowed: Path(path))
+
+    with pytest.raises(RuntimeError, match="remove failed"):
+        downloads.delete_track(downloads.DeleteTrackRequest(path=str(track_path)))
+
+    assert closed == [True]
+
+
+def test_clear_history_closes_db_when_clear_fails(monkeypatch):
+    from tidal_dl.gui.api import downloads
+
+    closed = []
+
+    class FakeDB:
+        def __init__(self, path):
+            self.path = path
+
+        def open(self):
+            pass
+
+        def clear_download_history(self, status):
+            raise RuntimeError("clear failed")
+
+        def close(self):
+            closed.append(True)
+
+    monkeypatch.setattr("tidal_dl.helper.library_db.LibraryDB", FakeDB)
+
+    with pytest.raises(RuntimeError, match="clear failed"):
+        downloads.clear_history()
+
+    assert closed == [True]
