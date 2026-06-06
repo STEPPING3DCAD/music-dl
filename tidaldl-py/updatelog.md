@@ -20,6 +20,19 @@ uv tool install --from git+https://github.com/alfdav/music-dl.git#subdirectory=t
 
 ---
 
+## v1.6.8 (2026-06-05)
+
+- Hardened upgrade queue handling by validating direct Tidal upgrade paths
+  before jobs are enqueued.
+- Made library database backups WAL-safe so committed scan/cache rows are
+  included in the rolling `library.db.bak` disaster-recovery copy.
+- Tightened download/library DB cleanup paths so connections close on mutation
+  errors.
+- Updated desktop updater, OAuth default behavior, Hi-Fi status probes, and
+  Discord bot playback/playlist controls.
+- Bumped dependency/security updates for Tauri, `tar`, `urllib3`, `idna`, and
+  `starlette`.
+
 ## v1.6.7 (2026-05-12)
 
 - Migrate older `library.db` cache schemas that are missing legacy scan columns
