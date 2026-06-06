@@ -11,6 +11,10 @@ test_venv/
 
 # Build artifacts (PyInstaller, setuptools bdist, etc.)
 build/
+!build/
+build/*
+!build/pyinstaller/
+build/pyinstaller/*
 !build/pyinstaller/music-dl-server.spec
 
 # Node / Bun (Tauri CLI)
