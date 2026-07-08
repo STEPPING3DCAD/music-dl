@@ -21,10 +21,9 @@ resolve, playable URL, and download job goes through the backend's
   appends it without clearing the current queue and also defaults repeat to
   `all`. `/playlist list`, `/playlist switch`, and `/playlist add` provide
   the same saved-playlist control from slash commands.
-- **Voice playback** via `@discordjs/voice`, `libsodium-wrappers`, and an
-  Opus encoder. The bot tries native `@discordjs/opus` first and falls back
-  to `opusscript` when the native binding is not available under Bun. DAVE
-  (v=8) voice protocol is supported through `@snazzah/davey`.
+- **Voice playback** via `@discordjs/voice`, `libsodium-wrappers`, and
+  `@discordjs/opus`. DAVE (v=8) voice protocol is supported through
+  `@snazzah/davey`.
 - **Never downloads on `/play`.** `/play` resolves and queues; `/download`
   is the only command that kicks off a download job.
 - **Visible picker for free-text search.** Up to five numbered-button
@@ -36,7 +35,7 @@ resolve, playable URL, and download job goes through the backend's
 
 ## Requirements
 
-- **Bun 1.2+** for install, tests, the wizard, and the bot runtime.
+- **Bun 1.2+** for install, tests, and the bot runtime.
 - **ffmpeg** on `PATH` (voice resampling)
 - A **Discord application + bot token** with `Connect` and `Speak`
   voice permissions in your guild
@@ -44,11 +43,8 @@ resolve, playable URL, and download job goes through the backend's
 
 ## Setup
 
-The onboarding wizard handles everything — token collection, preflight
-checks (libsodium, ffmpeg, Opus, Discord token validity, guild/channel/user
-reachability, voice permissions), and atomic file writes.
-
-**Easiest path (from the GUI):**
+Bot setup is **GUI-only** via the music-dl DJAI panel and Bot Control API
+(`/bot-control`).
 
 ```bash
 music-dl gui
@@ -64,30 +60,9 @@ launches the bot in the background, records its PID in
 restarts, and shuts the bot down when the app exits. You do not need a
 separate terminal just to keep the bot alive.
 
-**Terminal fallback:**
-
-```bash
-music-dl gui --setup-bot
-```
-
-That launches the wizard as a child of the backend, blocks until it's
-done, then starts the web server. The wizard checks libsodium, ffmpeg,
-Opus, Discord token validity, guild/channel/user reachability, and voice
-permissions before writing config. See
-[`../../tidaldl-py/docs/bot-onboarding.md`](../../tidaldl-py/docs/bot-onboarding.md)
-for the full flow.
-
-**Standalone wizard (bot repo only):**
-
-```bash
-cd apps/discord-bot
-bun install
-bun run wizard
-```
-
-The wizard writes two files. The config directory is resolved in this
+The GUI writes two files. The config directory is resolved in this
 precedence: `$MUSIC_DL_CONFIG_DIR` → `$XDG_CONFIG_HOME/music-dl` →
-`~/.config/music-dl`. Backend (`path_config_base()`) and wizard
+`~/.config/music-dl`. Backend (`path_config_base()`) and bot runtime
 (`paths.ts`) implement this identically.
 
 | File | Purpose | Mode |
@@ -100,6 +75,9 @@ Override individual paths with `MUSIC_DL_BOT_ENV_PATH` and
 `MUSIC_DL_BOT_TOKEN_PATH` if you need to (CI, container mounts). Override the
 PID marker with `MUSIC_DL_BOT_PID_PATH`.
 
+See [`../../tidaldl-py/docs/bot-onboarding.md`](../../tidaldl-py/docs/bot-onboarding.md)
+for the full GUI setup flow.
+
 ## Running the bot
 
 ```bash
@@ -110,16 +88,8 @@ bun run start     # runs src/boot.ts, which loads the env file and imports src/i
 The desktop GUI launches the same entrypoint directly with
 `bun src/boot.ts` so its PID file tracks the long-running bot process.
 
-The legacy `start:bun` alias is kept for older docs and scripts:
-
-```bash
-bun run start:bun
-```
-
-`boot.ts` reads the env file from the **same canonical path** the wizard
-writes to. It does not read `.env` from the current directory — that
-cwd-vs-config-dir divergence was a plumbing gap closed during the
-initial integration.
+`boot.ts` reads the env file from the canonical config path
+(`getBotEnvPath()`). It does not read `.env` from the current directory.
 
 On startup you should see:
 
@@ -144,13 +114,13 @@ Every variable is **required** — the bot refuses to start with a clear
 | `ALLOWED_CHANNEL_ID` | Right-click the text channel → Copy Channel ID |
 | `ALLOWED_USER_ID` | Right-click your own name → Copy User ID |
 | `MUSIC_DL_BASE_URL` | Where the backend listens, e.g. `http://127.0.0.1:8765` |
-| `MUSIC_DL_BOT_TOKEN` | Matches the wizard-written `bot-shared-token` file |
+| `MUSIC_DL_BOT_TOKEN` | Matches the GUI-written `bot-shared-token` file |
 
 ## Architecture
 
 ```
 src/
-├── boot.ts              Loads env from the canonical wizard path, then imports index.ts
+├── boot.ts              Loads env from the canonical config path, then imports index.ts
 ├── index.ts             Discord client + slash registration + interaction dispatch
 ├── config.ts            parseConfig() — validates the 7 required env vars, fails fast
 ├── auth.ts              ensureAuthorized() — guild + channel + user gate
@@ -160,15 +130,7 @@ src/
 ├── player.ts            VoiceManager (voice lifecycle, ghost-session cleanup) + Playback (queue ↔ audio player)
 ├── picker.ts            Up-to-5 numbered-button picker for free-text search disambiguation
 ├── errors.ts            Generic user-facing messages — internal details never leak to Discord
-└── wizard/              Onboarding wizard (separate from bot runtime)
-    ├── cli.ts           `bun run wizard` entry point
-    ├── index.ts         Entry flow: returning-user decision → prompts → preflight → atomic commit
-    ├── paths.ts         Canonical env + shared-token paths (must match backend precedence)
-    ├── prompts.ts       5 user-supplied values with breadcrumbs + masked token input
-    ├── preflight.ts     Env + Discord checks (Bun, libsodium, ffmpeg, Opus encoder, token, guild, channel, user, voice perms)
-    ├── envFile.ts       Atomic .env write at mode 0600
-    ├── sharedToken.ts   Atomic shared-token write at mode 0600 (crypto.randomBytes(32))
-    └── commit.ts        Two-file atomic commit — both land or neither does
+└── paths.ts             Canonical env + shared-token paths (must match backend precedence)
 ```
 
 ### Request flow for `/play <query>`
@@ -237,15 +199,15 @@ bun run typecheck             # tsc --noEmit
 ```
 
 Tests are dependency-injection-first: `VoiceManager`, `Playback`,
-`MusicDlClient`, the wizard's `readLine`/`readMaskedLine`, and every
-preflight probe can be swapped. No tests touch a real Discord gateway,
-a real filesystem, or the real user config directory.
+`MusicDlClient`, and every probe can be swapped. No tests touch a real
+Discord gateway, a real filesystem, or the real user config directory.
 
 ## Troubleshooting
 
 - **`Missing required configuration: ...` on startup** — the bot did
-  not load a complete `discord-bot.env`. Run `music-dl gui --setup-bot`
-  again, or check the file resolved by `MUSIC_DL_BOT_ENV_PATH`.
+  not load a complete `discord-bot.env`. Open the DJAI panel in
+  `music-dl gui` and save bot config via Bot Control, or check the file
+  resolved by `MUSIC_DL_BOT_ENV_PATH`.
 - **Commands do not appear in Discord** — commands are registered to
   `ALLOWED_GUILD_ID`, not globally. Confirm the guild ID and restart the
   bot; guild commands should appear immediately.
@@ -253,22 +215,13 @@ a real filesystem, or the real user config directory.
   in the target voice channel. If permissions are correct, restart the
   bot to clear any stale Discord voice session from a previous process.
 - **Voice protocol, encryption, or Opus errors** — run `bun install` in
-  `apps/discord-bot` so `@discordjs/opus`, `opusscript`,
-  `libsodium-wrappers`, and `@snazzah/davey` dependencies are present.
-- **Wizard exits `75`** — preflight failed too many times and wrote
-  nothing. Fix the reported token, guild/channel/user, voice permission,
-  or local dependency issue and rerun `music-dl gui --setup-bot`.
-- **Wizard exits `126`** — the backend could not find the bot sources.
-  Packaged desktop installs include the bot sources and provision them
-  under the music-dl config directory. Source checkouts can still set
-  `MUSIC_DL_BOT_PATH=/path/to/apps/discord-bot`.
-- **Wizard exits `127`** — Bun is unavailable.
-  Install Bun, then run `bun install` in `apps/discord-bot`.
+  `apps/discord-bot` so `@discordjs/opus`, `libsodium-wrappers`, and
+  `@snazzah/davey` dependencies are present.
 - **Backend returns `401` to every bot request** — the bot and backend
   are using different shared tokens. `MUSIC_DL_BOT_TOKEN` takes
   precedence over the shared-token file; unset it or restart
-  `music-dl gui` after rotating the wizard token.
+  `music-dl gui` after rotating the token in the GUI.
 
 ## Related docs
 
-- [`../../tidaldl-py/docs/bot-onboarding.md`](../../tidaldl-py/docs/bot-onboarding.md) — wizard flow, GUI ↔ bot token handoff, `--setup-bot`
+- [`../../tidaldl-py/docs/bot-onboarding.md`](../../tidaldl-py/docs/bot-onboarding.md) — GUI setup flow, Bot Control API, shared-token handoff

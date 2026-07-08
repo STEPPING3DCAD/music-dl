@@ -72,17 +72,15 @@ tidal_hidden = [
     "tidal_dl.helper.camelot",
     "tidal_dl.helper.checkpoint",
     "tidal_dl.helper.cli",
-    "tidal_dl.helper.decorator",
     "tidal_dl.helper.decryption",
     "tidal_dl.helper.exceptions",
-    "tidal_dl.helper.isrc_index",
+
     "tidal_dl.helper.library_db",
     "tidal_dl.helper.library_scanner",
     "tidal_dl.helper.path",
     "tidal_dl.helper.playlist_import",
     "tidal_dl.helper.tidal",
     "tidal_dl.helper.waveform",
-    "tidal_dl.helper.wrapper",
     "tidal_dl.hifi_api",
     "tidal_dl.metadata",
     "tidal_dl.model",
@@ -126,14 +124,9 @@ dep_hidden = [
     "Crypto.Util.Counter",
     "Crypto.Util._raw_api",
 
-    # --- Data serialization ---
-    *runtime_submodules("dataclasses_json"),
-    *runtime_submodules("marshmallow"),
-
     # --- Other deps ---
     "m3u8",
     "toml",
-    "pathvalidate",
     "coloredlogs",
     *runtime_submodules("rich"),
     *runtime_submodules("typer"),

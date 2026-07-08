@@ -35,7 +35,6 @@ from tidal_dl.constants import (
     quality_name,
 )
 from tidal_dl.helper.cache import TTLCache
-from tidal_dl.helper.decorator import SingletonMeta
 from tidal_dl.helper.path import path_config_base, path_file_settings, path_file_token
 from tidal_dl.hifi_api import HiFiApiClient
 from tidal_dl.model.cfg import DEFAULT_FORMAT_PLAYLIST, LEGACY_DEFAULT_FORMAT_PLAYLIST
@@ -43,6 +42,20 @@ from tidal_dl.model.cfg import Settings as ModelSettings
 from tidal_dl.model.cfg import Token as ModelToken
 
 _console = RichConsole()
+
+_singleton_lock = Lock()
+_settings_instance: "Settings | None" = None
+_tidal_instance: "Tidal | None" = None
+_handling_app_instance: "HandlingApp | None" = None
+
+
+def reset_singletons() -> None:
+    """Clear module singletons (tests and cfg reset)."""
+    global _settings_instance, _tidal_instance, _handling_app_instance
+    with _singleton_lock:
+        _settings_instance = None
+        _tidal_instance = None
+        _handling_app_instance = None
 
 
 class JsonConfigModel(Protocol):
@@ -122,7 +135,7 @@ class BaseConfig(Generic[ConfigModelT]):
             with open(path, encoding="utf-8") as f:
                 settings_json = f.read()
 
-            self.data = self._tolerant_load(settings_json)
+            self.data = self._load_json(settings_json)
             result = True
         except (JSONDecodeError, TypeError, FileNotFoundError) as e:
             if isinstance(e, FileNotFoundError):
@@ -135,80 +148,17 @@ class BaseConfig(Generic[ConfigModelT]):
 
         return result
 
-    def _tolerant_load(self, raw_json: str) -> ConfigModelT:
-        """Deserialize JSON into the config model, tolerating schema drift.
-
-        Unknown fields are ignored.  Missing fields get defaults.  Enum values
-        that no longer exist fall back to the field default.
-        """
+    def _load_json(self, raw_json: str) -> ConfigModelT:
+        """Deserialize JSON into the config model."""
         try:
             return self.cls_model.from_json(raw_json)
-        except (ValueError, KeyError):
-            pass
+        except (ValueError, KeyError, JSONDecodeError, TypeError):
+            return self.cls_model()
 
-        # from_json() failed — merge valid fields from disk onto a fresh default
-        return self._merge_raw_onto_defaults(raw_json)
-
-    def _merge_raw_onto_defaults(self, raw_json: str) -> ConfigModelT:
-        """Create a default instance and overlay any valid fields from *raw_json*.
-
-        Returns the merged model.  Fields that fail type coercion are silently
-        skipped (the default value is kept).
-        """
-        import dataclasses
-        import enum
-
-        defaults = self.cls_model()
-        lost_fields: list[str] = []
-
-        try:
-            raw_dict = json.loads(raw_json)
-        except (json.JSONDecodeError, TypeError):
-            return defaults
-
-        if not isinstance(raw_dict, dict):
-            return defaults
-
-        field_names = {f.name for f in dataclasses.fields(defaults)}
-
-        for key, value in raw_dict.items():
-            if key not in field_names:
-                continue
-            try:
-                current_default = getattr(defaults, key)
-
-                # Attempt enum coercion if the field default is an enum member
-                if isinstance(current_default, enum.Enum):
-                    try:
-                        value = type(current_default)(value)
-                    except (ValueError, KeyError):
-                        lost_fields.append(key)
-                        continue
-
-                setattr(defaults, key, value)
-            except Exception:
-                lost_fields.append(key)
-
-        if lost_fields:
-            _console.print(
-                f"[yellow]Warning:[/yellow] Could not restore these settings (using defaults): "
-                f"{', '.join(lost_fields)}"
-            )
-
-        return defaults
-
-    def _recover_from_corrupt(self, path: str, broken_json: str) -> ConfigModelT:
-        """Attempt recovery when the config file is corrupt or incompatible.
-
-        Strategy:
-          1. Back up the broken file to .bak
-          2. Try loading from existing .bak (previous known-good state)
-          3. Merge valid fields from the broken JSON onto defaults
-          4. Fall back to pure defaults as last resort
-        """
+    def _recover_from_corrupt(self, path: str, _broken_json: str) -> ConfigModelT:
+        """Back up a corrupt config and restore from .bak or defaults."""
         path_bak = path + ".bak"
 
-        # Back up the broken file
         try:
             if os.path.exists(path_bak):
                 os.remove(path_bak)
@@ -216,11 +166,9 @@ class BaseConfig(Generic[ConfigModelT]):
         except OSError:
             pass
 
-        # Try loading from the .bak file (may be a previous good version)
         try:
             with open(path_bak, encoding="utf-8") as f:
-                bak_json = f.read()
-            data = self._tolerant_load(bak_json)
+                data = self._load_json(f.read())
             _console.print(
                 f"[yellow]Warning:[/yellow] Config was corrupt. Recovered settings from backup '{path_bak}'."
             )
@@ -228,21 +176,28 @@ class BaseConfig(Generic[ConfigModelT]):
         except (FileNotFoundError, JSONDecodeError, TypeError, ValueError):
             pass
 
-        # Merge what we can from the broken JSON
-        merged = self._merge_raw_onto_defaults(broken_json)
         _console.print(
-            f"[yellow]Warning:[/yellow] Config was corrupt. A backup was saved to '{path_bak}'. "
-            "Recovered as many settings as possible; remaining fields use defaults."
+            f"[yellow]Warning:[/yellow] Config was corrupt. Using defaults. Backup saved to '{path_bak}'."
         )
-        return merged
+        return self.cls_model()
 
 
-class Settings(BaseConfig[ModelSettings], metaclass=SingletonMeta):
+class Settings(BaseConfig[ModelSettings]):
     """Singleton holding user preferences loaded from settings.json."""
 
     data: ModelSettings
 
+    def __new__(cls) -> Self:
+        global _settings_instance
+        with _singleton_lock:
+            if _settings_instance is None:
+                _settings_instance = super().__new__(cls)
+        return _settings_instance
+
     def __init__(self) -> None:
+        if getattr(self, "_singleton_ready", False):
+            return
+        self._singleton_ready = True
         super().__init__(ModelSettings, path_file_settings())
         self.read(self.file_path)
         self._migrate_legacy_playlist_template()
@@ -256,7 +211,7 @@ class Settings(BaseConfig[ModelSettings], metaclass=SingletonMeta):
         self.save()
 
 
-class Tidal(BaseConfig[ModelToken], metaclass=SingletonMeta):
+class Tidal(BaseConfig[ModelToken]):
     """Singleton wrapping a tidalapi Session with OAuth and Dolby Atmos support."""
 
     data: ModelToken
@@ -267,7 +222,20 @@ class Tidal(BaseConfig[ModelToken], metaclass=SingletonMeta):
     api_cache: TTLCache
     _active_key_index: int
 
+    def __new__(cls) -> Self:
+        global _tidal_instance
+        with _singleton_lock:
+            if _tidal_instance is None:
+                _tidal_instance = super().__new__(cls)
+        return _tidal_instance
+
     def __init__(self, settings: Settings | None = None) -> None:
+        if getattr(self, "_singleton_ready", False):
+            if settings is not None:
+                self.settings = settings
+                self.settings_apply(settings)
+            return
+        self._singleton_ready = True
         super().__init__(ModelToken, path_file_token())
         tidal_config = TidalConfig(item_limit=10000)
         self.session = Session(tidal_config)
@@ -368,6 +336,12 @@ class Tidal(BaseConfig[ModelToken], metaclass=SingletonMeta):
     # API key management
     # ------------------------------------------------------------------
 
+    def refresh_api_keys(self) -> bool:
+        """Refresh managed API keys and apply the first valid key."""
+        if not _api.refresh_api_keys():
+            return False
+        return self._apply_api_key(0)
+
     def _apply_api_key(self, index: int) -> bool:
         """Apply the API key at *index* from the managed key list to the session config.
 
@@ -401,6 +375,7 @@ class Tidal(BaseConfig[ModelToken], metaclass=SingletonMeta):
         Returns:
             bool: True if login succeeded with any key.
         """
+        self.refresh_api_keys()
         keys = _api.getItems()
 
         for index, key in enumerate(keys):
@@ -687,11 +662,21 @@ class Tidal(BaseConfig[ModelToken], metaclass=SingletonMeta):
         return True
 
 
-class HandlingApp(metaclass=SingletonMeta):
+class HandlingApp:
     """Singleton that owns the application abort / run events."""
 
     event_abort: Event = Event()
     event_run: Event = Event()
 
+    def __new__(cls) -> Self:
+        global _handling_app_instance
+        with _singleton_lock:
+            if _handling_app_instance is None:
+                _handling_app_instance = super().__new__(cls)
+        return _handling_app_instance
+
     def __init__(self) -> None:
+        if getattr(self, "_singleton_ready", False):
+            return
+        self._singleton_ready = True
         self.event_run.set()

@@ -2,11 +2,11 @@ from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-APP_JS = PROJECT_ROOT / "tidal_dl" / "gui" / "static" / "app.js"
+from tests.gui_js_source import read_gui_js
 
 
 def test_queue_playback_errors_advance_to_next_track_without_dead_air():
-    source = APP_JS.read_text()
+    source = read_gui_js()
 
     assert "toast(label + ' unavailable', 'error');" in source
     assert "const canAutoSkip = current && state.queueIndex < state.queue.length - 1;" in source
@@ -14,7 +14,7 @@ def test_queue_playback_errors_advance_to_next_track_without_dead_air():
 
 
 def test_shuffle_uses_queue_order_instead_of_random_next():
-    source = APP_JS.read_text()
+    source = read_gui_js()
 
     assert "if (state.shuffle) {\n    state.queueIndex = Math.floor(Math.random() * state.queue.length);" not in source
     assert "state.queueIndex = (state.queueIndex + 1) % state.queue.length;" in source

@@ -40,7 +40,7 @@ def _album(album_id, name, artist, tracks):
     )
 
 
-def _serialize_stub(track, _isrc_index):
+def _serialize_stub(track, _library_db=None):
     artist_name = ", ".join(a.name for a in getattr(track, "artists", []) if getattr(a, "name", None))
     album = getattr(track, "album", None)
     return {
@@ -87,7 +87,6 @@ def test_album_lookup_prefers_candidate_with_local_track_overlap(monkeypatch, cl
 
     monkeypatch.setattr(albums_api, "Tidal", lambda: SimpleNamespace(session=fake_session))
     monkeypatch.setattr(albums_api, "_get_library_db", lambda: _FakeAlbumDB(local_tracks))
-    monkeypatch.setattr(albums_api, "_get_isrc_index", lambda: SimpleNamespace())
     monkeypatch.setattr(albums_api, "_serialize_track", _serialize_stub)
 
     result = albums_api.album_lookup("Don Moen, Paul Wilbur, Aline Barros", "Más De Ti (En Vivo)")
@@ -119,7 +118,6 @@ def test_album_lookup_rejects_weak_match_with_no_track_overlap(monkeypatch, clea
 
     monkeypatch.setattr(albums_api, "Tidal", lambda: SimpleNamespace(session=fake_session))
     monkeypatch.setattr(albums_api, "_get_library_db", lambda: _FakeAlbumDB(local_tracks))
-    monkeypatch.setattr(albums_api, "_get_isrc_index", lambda: SimpleNamespace())
     monkeypatch.setattr(albums_api, "_serialize_track", _serialize_stub)
 
     with pytest.raises(HTTPException) as exc:
@@ -160,7 +158,6 @@ def test_album_lookup_ignores_empty_normalized_local_titles(monkeypatch, clear_s
 
     monkeypatch.setattr(albums_api, "Tidal", lambda: SimpleNamespace(session=fake_session))
     monkeypatch.setattr(albums_api, "_get_library_db", lambda: _FakeAlbumDB(local_tracks))
-    monkeypatch.setattr(albums_api, "_get_isrc_index", lambda: SimpleNamespace())
     monkeypatch.setattr(albums_api, "_serialize_track", _serialize_stub)
 
     result = albums_api.album_lookup("Don Moen", "Más De Ti (En Vivo)")

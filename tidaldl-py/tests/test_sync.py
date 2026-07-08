@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 from rich.console import Console
 
-from tidal_dl.cli import _sync_diff_playlists, _sync_print_summary, _sync_prompt_playlists
+from tidal_dl.cli_sync import _sync_diff_playlists, _sync_print_summary, _sync_prompt_playlists
 
 
 @dataclass
@@ -28,11 +28,10 @@ class FakePlaylist:
         return self._tracks[offset : offset + limit]
 
 
-def _make_isrc_index(known_isrcs: set[str]) -> MagicMock:
-    idx = MagicMock()
-    idx.contains.side_effect = lambda isrc: isrc in known_isrcs
-    idx.load.return_value = None
-    return idx
+def _make_library_db(known_isrcs: set[str]) -> MagicMock:
+    db = MagicMock()
+    db.has_live_isrc.side_effect = lambda isrc: isrc in known_isrcs
+    return db
 
 
 # --- _sync_diff_playlists tests ---
@@ -43,9 +42,9 @@ def test_diff_finds_missing_tracks():
         name="Chill",
         _tracks=[FakeTrack(isrc="US1234"), FakeTrack(isrc="US5678"), FakeTrack(isrc="US9999")],
     )
-    idx = _make_isrc_index({"US1234"})
+    library_db = _make_library_db({"US1234"})
 
-    result = _sync_diff_playlists([playlist], idx)
+    result = _sync_diff_playlists([playlist], library_db)
 
     assert len(result) == 1
     assert result[0]["name"] == "Chill"
@@ -60,9 +59,9 @@ def test_diff_all_local():
         name="Done",
         _tracks=[FakeTrack(isrc="US1111"), FakeTrack(isrc="US2222")],
     )
-    idx = _make_isrc_index({"US1111", "US2222"})
+    library_db = _make_library_db({"US1111", "US2222"})
 
-    result = _sync_diff_playlists([playlist], idx)
+    result = _sync_diff_playlists([playlist], library_db)
 
     assert result[0]["missing"] == 0
 
@@ -72,9 +71,9 @@ def test_diff_tracks_without_isrc_count_as_missing():
         name="Odd",
         _tracks=[FakeTrack(isrc=None), FakeTrack(isrc="US1111")],
     )
-    idx = _make_isrc_index({"US1111"})
+    library_db = _make_library_db({"US1111"})
 
-    result = _sync_diff_playlists([playlist], idx)
+    result = _sync_diff_playlists([playlist], library_db)
 
     assert result[0]["missing"] == 1
     assert result[0]["total"] == 2
@@ -82,9 +81,9 @@ def test_diff_tracks_without_isrc_count_as_missing():
 
 def test_diff_empty_playlist():
     playlist = FakePlaylist(name="Empty", _tracks=[])
-    idx = _make_isrc_index(set())
+    library_db = _make_library_db(set())
 
-    result = _sync_diff_playlists([playlist], idx)
+    result = _sync_diff_playlists([playlist], library_db)
 
     assert result[0]["total"] == 0
     assert result[0]["missing"] == 0
@@ -94,9 +93,9 @@ def test_diff_paginates_large_playlist():
     """Verify the pagination loop fetches tracks beyond the first page."""
     tracks = [FakeTrack(isrc=f"US{i:04d}") for i in range(150)]
     playlist = FakePlaylist(name="Big", _tracks=tracks)
-    idx = _make_isrc_index(set())
+    library_db = _make_library_db(set())
 
-    result = _sync_diff_playlists([playlist], idx)
+    result = _sync_diff_playlists([playlist], library_db)
 
     assert result[0]["total"] == 150
     assert result[0]["missing"] == 150

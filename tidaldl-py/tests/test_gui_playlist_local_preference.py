@@ -25,6 +25,9 @@ class _FakePlaylistDB:
     def tracks_by_isrc(self, isrc):
         return list(self.rows_by_isrc.get(isrc, []))
 
+    def has_live_isrc(self, isrc):
+        return bool(self.tracks_by_isrc(isrc))
+
     def all_tracks(self):
         if self._all_rows is not None:
             return list(self._all_rows)
@@ -37,6 +40,11 @@ class _FakePlaylistDB:
         return None
 
 
+def _patch_playlist_library_db(monkeypatch, playlists_api, fake_db):
+    monkeypatch.setattr(playlists_api, "_get_playlist_db", lambda: fake_db)
+    monkeypatch.setattr("tidal_dl.gui.api.search._get_library_db", lambda: fake_db)
+
+
 def test_playlist_tracks_include_local_path_when_isrc_matches(monkeypatch, clear_singletons):
     from tidal_dl.gui.api import playlists as playlists_api
 
@@ -47,11 +55,10 @@ def test_playlist_tracks_include_local_path_when_isrc_matches(monkeypatch, clear
     )
 
     monkeypatch.setattr(playlists_api, "get_tidal_session", lambda: fake_session)
-    monkeypatch.setattr(playlists_api, "_get_isrc_index", lambda: SimpleNamespace(contains=lambda isrc: True))
-    monkeypatch.setattr(
+    _patch_playlist_library_db(
+        monkeypatch,
         playlists_api,
-        "_get_playlist_db",
-        lambda: _FakePlaylistDB({"ISRC123": [{"path": "/music/local.flac", "artist": "Artist", "title": "Song", "album": "Album"}]}),
+        _FakePlaylistDB({"ISRC123": [{"path": "/music/local.flac", "artist": "Artist", "title": "Song", "album": "Album"}]}),
     )
 
     playlists_api._playlist_tracks_cache.clear()
@@ -71,8 +78,7 @@ def test_playlist_tracks_fall_back_to_stream_when_no_local_match(monkeypatch, cl
     )
 
     monkeypatch.setattr(playlists_api, "get_tidal_session", lambda: fake_session)
-    monkeypatch.setattr(playlists_api, "_get_isrc_index", lambda: SimpleNamespace(contains=lambda isrc: False))
-    monkeypatch.setattr(playlists_api, "_get_playlist_db", lambda: _FakePlaylistDB({}))
+    _patch_playlist_library_db(monkeypatch, playlists_api, _FakePlaylistDB({}))
 
     playlists_api._playlist_tracks_cache.clear()
     data = playlists_api.playlist_tracks("pl-stream")
@@ -92,11 +98,10 @@ def test_playlist_sync_uses_same_local_match_logic_as_playlist_view(monkeypatch,
     queued = []
 
     monkeypatch.setattr(playlists_api, "get_tidal_session", lambda: fake_session)
-    monkeypatch.setattr(playlists_api, "_get_isrc_index", lambda: SimpleNamespace(contains=lambda isrc: False))
-    monkeypatch.setattr(
+    _patch_playlist_library_db(
+        monkeypatch,
         playlists_api,
-        "_get_playlist_db",
-        lambda: _FakePlaylistDB(
+        _FakePlaylistDB(
             {},
             all_rows=[{"path": "/music/mas-de-ti.flac", "artist": "Don Moen", "title": "Mas De Ti", "album": "Más De Ti"}],
         ),
@@ -110,7 +115,7 @@ def test_playlist_sync_uses_same_local_match_logic_as_playlist_view(monkeypatch,
     assert queued == []
 
 
-def test_playlist_sync_skips_local_track_when_isrc_index_is_stale(monkeypatch, clear_singletons):
+def test_playlist_sync_skips_local_track_when_library_db_has_isrc_match(monkeypatch, clear_singletons):
     from tidal_dl.gui.api import playlists as playlists_api
 
     fake_track = _fake_track(track_id=8, isrc="ISRC123")
@@ -121,11 +126,10 @@ def test_playlist_sync_skips_local_track_when_isrc_index_is_stale(monkeypatch, c
     queued = []
 
     monkeypatch.setattr(playlists_api, "get_tidal_session", lambda: fake_session)
-    monkeypatch.setattr(playlists_api, "_get_isrc_index", lambda: SimpleNamespace(contains=lambda isrc: False))
-    monkeypatch.setattr(
+    _patch_playlist_library_db(
+        monkeypatch,
         playlists_api,
-        "_get_playlist_db",
-        lambda: _FakePlaylistDB({"ISRC123": [{"path": "/music/local.flac", "artist": "Artist", "title": "Song", "album": "Album"}]}),
+        _FakePlaylistDB({"ISRC123": [{"path": "/music/local.flac", "artist": "Artist", "title": "Song", "album": "Album"}]}),
     )
     monkeypatch.setattr(playlists_api, "_enqueue_playlist_downloads", lambda track_ids, request=None: queued.extend(track_ids))
 
@@ -147,11 +151,10 @@ def test_playlist_sync_downloads_when_title_artist_match_is_ambiguous(monkeypatc
     queued = []
 
     monkeypatch.setattr(playlists_api, "get_tidal_session", lambda: fake_session)
-    monkeypatch.setattr(playlists_api, "_get_isrc_index", lambda: SimpleNamespace(contains=lambda isrc: False))
-    monkeypatch.setattr(
+    _patch_playlist_library_db(
+        monkeypatch,
         playlists_api,
-        "_get_playlist_db",
-        lambda: _FakePlaylistDB(
+        _FakePlaylistDB(
             {},
             all_rows=[
                 {"path": "/music/a.flac", "artist": "Artist", "title": "Song", "album": "Album A"},

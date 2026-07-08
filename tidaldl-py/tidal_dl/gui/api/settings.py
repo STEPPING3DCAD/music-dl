@@ -171,6 +171,7 @@ def auth_login() -> dict:
             return _login_state.copy()
 
         try:
+            tidal.refresh_api_keys()
             link_login, future = tidal.session.login_oauth()
             uri = link_login.verification_uri_complete or ""
             if uri and not uri.startswith("http"):

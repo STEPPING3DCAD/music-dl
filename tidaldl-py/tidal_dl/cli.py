@@ -41,12 +41,42 @@ from tidal_dl.helper.tidal import (
     instantiate_media,
     url_ending_clean,
 )
-from tidal_dl.helper.wrapper import LoggerWrapped
 from tidal_dl.hifi_api import HiFiApiClient
-from tidal_dl.model.cfg import HelpSettings
+from tidal_dl.model.cfg import SETTINGS_HELP
 
 if TYPE_CHECKING:
-    from tidal_dl.helper.isrc_index import IsrcIndex
+    from tidal_dl.helper.library_db import LibraryDB
+
+
+def _progress_logger(print_fn: Callable[..., Any], *, debug: bool = False):
+    import traceback
+
+    class _Logger:
+        def debug(self, value: Any) -> None:
+            if debug:
+                print_fn(str(value))
+
+        def info(self, value: Any) -> None:
+            print_fn(str(value))
+
+        def warning(self, value: Any) -> None:
+            print_fn(str(value))
+
+        def error(self, value: Any) -> None:
+            print_fn(str(value))
+
+        def critical(self, value: Any) -> None:
+            print_fn(str(value))
+
+        def exception(self, value: Any) -> None:
+            print_fn(str(value))
+            if debug:
+                tb = traceback.format_exc()
+                if tb and tb.strip() != "NoneType: None":
+                    print_fn(tb)
+
+    return _Logger()
+
 
 app = typer.Typer(context_settings={"help_option_names": ["-h", "--help"]}, add_completion=True)
 app_source = typer.Typer(
@@ -68,6 +98,12 @@ app_dl_fav = typer.Typer(
 app.add_typer(app_dl_fav, name="dl_fav")
 app.add_typer(app_source, name="source")
 app.add_typer(app_scan, name="scan")
+
+from tidal_dl.cli_scan import register_scan_commands
+from tidal_dl.cli_sync import register_sync_command
+
+register_sync_command(app)
+register_scan_commands(app_scan)
 
 TrackOrVideo = Track | Video
 CollectionMedia = Album | Playlist | Mix | Artist
@@ -319,7 +355,7 @@ def _download(
         transient=False,
     )
 
-    fn_logger = LoggerWrapped(progress.print, debug=debug)
+    fn_logger = _progress_logger(progress.print, debug=debug)
 
     dl = Download(
         tidal_obj=tidal,
@@ -349,120 +385,6 @@ def _download(
             progress.stop()
 
     return True
-
-
-def _sync_diff_playlists(
-    playlists: list[Any],
-    isrc_index: "IsrcIndex",
-) -> list[dict[str, Any]]:
-    """Compare Tidal playlists against the local ISRC index.
-
-    Args:
-        playlists: List of tidalapi Playlist objects (or duck-typed equivalents).
-        isrc_index: Loaded IsrcIndex instance.
-
-    Returns:
-        List of dicts with keys: name, total, local, missing, share_url.
-    """
-    results: list[dict[str, Any]] = []
-
-    for pl in playlists:
-        tracks: list[Any] = []
-        offset = 0
-        while True:
-            page = pl.tracks(limit=100, offset=offset)
-            if not page:
-                break
-            tracks.extend(page)
-            if len(page) < 100:
-                break
-            offset += 100
-
-        total = len(tracks)
-        local = 0
-        for track in tracks:
-            isrc = getattr(track, "isrc", None)
-            if isrc and isrc_index.contains(isrc):
-                local += 1
-
-        results.append({
-            "name": pl.name,
-            "total": total,
-            "local": local,
-            "missing": total - local,
-            "share_url": pl.share_url,
-        })
-
-    return results
-
-
-def _sync_print_summary(diff: list[dict[str, Any]], console: Console) -> None:
-    """Print a Rich table summarising the sync diff.
-
-    Args:
-        diff: Output of _sync_diff_playlists().
-        console: Rich Console to print to.
-    """
-    table = Table(title="Playlist Sync Summary", show_lines=False)
-    table.add_column("Playlist", style="cyan", no_wrap=True)
-    table.add_column("Total", justify="right")
-    table.add_column("Local", justify="right")
-    table.add_column("Missing", justify="right")
-
-    for row in diff:
-        missing_style = "red bold" if row["missing"] > 0 else "green"
-        table.add_row(
-            row["name"],
-            str(row["total"]),
-            str(row["local"]),
-            f"[{missing_style}]{row['missing']}[/{missing_style}]",
-        )
-
-    console.print(table)
-
-
-def _sync_prompt_playlists(
-    diff: list[dict[str, Any]],
-    auto_yes: bool = False,
-) -> list[str]:
-    """Prompt the user to choose which playlists to sync.
-
-    Args:
-        diff: Output of _sync_diff_playlists().
-        auto_yes: If True, select all playlists with missing tracks without prompting.
-
-    Returns:
-        List of playlist share_urls selected for download.
-    """
-    selected: list[str] = []
-    pending = [row for row in diff if row["missing"] > 0]
-
-    if not pending:
-        return selected
-
-    if auto_yes:
-        return [row["share_url"] for row in pending]
-
-    for row in pending:
-        answer = input(
-            f"  Sync '{row['name']}' ({row['missing']} missing)? [Y]es / [n]o / [a]ll / [q]uit: "
-        ).strip().lower()
-
-        if answer in ("q", "quit"):
-            break
-        elif answer in ("a", "all"):
-            selected.append(row["share_url"])
-            # Add all remaining without prompting
-            remaining = pending[pending.index(row) + 1 :]
-            selected.extend(r["share_url"] for r in remaining)
-            break
-        elif answer in ("n", "no"):
-            continue
-        else:
-            # Default is yes (empty input or "y")
-            selected.append(row["share_url"])
-
-    return selected
 
 
 @app.command(name="cfg")
@@ -496,9 +418,9 @@ def settings_management(
             _ = config_path.rename(bak_path)
             console.print(f"[yellow]Existing config backed up to:[/yellow] {bak_path}")
 
-        from tidal_dl.helper.decorator import SingletonMeta
+        from tidal_dl.config import reset_singletons
 
-        SingletonMeta._instances.clear()
+        reset_singletons()
 
         fresh = Settings()
         fresh.save()
@@ -525,14 +447,13 @@ def settings_management(
                 settings.set_option(names[0], names[1])
                 settings.save()
         else:
-            help_settings: dict = HelpSettings().to_dict()
             table = Table(title=f"Config: {path_file_settings()}")
             table.add_column("Key", style="cyan", no_wrap=True)
             table.add_column("Value", style="magenta")
             table.add_column("Description", style="green")
 
             for key, value in sorted(d_settings.items()):
-                table.add_row(key, str(value), help_settings[key])
+                table.add_row(key, str(value), SETTINGS_HELP.get(key, ""))
 
             console.print(table)
 
@@ -681,88 +602,6 @@ def logout() -> bool:
         print("You have been successfully logged out.")
 
     return result
-
-
-@app.command(name="sync")
-def sync(
-    ctx: typer.Context,
-    yes: Annotated[
-        bool,
-        typer.Option(
-            "--yes",
-            "-y",
-            help="Skip per-playlist prompt and download all missing tracks.",
-        ),
-    ] = False,
-) -> None:
-    """Sync local library with your Tidal playlists.
-
-    Fetches all playlists in your Tidal collection, compares track ISRCs
-    against the local index, and downloads missing tracks.
-    """
-    # Login required for playlist enumeration
-    if not _resolve_session(ctx):
-        raise typer.Exit(code=1)
-
-    tidal = _ctx_tidal(ctx)
-    console = Console()
-
-    # Sync requires an OAuth session — Hi-Fi API alone can't enumerate user playlists
-    if tidal.session.user is None:
-        console.print("[red]Sync requires an OAuth login to access your playlists.[/red]")
-        console.print("Run [bold]music-dl login[/bold] first to authenticate with TIDAL.")
-        raise typer.Exit(code=1)
-
-    # Fetch all user playlists (paginated, 50 per page)
-    console.print("[cyan]Fetching your playlists...[/cyan]")
-    user = cast(Any, tidal.session.user)
-    all_playlists: list[Any] = []
-    offset = 0
-    while True:
-        page = user.favorites.playlists(limit=50, offset=offset)
-        if not page:
-            break
-        all_playlists.extend(page)
-        if len(page) < 50:
-            break
-        offset += 50
-
-    if not all_playlists:
-        console.print("[yellow]No playlists found in your collection.[/yellow]")
-        raise typer.Exit()
-
-    console.print(f"[cyan]Found {len(all_playlists)} playlists. Checking tracks...[/cyan]")
-
-    # Load ISRC index
-    from tidal_dl.helper.isrc_index import IsrcIndex
-    _index_path = _pathlib.Path(path_config_base()) / "isrc_index.json"
-    isrc_index = IsrcIndex(_index_path)
-    isrc_index.load()
-
-    # Diff
-    diff = _sync_diff_playlists(all_playlists, isrc_index)
-
-    # Summary
-    _sync_print_summary(diff, console)
-
-    total_missing = sum(row["missing"] for row in diff)
-    if total_missing == 0:
-        console.print("\n[green]All playlists up to date.[/green]")
-        raise typer.Exit()
-
-    console.print(f"\n[cyan]{total_missing} total missing tracks across all playlists.[/cyan]\n")
-
-    # Prompt
-    urls = _sync_prompt_playlists(diff, auto_yes=yes)
-
-    if not urls:
-        console.print("[yellow]No playlists selected. Nothing to do.[/yellow]")
-        raise typer.Exit()
-
-    # Download — reuse existing pipeline (full dedup + M3U rebuild)
-    result = _download(ctx, urls, try_login=False)
-    if not result:
-        raise typer.Exit(code=1)
 
 
 @app.command(name="dl")
@@ -1087,7 +926,7 @@ def import_playlist(
         transient=False,
     )
 
-    fn_logger = LoggerWrapped(progress.print, debug=debug)
+    fn_logger = _progress_logger(progress.print, debug=debug)
 
     dl = Download(
         tidal_obj=tidal,
@@ -1128,229 +967,6 @@ def handle_sigint_term(signum: int, frame: FrameType | None) -> None:
     handling_app: HandlingApp = HandlingApp()
 
     handling_app.event_abort.set()
-
-
-# ---------------------------------------------------------------------------
-# Scan subcommand group
-# ---------------------------------------------------------------------------
-
-
-def _scan_paths_list(settings: Settings) -> list[str]:
-    """Return the configured scan paths as a cleaned list."""
-    raw = settings.data.scan_paths or ""
-    return [p.strip() for p in raw.split(",") if p.strip()]
-
-
-def _run_scan(paths: list[str], *, dry_run: bool, verbose: bool) -> None:
-    """Execute a scan over one or more directories and display a summary."""
-    from rich.panel import Panel
-    from rich.table import Table as RichTable
-
-    from tidal_dl.helper.isrc_index import IsrcIndex
-    from tidal_dl.helper.library_scanner import scan_directory
-    from tidal_dl.helper.path import path_config_base
-
-    console = Console()
-    index_path = _pathlib.Path(path_config_base()) / "isrc_index.json"
-    isrc_index = IsrcIndex(index_path)
-    isrc_index.load()
-
-    total_files = 0
-    total_found = 0
-    total_already = 0
-    total_no_isrc = 0
-    total_errors = 0
-    all_error_paths: list[str] = []
-
-    for scan_root in paths:
-        root = _pathlib.Path(scan_root).expanduser()
-        if not root.is_dir():
-            console.print(f"[yellow]Warning:[/yellow] '{scan_root}' is not a directory — skipping.")
-            continue
-
-        console.print(f"\n[cyan]Scanning:[/cyan] {root}")
-
-        progress = Progress(
-            TextColumn("[progress.description]{task.description}"),
-            SpinnerColumn(),
-            BarColumn(),
-            TextColumn("{task.fields[scanned]} files"),
-            refresh_per_second=20,
-            expand=True,
-            transient=True,
-        )
-
-        task = progress.add_task("Scanning...", scanned=0)
-        scanned_count = 0
-
-        def _on_file(p: _pathlib.Path) -> None:
-            nonlocal scanned_count
-            scanned_count += 1
-            progress.update(task, scanned=scanned_count)
-            if verbose:
-                progress.print(f"  [dim]{p}[/dim]")
-
-        with progress:
-            result = scan_directory(root, isrc_index, dry_run=dry_run, on_file=_on_file)
-
-        total_files += result.files_scanned
-        total_found += result.isrcs_found
-        total_already += result.already_indexed
-        total_no_isrc += result.no_isrc
-        total_errors += result.errors
-        all_error_paths.extend(result.error_paths)
-
-        console.print(
-            f"  [green]{result.isrcs_found}[/green] new  "
-            f"[dim]{result.already_indexed}[/dim] already indexed  "
-            f"[yellow]{result.no_isrc}[/yellow] no ISRC  "
-            f"[red]{result.errors}[/red] errors  "
-            f"({result.elapsed_sec:.1f}s)"
-        )
-
-    # Persist unless dry-run
-    if not dry_run and total_found > 0:
-        isrc_index.save()
-
-    # Summary panel
-    summary = RichTable.grid(padding=(0, 2))
-    summary.add_column(style="bold")
-    summary.add_column()
-    summary.add_row("Directories scanned", str(len(paths)))
-    summary.add_row("Audio files examined", str(total_files))
-    summary.add_row("[green]New ISRCs indexed[/green]", str(total_found))
-    summary.add_row("Already in index", str(total_already))
-    summary.add_row("No ISRC tag", str(total_no_isrc))
-    summary.add_row("[red]Errors[/red]", str(total_errors))
-    if dry_run:
-        summary.add_row("Mode", "[yellow]dry-run — nothing written[/yellow]")
-
-    console.print()
-    console.print(Panel(summary, title="[bold]Scan Summary[/bold]", expand=False))
-
-    if all_error_paths:
-        console.print("\n[red]Files with errors (first 50):[/red]")
-        for ep in all_error_paths[:50]:
-            console.print(f"  {ep}")
-
-
-@app_scan.callback(invoke_without_command=True)
-def scan_callback(
-    ctx: typer.Context,
-    dry_run: Annotated[
-        bool,
-        typer.Option("--dry-run", help="Discover ISRCs without writing to the index."),
-    ] = False,
-    scan_all: Annotated[
-        bool,
-        typer.Option("--all", help="Scan all configured paths without prompting."),
-    ] = False,
-    verbose: Annotated[
-        bool,
-        typer.Option("--verbose", "-v", help="Print each file path as it is scanned."),
-    ] = False,
-) -> None:
-    """Run the library scanner against configured scan directories.
-
-    If only one path is configured it is used automatically.
-    If multiple paths are configured you will be prompted to choose (or use --all).
-    """
-    if ctx.invoked_subcommand is not None:
-        return
-
-    settings = Settings()
-    paths = _scan_paths_list(settings)
-    console = Console()
-
-    if not paths:
-        console.print(
-            "[yellow]No scan directories configured.[/yellow]\nAdd one with:  [cyan]music-dl scan add <PATH>[/cyan]"
-        )
-        raise typer.Exit(1)
-
-    if len(paths) == 1 or scan_all:
-        chosen = paths
-    else:
-        console.print("[cyan]Configured scan directories:[/cyan]")
-        for i, p in enumerate(paths, 1):
-            console.print(f"  [{i}] {p}")
-        console.print(f"  [a] All ({len(paths)} directories)")
-        choice: str = typer.prompt("Select directory (number or 'a')", default="a")
-        if choice.strip().lower() == "a":
-            chosen = paths
-        else:
-            try:
-                idx = int(choice.strip()) - 1
-                if not 0 <= idx < len(paths):
-                    raise ValueError
-                chosen = [paths[idx]]
-            except ValueError:
-                console.print("[red]Invalid selection.[/red]")
-                raise typer.Exit(1)
-
-    _run_scan(chosen, dry_run=dry_run, verbose=verbose)
-
-
-@app_scan.command(name="add")
-def scan_add(
-    path: Annotated[
-        str,
-        typer.Argument(help="Directory path to add to the scan list."),
-    ],
-    no_scan: Annotated[
-        bool,
-        typer.Option("--no-scan", help="Only save the path without scanning it."),
-    ] = False,
-) -> None:
-    """Add a directory to the persistent scan path list and scan it."""
-    settings = Settings()
-    current = _scan_paths_list(settings)
-    normalized = path.strip().rstrip("/").rstrip("\\")
-    already_configured = normalized in current
-    if normalized and not already_configured:
-        current.append(normalized)
-        settings.data.scan_paths = ",".join(current)
-        settings.save()
-        print(f"Added: {normalized}")
-    else:
-        print(f"Already configured: {normalized}")
-    if not no_scan:
-        _run_scan([normalized], dry_run=False, verbose=False)
-
-
-@app_scan.command(name="remove")
-def scan_remove(
-    path: Annotated[
-        str,
-        typer.Argument(help="Directory path to remove from the scan list."),
-    ],
-) -> None:
-    """Remove a directory from the persistent scan path list."""
-    settings = Settings()
-    current = _scan_paths_list(settings)
-    normalized = path.strip().rstrip("/").rstrip("\\")
-    updated = [p for p in current if p != normalized]
-    if len(updated) == len(current):
-        print(f"Not found in scan paths: {normalized}")
-    else:
-        settings.data.scan_paths = ",".join(updated)
-        settings.save()
-        print(f"Removed: {normalized}")
-    print(f"Scan paths: {settings.data.scan_paths or '(none)'}")
-
-
-@app_scan.command(name="show")
-def scan_show() -> None:
-    """List all configured scan directories."""
-    settings = Settings()
-    paths = _scan_paths_list(settings)
-    if not paths:
-        print("No scan paths configured. Add one with: music-dl scan add <PATH>")
-        return
-    for i, p in enumerate(paths, 1):
-        exists = _pathlib.Path(p).expanduser().is_dir()
-        status = "[green]ok[/green]" if exists else "[red]missing[/red]"
-        Console().print(f"  [{i}] {p}  {status}")
 
 
 @app.command(name="isrc-tag")
@@ -1404,7 +1020,6 @@ def isrc_tag(
     import mutagen.oggvorbis
     from mutagen.id3 import TSRC
 
-    from tidal_dl.helper.isrc_index import IsrcIndex
     from tidal_dl.helper.library_db import LibraryDB
     from tidal_dl.helper.library_scanner import SCAN_EXTENSIONS, _extract_isrc
 
@@ -1517,11 +1132,6 @@ def isrc_tag(
         db.close()
         raise typer.Exit(code=1)
 
-    # Load ISRC index for updating after tagging
-    _index_path = _pathlib.Path(path_config_base()) / "isrc_index.json"
-    isrc_index = IsrcIndex(_index_path)
-    isrc_index.load()
-
     tagged = 0
     not_found = 0
     errors = 0
@@ -1610,7 +1220,7 @@ def isrc_tag(
                 else:
                     if _write_isrc(file_path, matched_isrc):
                         db.record(path_str, status="tagged", isrc=matched_isrc, artist=artist, title=title)
-                        isrc_index.add(matched_isrc, file_path)
+                        db.register_isrc_path(matched_isrc, file_path)
                         tagged += 1
                     else:
                         db.record(path_str, status="error", artist=artist, title=title)
@@ -1626,17 +1236,13 @@ def isrc_tag(
     db.commit()
     db.close()
 
-    # Save ISRC index
-    if not dry_run and tagged > 0:
-        isrc_index.save()
-
     # Summary
     console.print()
     action = "Would tag" if dry_run else "Tagged"
     console.print(f"[green]{action}: {tagged}[/green]  [yellow]Not found: {not_found}[/yellow]  [red]Errors: {errors}[/red]")
 
     if not dry_run and tagged > 0:
-        console.print(f"[dim]ISRC index updated ({isrc_index.size} total entries).[/dim]")
+        console.print(f"[dim]Library ISRC entries: {db.isrc_entry_count()}.[/dim]")
 
 
 @app.command()
@@ -1646,16 +1252,21 @@ def gui(
     setup_bot: bool = typer.Option(
         False,
         "--setup-bot",
-        help="Launch the Discord bot setup wizard before starting the server.",
+        help="Print a reminder that Discord bot setup is GUI-only (DJAI panel / Bot Control).",
     ),
 ) -> None:
     """Launch the music-dl web interface."""
-    from tidal_dl.gui.bot_first_run import print_setup_hint, run_setup_force
-    from tidal_dl.gui.bot_onboarding import TokenSource, bot_token_source, shared_token_path
+    from tidal_dl.gui.bot_onboarding import (
+        TokenSource,
+        bot_token_source,
+        print_setup_hint,
+        run_setup_force,
+        shared_token_path,
+    )
     from tidal_dl.gui.server import run
 
-    # onboarding-backend R3: explicit wizard launch via --setup-bot.
-    # Blocks until the wizard exits; never aborts server startup.
+    # onboarding-backend R3: --setup-bot prints GUI-only setup reminder.
+    # Never aborts server startup.
     if setup_bot:
         run_setup_force()
     else:
@@ -1664,17 +1275,15 @@ def gui(
         print_setup_hint()
 
     # Startup canary: report where the backend will resolve the bot
-    # shared secret from. Replaces the wizard's old R10 "backend
-    # reachable" probe — now that security.resolve_bot_shared_token
-    # reads the wizard's file directly, there is no HTTP round-trip to
-    # verify. One visible line here confirms the plumbing is wired.
+    # shared secret from. One visible line here confirms the plumbing
+    # is wired.
     source = bot_token_source()
     if source is TokenSource.ENV:
         typer.echo("Discord bot: shared token loaded from MUSIC_DL_BOT_TOKEN env var.")
     elif source is TokenSource.FILE:
         typer.echo(f"Discord bot: shared token loaded from {shared_token_path()}.")
     # TokenSource.NONE → silent; print_setup_hint already directed the
-    # user to run the wizard.
+    # user to the GUI.
 
     run(port=port, open_browser=not no_browser)
 

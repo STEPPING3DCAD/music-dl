@@ -1,58 +1,55 @@
 # Discord Bot Onboarding
 
-End-to-end flow for going from zero to a running Discord bot without
-leaving a single terminal. The wizard lives in
-[`apps/discord-bot/src/wizard/`](../../apps/discord-bot/src/wizard)
-and is dispatched from the backend CLI or run standalone.
+End-to-end flow for going from zero to a running Discord bot via the
+music-dl GUI. Bot setup lives in the **DJAI panel** and is driven by
+the **Bot Control** API (`/bot-control/*`).
 
 ## Design principles
 
 1. **No terminal hijack on normal startup.** `music-dl gui` prints
    the web UI address and serves the app — period. Bot setup is
-   opt-in, triggered only by `--setup-bot`.
-2. **One terminal, one command.** The wizard stands on its own — it
-   does not require the backend to be running concurrently.
-3. **Single authoritative path for every file.** The wizard and the
+   GUI-only.
+2. **Single authoritative path for every file.** The GUI and the
    backend both resolve the same env file and shared-token file, so
    there is no way for them to disagree on where state lives.
-4. **Atomic commit.** Both files land or neither does. Preflight
+3. **Atomic commit.** Both files land or neither does. Configuration
    failure never leaves a half-written config on disk.
 
 ## Entry points
 
-### `music-dl gui --setup-bot`
-
-```
-music-dl gui --setup-bot
-  └─ tidal_dl.gui.bot_first_run.run_setup_force()
-       ├─ isatty(stdin)?  no → print hint, continue to server
-       └─ dispatch_wizard()
-            ├─ resolve bot root (MUSIC_DL_BOT_PATH or …/apps/discord-bot)
-            ├─ run `bun run wizard`
-            ├─ report missing Bun as runtime-missing
-            └─ subprocess.run(..., cwd=bot_root)  — inherits stdio
-```
-
-Exit code mapping (see `bot_first_run.run_setup_force`):
-
-| RC | Meaning | User hint |
-| --- | --- | --- |
-| 0 | Wizard completed cleanly | "Bot setup complete." |
-| 126 | Bot sources not locatable | "Set `MUSIC_DL_BOT_PATH`..." |
-| 127 | Bun unavailable | "Install bun, or `bun install` in apps/discord-bot" |
-| other | Wizard aborted / preflight never passed | "Retry later with `music-dl gui --setup-bot`" |
-
-**Server startup is never aborted by wizard failure.** The backend
-always continues to its HTTP listen after the wizard returns.
-
-### Standalone
+### `music-dl gui` (DJAI panel)
 
 ```bash
-cd apps/discord-bot
-bun run wizard
+music-dl gui
 ```
 
-The CLI is a thin entry on top of `runWizard()` in `src/wizard/index.ts`.
+Open the DJAI view in the web UI. Enter the Discord bot token and
+allowed guild/channel/user IDs, then use **Save Bot Config**,
+**Deploy Discord Bot**, **Restart**, or **Shutdown** to manage the bot.
+
+The Bot Control API endpoints:
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /bot-control/status` | Current config + bot process state |
+| `POST /bot-control/configure` | Save bot config (env + shared token) |
+| `POST /bot-control/start` | Deploy / start the bot |
+| `POST /bot-control/restart` | Restart the bot |
+| `POST /bot-control/stop` | Shut down the bot |
+
+### `music-dl gui --setup-bot`
+
+The `--setup-bot` flag is retained for compatibility but no longer
+launches a CLI wizard. It prints a one-line reminder to use the GUI:
+
+```
+Discord bot setup is GUI-only. Open `music-dl gui`, go to the DJAI
+panel, and use Bot Control (/bot-control) to save config and deploy
+the bot.
+```
+
+**Server startup is never aborted.** The backend always continues to
+its HTTP listen after printing the message.
 
 ## First-run hint (non-blocking)
 
@@ -66,116 +63,57 @@ When state is `needs-setup` **and** stdout is a TTY, the backend
 prints a single line:
 
 ```
-Discord bot not configured — run `music-dl gui --setup-bot` to set it up.
+Discord bot not configured — open the DJAI panel in `music-dl gui`
+and use Bot Control to set it up.
 ```
 
 It never waits for input, never pauses startup, and is suppressed on
 non-TTY launches (daemon, piped, nohup, systemd) so logs stay clean.
 
-## The wizard flow
+## GUI setup flow
 
 ```mermaid
 flowchart TD
-    A[runWizard] --> B{Existing valid config?}
-    B -->|yes| C[Keep / Reconfigure / Cancel]
-    B -->|no| P[Prompt sequence]
-    C -->|Keep| X0[exit 0, no changes]
-    C -->|Cancel| X1[exit 130]
-    C -->|Reconfigure| P
-    P --> T[Ensure shared token<br/>reuse on reconfigure]
-    T --> PF[Preflight]
-    PF -->|all pass| COM[Atomic commit<br/>env + token]
-    PF -->|field failure| RF[Re-enter single field]
-    PF -->|env/infra failure| RA[Retry all / Abort]
-    RF --> PF
-    RA -->|retry| PF
-    RA -->|abort| X2[exit 130, no changes]
-    PF -->|5 rounds exhausted| X3[exit 75, no changes]
-    COM --> X4[exit 0 — print start command]
+    A[Open DJAI panel] --> B[Enter bot token + IDs]
+    B --> C[Save Bot Config]
+    C --> D{Preflight via API}
+    D -->|pass| E[Atomic commit<br/>env + token]
+    D -->|fail| F[Show missing/invalid fields]
+    F --> B
+    E --> G[Deploy Discord Bot]
 ```
 
-### Returning-user detection
+### Configuration fields
 
-A config is considered "valid existing" only when **both** files are
-present and non-empty:
+The GUI collects the same seven values the bot requires at runtime:
 
-- `discord-bot.env` contains all 7 keys (`DISCORD_TOKEN`,
-  `DISCORD_APPLICATION_ID`, `ALLOWED_GUILD_ID`, `ALLOWED_CHANNEL_ID`,
-  `ALLOWED_USER_ID`, `MUSIC_DL_BASE_URL`, `MUSIC_DL_BOT_TOKEN`)
-- `bot-shared-token` is non-empty
+- `DISCORD_TOKEN`
+- `DISCORD_APPLICATION_ID`
+- `ALLOWED_GUILD_ID`
+- `ALLOWED_CHANNEL_ID`
+- `ALLOWED_USER_ID`
+- `MUSIC_DL_BASE_URL`
+- `MUSIC_DL_BOT_TOKEN` (shared backend bearer token)
 
-On `Reconfigure`, every existing value is offered as the Enter-to-accept
-default. The shared token is **reused** unless explicitly rotated —
-regenerating it would force an auth update on the backend.
+On reconfigure, existing values are loaded from disk so secrets do not
+need to be re-entered unless rotated.
 
-### Prompt sequence (5 user-supplied values)
+## The GUI ↔ backend handoff
 
-Each prompt prints a one-line breadcrumb showing exactly where in the
-Discord client / Developer Portal to find that value. Only the Discord
-bot token is masked (characters not echoed). The remaining four
-identifiers are echoed normally for visual confirmation.
-
-### Preflight checks
-
-| Check | Field tied to failure | Why |
-| --- | --- | --- |
-| Bun ≥ 1.2 | `runtime` | `boot.ts` runs under Bun and loads the wizard-written env file directly. |
-| `libsodium-wrappers` loadable | `env` | Voice encryption |
-| `ffmpeg` on `PATH` | `env` | Audio decoding |
-| Opus encoder loadable (`@discordjs/opus` or `opusscript`) | `env` | Voice encoding |
-| Discord token resolves to a bot identity | `DISCORD_TOKEN` | Token validity |
-| Application ID matches token | `DISCORD_APPLICATION_ID` | Mis-paired credentials |
-| Bot is a member of the allowed guild | `ALLOWED_GUILD_ID` | Catches "bot not invited" |
-| Allowed channel is a text channel in the guild + bot has view+send | `ALLOWED_CHANNEL_ID` | Wrong channel ID / missing perms |
-| Allowed user is a member of the guild | `ALLOWED_USER_ID` | Typo or wrong user |
-| Bot role has `Connect` + `Speak` in voice | `ALLOWED_GUILD_ID` | Voice cannot work without these — field-retry re-prompts the guild ID so the user can re-invite with the right permissions |
-
-**There is intentionally no `backend reachable` or `backend accepted
-the token` check.** Those required the backend to be running
-concurrently with the wizard, which is the exact two-terminal UX we
-want to avoid. The plumbing is closed a different way — see below.
-
-### Field-failure UX
-
-When a preflight check ties to a specific user-supplied field, the
-wizard offers to re-enter **only that field** (`R7`) instead of
-restarting. Infrastructure-tied failures (missing ffmpeg, etc.) offer
-a flat retry/abort.
-
-After 5 retry rounds without a clean preflight the wizard gives up
-with exit code `75` and writes nothing.
-
-### Atomic commit
-
-`commitWizardFiles` writes both files or neither:
-
-- `discord-bot.env` at mode 0600
-- `bot-shared-token` at mode 0600
-
-Each write uses the write-temp-then-rename pattern so a crash
-mid-write cannot leave a truncated file. If either write fails the
-wizard reports the error and exits non-zero — the pre-existing files
-(if any) remain untouched.
-
-## The wizard ↔ backend handoff
-
-This was the first architectural gap we closed. The wizard wrote a
-token to disk; the backend only read `MUSIC_DL_BOT_TOKEN` from env.
-Every authenticated bot request came back `401` after a "successful"
-wizard run.
-
-The fix is a single authoritative read path on both sides:
+The GUI writes config to disk; the backend resolves the shared token
+from env or file; the bot loads the env file on startup and
+authenticates with the backend.
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant W as wizard
+    participant G as GUI (Bot Control)
     participant FS as filesystem
     participant B as backend (security.resolve_bot_shared_token)
     participant BOT as bot (boot.ts)
 
-    W->>FS: write bot-shared-token (0600, atomic)
-    W->>FS: write discord-bot.env (0600, atomic, contains MUSIC_DL_BOT_TOKEN)
+    G->>FS: write bot-shared-token (0600, atomic)
+    G->>FS: write discord-bot.env (0600, atomic, contains MUSIC_DL_BOT_TOKEN)
     BOT->>FS: load getBotEnvPath() env file on startup
     BOT->>B: POST /api/bot/* with Authorization: Bearer <token>
     B->>B: resolve_bot_shared_token()
@@ -195,7 +133,7 @@ connected without ever exposing the secret.
 
 ## Canonical paths
 
-The wizard (TypeScript, `paths.ts`) and the backend
+The bot runtime (TypeScript, `paths.ts`) and the backend
 (Python, `bot_onboarding.py`) resolve these identically:
 
 ```
@@ -211,35 +149,35 @@ Files inside the config dir:
 | `discord-bot.env` | `MUSIC_DL_BOT_ENV_PATH` | Bot runtime env (7 vars) |
 | `bot-shared-token` | `MUSIC_DL_BOT_TOKEN_PATH` | Backend bearer validation |
 | `discord-bot-runtime/` | `MUSIC_DL_BOT_PATH` | Packaged desktop bot source runtime, provisioned from bundled sources |
+| `discord-bot.pid` | `MUSIC_DL_BOT_PID_PATH` | GUI-owned bot process marker |
 
 > The bot's `src/boot.ts` reads from `getBotEnvPath()` — **not** from
-> `.env` in `cwd`. Matching the wizard's write path here closes the
+> `.env` in `cwd`. Matching the GUI write path here closes the
 > cwd-vs-config-dir divergence that would otherwise silently split
 > state between writer and reader.
 
-The desktop Start Discord Bot control launches `bun src/boot.ts`
+The desktop **Deploy Discord Bot** control launches `bun src/boot.ts`
 directly from `discord-bot-runtime/` so the recorded PID belongs to the
 long-running bot process.
 
 ### Rotating the shared token
 
 A shared-token rotation happens only when the user explicitly chooses
-to rotate during `Reconfigure`. The backend resolves the token **once
-at startup** (via `resolve_bot_shared_token` →
-`bot_token_source`) — there is no reload hook. After a rotation you
-must **restart `music-dl gui`** for the new token to take effect, or
-every authenticated bot request will return `401`.
+to rotate in the GUI. The backend resolves the token **once at
+startup** (via `resolve_bot_shared_token` → `bot_token_source`) —
+there is no reload hook. After a rotation you must **restart
+`music-dl gui`** for the new token to take effect, or every
+authenticated bot request will return `401`.
 
 ## Logging safety
 
-- The Discord bot token never appears in wizard stdout, stderr, or
-  logs. Masked input does not echo keystrokes.
-- The generated shared backend token never appears in output. Not at
-  generation time, not in success messages.
-- Preflight failure messages use generic phrasing ("token rejected")
-  rather than raw HTTP response bodies.
+- The Discord bot token never appears in GUI logs or API responses
+  in plaintext after save.
+- The generated shared backend token never appears in output.
+- Preflight failure messages use generic phrasing rather than raw
+  HTTP response bodies.
 
-## Files on disk after a successful wizard run
+## Files on disk after a successful setup
 
 ```
 <config-dir>/

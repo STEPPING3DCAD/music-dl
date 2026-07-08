@@ -1,3 +1,5 @@
+from tests.gui_js_source import GUI_JS_FILES, read_gui_js
+
 """Tests that static asset resolution works in both normal and frozen modes.
 
 Catches the _MEIPASS bug: PyInstaller onefile bundles datas in the extraction
@@ -9,9 +11,10 @@ from pathlib import Path
 from unittest.mock import patch
 import sys
 
+from tests.gui_js_source import GUI_JS_FILES, read_gui_js
 
 STATIC_DIR = Path(__file__).resolve().parents[1] / "tidal_dl" / "gui" / "static"
-REQUIRED_FILES = ["index.html", "routes.js", "app.js", "style.css"]
+REQUIRED_FILES = ["index.html", "routes.js", *GUI_JS_FILES, "style.css"]
 
 
 class TestStaticAssetsExist:
@@ -39,7 +42,9 @@ class TestStaticDirResolution:
         # Create a fake _MEIPASS structure
         fake_static = tmp_path / "tidal_dl" / "gui" / "static"
         fake_static.mkdir(parents=True)
-        (fake_static / "app.js").write_text("// frozen")
+        (fake_static / "api.js").write_text("// frozen")
+        (fake_static / "views.js").write_text("// frozen")
+        (fake_static / "player.js").write_text("// frozen")
 
         with patch.object(sys, "frozen", True, create=True), \
              patch.object(sys, "_MEIPASS", str(tmp_path), create=True):
@@ -59,23 +64,23 @@ class TestAppJsFeatureMarkers:
     """app.js contains expected feature markers — catches stale bundle issues."""
 
     def test_has_csrf_token_handling(self):
-        js = (STATIC_DIR / "app.js").read_text()
+        js = read_gui_js()
         assert "X-CSRF-Token" in js
 
     def test_has_media_session(self):
-        js = (STATIC_DIR / "app.js").read_text()
+        js = read_gui_js()
         assert "mediaSession" in js, "Media Session API integration missing"
 
     def test_has_waveform_hires(self):
-        js = (STATIC_DIR / "app.js").read_text()
+        js = read_gui_js()
         assert "_wfHires" in js, "Hires waveform animation missing"
 
     def test_has_queue_persistence(self):
-        js = (STATIC_DIR / "app.js").read_text()
+        js = read_gui_js()
         assert "playerQueue" in js, "Queue persistence missing"
 
     def test_has_continue_listening_home_card(self):
-        js = (STATIC_DIR / "app.js").read_text()
+        js = read_gui_js()
         assert "Continue Listening" in js
         assert "_getContinueListeningState" in js
         assert "_resumeContinueListening" in js
@@ -83,7 +88,7 @@ class TestAppJsFeatureMarkers:
         assert "localStorage.removeItem('playerPosition')" in js
 
     def test_has_requested_keyboard_shortcuts(self):
-        js = (STATIC_DIR / "app.js").read_text()
+        js = read_gui_js()
         assert "_isTypingTarget" in js
         assert "metaKey || e.ctrlKey" in js
         assert "Cmd/Ctrl+K" in js
@@ -91,34 +96,34 @@ class TestAppJsFeatureMarkers:
         assert "Cmd/Ctrl+Shift+Q" in js
 
     def test_has_recent_filters_and_clear_old(self):
-        js = (STATIC_DIR / "app.js").read_text()
+        js = read_gui_js()
         assert "recentPlayedFilter" in js
         assert "This Week" in js
         assert "Clear older than 30 days" in js
         assert "_clearRecentOlderThan30Days" in js
 
     def test_has_queue_context_actions(self):
-        js = (STATIC_DIR / "app.js").read_text()
+        js = read_gui_js()
         assert "Play Next" in js
         assert "Add to Queue" in js
         assert "_queueTrackNext" in js
         assert "_queueTrackLast" in js
 
     def test_has_player_preferences(self):
-        js = (STATIC_DIR / "app.js").read_text()
+        js = read_gui_js()
         assert "playerPrefs" in js
         assert "_restorePlayerPrefs" in js
         assert "_savePlayerPrefs" in js
         assert "volFill.style.width" in js
 
     def test_has_smart_shuffle_hooks(self):
-        js = (STATIC_DIR / "app.js").read_text()
+        js = read_gui_js()
         assert "Smart Shuffle" in js
         assert "_smartShuffleTracks" in js
         assert "smartShuffle" in js
 
     def test_has_visible_djai_panel(self):
-        js = (STATIC_DIR / "app.js").read_text()
+        js = read_gui_js()
         css = (STATIC_DIR / "style.css").read_text()
         html = (STATIC_DIR / "index.html").read_text()
         assert "djai-shell" in js
@@ -143,7 +148,7 @@ class TestAppJsFeatureMarkers:
         assert ".bug-report-link" in css
 
     def test_has_djai_discord_bot_deploy_controls(self):
-        js = (STATIC_DIR / "app.js").read_text()
+        js = read_gui_js()
         css = (STATIC_DIR / "style.css").read_text()
         assert "/bot-control/status" in js
         assert "/bot-control/configure" in js
@@ -168,13 +173,13 @@ class TestAppJsFeatureMarkers:
         assert "djai-discord-card" in css
 
     def test_library_artist_view_uses_page_size(self):
-        js = (STATIC_DIR / "app.js").read_text()
+        js = read_gui_js()
         assert "const LIBRARY_PAGE_SIZE = 50" in js
         assert "sort=artist&limit=' + LIBRARY_PAGE_SIZE" in js
         assert "sort=artist&limit=200" not in js
 
     def test_album_view_caches_and_batches_rendering(self):
-        js = (STATIC_DIR / "app.js").read_text()
+        js = read_gui_js()
         assert "_libraryAlbumCache" in js
         assert "_getLibraryAlbums" in js
         assert "_renderAlbumCardsBatch" in js
@@ -182,7 +187,7 @@ class TestAppJsFeatureMarkers:
         assert "_failedAlbumArtUrls" in js
 
     def test_library_no_longer_renders_recent_shelf(self):
-        js = (STATIC_DIR / "app.js").read_text()
+        js = read_gui_js()
         assert "Recently Added" in js
         assert "loadLibraryRecentAlbumsExpanded" in js
         assert "recentAddedPill" not in js
@@ -191,7 +196,7 @@ class TestAppJsFeatureMarkers:
         assert "library-shelf" not in js
 
     def test_has_sleep_timer(self):
-        js = (STATIC_DIR / "app.js").read_text()
+        js = read_gui_js()
         assert "_sleepTimerId" in js, "Sleep timer missing"
 
     def test_html_has_preload_audio(self):
@@ -204,28 +209,30 @@ class TestAppJsFeatureMarkers:
 
     def test_html_loads_route_helper_before_app_js(self):
         html = (STATIC_DIR / "index.html").read_text()
-        assert html.index('/routes.js') < html.index('/app.js')
+        assert html.index('/routes.js') < html.index('/api.js')
+        assert html.index('/api.js') < html.index('/views.js')
+        assert html.index('/views.js') < html.index('/player.js')
 
     def test_h_helper_does_not_write_false_boolean_attributes(self):
-        js = (STATIC_DIR / "app.js").read_text()
+        js = read_gui_js()
         assert "else if (typeof v === 'boolean')" in js
         assert "if (v) e.setAttribute(k, '')" in js
         assert "else e.setAttribute(k, v)" in js
 
     def test_update_links_use_external_open_helper(self):
-        js = (STATIC_DIR / "app.js").read_text()
+        js = read_gui_js()
         assert "className: 'toast-update-link',\n      type: 'button'," in js
         assert "className: 'update-notification-btn',\n    type: 'button'," in js
         assert "_openExternal(data.release_url)" in js
 
     def test_updater_settings_exposes_staged_install_action(self):
-        js = (STATIC_DIR / "app.js").read_text()
+        js = read_gui_js()
         assert "us.status === 'ready_to_install'" in js
         assert "className: 'updater-btn-install', type: 'button'" in js
         assert "installBtn.onclick = () => installUpdate()" in js
 
     def test_web_update_card_exposes_copyable_install_commands(self):
-        js = (STATIC_DIR / "app.js").read_text()
+        js = read_gui_js()
         assert "function _updateInstallCommands()" in js
         assert "scripts/install.sh | bash" in js
         assert "scripts/install.ps1 | iex" in js
@@ -235,7 +242,7 @@ class TestAppJsFeatureMarkers:
         assert "Copy macOS/Linux command" in js
 
     def test_tauri_updater_state_is_normalized_for_frontend(self):
-        js = (STATIC_DIR / "app.js").read_text()
+        js = read_gui_js()
         assert "function _normalizeUpdaterState(us)" in js
         assert "status: us.status || us.phase || 'idle'" in js
         assert "available_version: us.available_version || us.version || ''" in js

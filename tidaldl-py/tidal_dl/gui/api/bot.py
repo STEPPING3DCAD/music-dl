@@ -144,15 +144,12 @@ def _lookup_local_metadata(path: str) -> dict[str, Any]:
 
 def _serialize_tidal_track(track: Any, isrc_index: Any | None = None) -> dict:
     """Turn a tidalapi Track into a bot queue item."""
-    from tidal_dl.gui.api.search import _get_isrc_index
-
-    if isrc_index is None:
-        isrc_index = _get_isrc_index()
+    from tidal_dl.gui.api.search import _get_library_db
 
     artists = track.artists or []
     artist_name = ", ".join(a.name for a in artists if a.name)
     isrc = getattr(track, "isrc", "") or ""
-    is_local = isrc_index.contains(isrc) if isrc else False
+    is_local = _get_library_db().has_live_isrc(isrc) if isrc else False
 
     return {
         "id": f"tidal:{track.id}",
@@ -214,7 +211,7 @@ def resolve_play_request(
     # 2. Tidal playlist URL
     playlist_match = _TIDAL_PLAYLIST_URL.search(query)
     if playlist_match:
-        from tidal_dl.gui.api.search import _get_isrc_index, get_tidal_session
+        from tidal_dl.gui.api.search import get_tidal_session
 
         session = get_tidal_session()
         if not session.check_login():
@@ -224,8 +221,7 @@ def resolve_play_request(
             tracks = playlist.tracks()
         except Exception as exc:
             raise HTTPException(status_code=502, detail=f"Tidal playlist lookup failed: {exc}") from exc
-        isrc_index = _get_isrc_index()
-        items = [_serialize_tidal_track(t, isrc_index) for t in tracks]
+        items = [_serialize_tidal_track(t) for t in tracks]
         return {"kind": "playlist", "items": items}
 
     # 3. Local playlist name (only if no URL scheme present)
@@ -235,7 +231,7 @@ def resolve_play_request(
         if match_path is not None:
             from tidal_dl.gui.api.library import _trusted_library_path
             from tidal_dl.gui.api.playback import get_download_paths
-            from tidal_dl.gui.security import resolve_library_audio_path
+            from tidal_dl.gui.security import resolve_local_audio_path
             from tidal_dl.helper.library_db import LibraryDB
             from tidal_dl.helper.path import path_config_base
 
@@ -246,11 +242,15 @@ def resolve_play_request(
             # F-028: Open library.db once and batch metadata lookup.
             validated_paths: list[str] = []
             for p in track_paths:
-                validated = resolve_library_audio_path(
-                    p, allowed, trusted_library_path=_trusted_library_path(p)
+                trusted = _trusted_library_path(p)
+                resolution = resolve_local_audio_path(
+                    p,
+                    allowed,
+                    library_trusts_raw_path=trusted is not None,
+                    library_resolved_path=trusted,
                 )
-                if validated is not None:
-                    validated_paths.append(str(validated))
+                if resolution.kind == "ok" and resolution.path is not None:
+                    validated_paths.append(str(resolution.path))
 
             meta_by_path: dict[str, dict[str, Any]] = {}
             if validated_paths:
@@ -291,7 +291,7 @@ def resolve_play_request(
             return {"kind": "playlist", "items": items}
 
     # 4. Free-text search — 5 candidates, locals first
-    from tidal_dl.gui.api.search import _get_isrc_index, get_tidal_session
+    from tidal_dl.gui.api.search import get_tidal_session
 
     session = get_tidal_session()
     if not session.check_login():
@@ -309,8 +309,7 @@ def resolve_play_request(
         # F-008: Unrecognized query — 4xx, not 200 with empty choices.
         # Spec treats unresolved input as a client error.
         raise HTTPException(status_code=404, detail="No matches found")
-    isrc_index = _get_isrc_index()
-    candidates = [_serialize_tidal_track(t, isrc_index) for t in tracks]
+    candidates = [_serialize_tidal_track(t) for t in tracks]
     # Prioritize local matches (Option A — matches existing search.py behavior)
     candidates.sort(key=lambda c: (not c["local"],))
     return {"kind": "choices", "choices": candidates[:5]}
@@ -340,15 +339,18 @@ def get_playable_source(
         # stream endpoint later rejects them.
         from tidal_dl.gui.api.library import _trusted_library_path
         from tidal_dl.gui.api.playback import get_download_paths
-        from tidal_dl.gui.security import resolve_library_audio_path
+        from tidal_dl.gui.security import resolve_local_audio_path
 
-        validated = resolve_library_audio_path(
+        trusted = _trusted_library_path(local_path)
+        resolution = resolve_local_audio_path(
             local_path,
             get_download_paths(),
-            trusted_library_path=_trusted_library_path(local_path),
+            library_trusts_raw_path=trusted is not None,
+            library_resolved_path=trusted,
         )
-        if validated is None:
+        if resolution.kind != "ok" or resolution.path is None:
             raise HTTPException(status_code=404, detail="Local file not found or not allowed")
+        validated = resolution.path
         meta = _lookup_local_metadata(str(validated))
         token = sign_bot_stream_token(
             {"kind": "local", "path": str(validated)}, ttl_seconds=300

@@ -1,29 +1,18 @@
 """GET /api/search — Tidal search with ISRC cross-reference."""
 from __future__ import annotations
 
-import threading
 from typing import Any
 
 from fastapi import APIRouter, Query
 
 from tidal_dl.config import Tidal
-from tidal_dl.helper.isrc_index import IsrcIndex
-from tidal_dl.helper.path import path_config_base
+from tidal_dl.gui.services.db import get_library_db
 
 router = APIRouter()
-_isrc_index: IsrcIndex | None = None
-_isrc_lock = threading.Lock()
 
 
-def _get_isrc_index() -> IsrcIndex:
-    global _isrc_index
-    with _isrc_lock:
-        if _isrc_index is None:
-            from pathlib import Path
-
-            _isrc_index = IsrcIndex(Path(path_config_base()) / "isrc_index.json")
-            _isrc_index.load()
-        return _isrc_index
+def _get_library_db():
+    return get_library_db()
 
 
 def get_tidal_session():
@@ -31,7 +20,7 @@ def get_tidal_session():
     return tidal.session
 
 
-def _serialize_track(track: Any, isrc_index: IsrcIndex) -> dict:
+def _serialize_track(track: Any, isrc_index: Any = None) -> dict:
     artists = track.artists or []
     artist_name = ", ".join(a.name for a in artists if a.name)
     album = track.album
@@ -46,9 +35,8 @@ def _serialize_track(track: Any, isrc_index: IsrcIndex) -> dict:
             pass
 
     isrc = getattr(track, "isrc", "") or ""
-    is_local = isrc_index.contains(isrc) if isrc else False
+    is_local = _get_library_db().has_live_isrc(isrc) if isrc else False
 
-    # Derive best available quality from media_metadata_tags
     tags = getattr(track, "media_metadata_tags", None) or []
     if "HIRES_LOSSLESS" in tags:
         quality = "HI_RES_LOSSLESS"
@@ -94,11 +82,10 @@ def search(
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Tidal search failed: {exc}") from exc
-    isrc_index = _get_isrc_index()
 
     if type == "tracks":
         tracks = results.get("tracks", []) or []
-        serialized = [_serialize_track(t, isrc_index) for t in tracks]
+        serialized = [_serialize_track(t) for t in tracks]
         serialized.sort(key=lambda t: (not t["is_local"],))
         return {
             "tracks": serialized,
@@ -127,17 +114,14 @@ def _serialize_item(item: Any) -> dict:
     except Exception:
         pass
     result = {"id": item.id, "name": getattr(item, "name", ""), "cover_url": cover_url}
-    # Album: include artist name
     if hasattr(item, "artist") and item.artist:
         result["artist"] = getattr(item.artist, "name", str(item.artist))
-    # Artist: include roles
     if hasattr(item, "roles") and item.roles:
         try:
             roles = [r.value if hasattr(r, "value") else str(r) for r in item.roles]
             result["roles"] = ", ".join(r.replace("_", " ").title() for r in roles[:3])
         except Exception:
             pass
-    # Playlist: include track count
     if hasattr(item, "num_tracks"):
         result["num_tracks"] = item.num_tracks
     return result

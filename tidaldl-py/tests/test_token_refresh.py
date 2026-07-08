@@ -4,7 +4,7 @@ import time
 from unittest.mock import MagicMock, patch, call
 import pytest
 
-from tidal_dl.helper.decorator import SingletonMeta
+from tidal_dl.config import reset_singletons
 
 
 # ---------------------------------------------------------------------------
@@ -37,9 +37,9 @@ def _make_tidal(tmp_path):
 
 @pytest.fixture(autouse=True)
 def _reset_singletons():
-    SingletonMeta._instances.clear()
+    reset_singletons()
     yield
-    SingletonMeta._instances.clear()
+    reset_singletons()
 
 
 @pytest.fixture

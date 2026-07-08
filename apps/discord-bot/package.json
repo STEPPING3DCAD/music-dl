@@ -5,8 +5,6 @@
   "scripts": {
     "dev": "bun --watch src/boot.ts",
     "start": "bun src/boot.ts",
-    "start:bun": "bun src/boot.ts",
-    "wizard": "bun src/wizard/cli.ts",
     "test": "bun test",
     "typecheck": "bunx tsc --noEmit"
   },
@@ -14,8 +12,7 @@
     "@discordjs/opus": "^0.10.0",
     "@discordjs/voice": "^0.19.2",
     "discord.js": "^14.18.0",
-    "libsodium-wrappers": "^0.8.4",
-    "opusscript": "^0.1.1"
+    "libsodium-wrappers": "^0.8.4"
   },
   "devDependencies": {
     "@types/bun": "^1.2.0",

@@ -1,22 +1,11 @@
 /**
- * Bot runtime entrypoint — loads the wizard-written env file from its
+ * Bot runtime entrypoint — loads the GUI-written env file from its
  * canonical location, then hands off to the actual bot startup.
- *
- * Previously the `start` and `dev` scripts used `node --env-file=.env`,
- * which reads `.env` in the current working directory. That diverged
- * from the path the onboarding wizard writes to (see wizard/paths.ts:
- * `getBotEnvPath()` → `$MUSIC_DL_CONFIG_DIR/discord-bot.env` with
- * `$XDG_CONFIG_HOME/music-dl/discord-bot.env` and `~/.config/music-dl/
- * discord-bot.env` as fallbacks, plus a `$MUSIC_DL_BOT_ENV_PATH`
- * override). The wizard would write to the canonical path and the bot
- * would read from cwd — silently diverging state. Same failure mode as
- * the shared-token gap, closed the same way: a single authoritative
- * path, consulted by both writer and reader.
  */
 
 import { existsSync, readFileSync } from "node:fs";
 
-import { getBotEnvPath } from "./wizard/paths";
+import { getBotEnvPath } from "./paths";
 
 const envPath = getBotEnvPath();
 if (existsSync(envPath)) {

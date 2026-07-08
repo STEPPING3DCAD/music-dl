@@ -44,8 +44,8 @@ context/
 settings.json
 usersettings.json
 
-# Downloads (test artifacts)
-download/
+# Downloads (test artifacts — root only; not tidal_dl/download package)
+/download/
 tidaldl-py/download/
 tidaldl-py/downloadd/
 tidaldl-py/exe/tidal_dl_win.tar.gz

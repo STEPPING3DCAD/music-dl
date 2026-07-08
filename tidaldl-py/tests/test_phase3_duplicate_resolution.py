@@ -3,7 +3,7 @@
 Unit tests for Phase 3: pre-flight ISRC duplicate resolution.
 
 Covers:
-  - IsrcIndex.get_path() returns stored path without pruning
+  - LibraryDB.primary_path_for_isrc() returns stored path without pruning
   - _preflight_isrc_scan splits hits correctly
   - Saved preference bypasses prompt
   - 'copy' action produces COPIED outcome
@@ -26,7 +26,7 @@ import pytest  # pyright: ignore[reportMissingImports]
 from tidalapi.media import Track, Video
 
 from tidal_dl.helper.checkpoint import STATUS_DOWNLOADED
-from tidal_dl.helper.isrc_index import IsrcIndex
+from tidal_dl.helper.library_db import LibraryDB
 from tidal_dl.model.cfg import Settings as CfgSettings
 from tidal_dl.model.downloader import DownloadOutcome, DownloadSummary
 
@@ -45,53 +45,62 @@ def _make_track(track_id: int, isrc: str | None = None) -> MagicMock:
 
 
 # ---------------------------------------------------------------------------
-# IsrcIndex.get_path
+# LibraryDB.primary_path_for_isrc
 # ---------------------------------------------------------------------------
 
 
-class TestIsrcIndexGetPath:
-    """get_path() returns stored value without pruning stale entries."""
+class TestLibraryDbPrimaryPath:
+    """primary_path_for_isrc() returns stored value without pruning stale entries."""
 
     def test_returns_none_for_unknown_isrc(self, tmp_path):
-        idx = IsrcIndex(tmp_path / "idx.json")
-        assert idx.get_path("US-ABC-00-00001") is None
+        db = LibraryDB(tmp_path / "library.db")
+        db.open()
+        assert db.primary_path_for_isrc("US-ABC-00-00001") is None
+        db.close()
 
     def test_returns_path_for_known_isrc(self, tmp_path):
-        idx = IsrcIndex(tmp_path / "idx.json")
+        db = LibraryDB(tmp_path / "library.db")
+        db.open()
         p = tmp_path / "track.flac"
         p.touch()
-        idx.add("US-ABC-00-00001", p)
-        result = idx.get_path("US-ABC-00-00001")
-        assert result == str(p.absolute())
+        db.register_isrc_path("US-ABC-00-00001", p, commit=True)
+        result = db.primary_path_for_isrc("US-ABC-00-00001")
+        assert result == str(p.resolve())
+        db.close()
 
     def test_does_not_prune_missing_file(self, tmp_path):
-        """get_path must NOT remove entries even if the file is gone."""
-        idx = IsrcIndex(tmp_path / "idx.json")
+        """primary_path_for_isrc must still return fallback even if the file is gone."""
+        db = LibraryDB(tmp_path / "library.db")
+        db.open()
         p = tmp_path / "gone.flac"
         p.touch()
-        idx.add("US-ABC-00-00002", p)
-        p.unlink()  # Delete the file
+        db.register_isrc_path("US-ABC-00-00002", p, commit=True)
+        p.unlink()
 
-        # contains() would prune; get_path() must not
-        result = idx.get_path("US-ABC-00-00002")
+        result = db.primary_path_for_isrc("US-ABC-00-00002")
         assert result is not None
         assert "gone.flac" in result
+        db.close()
 
     def test_returns_none_for_empty_isrc(self, tmp_path):
-        idx = IsrcIndex(tmp_path / "idx.json")
-        assert idx.get_path("") is None
+        db = LibraryDB(tmp_path / "library.db")
+        db.open()
+        assert db.primary_path_for_isrc("") is None
+        db.close()
 
-    def test_persists_across_load_save(self, tmp_path):
-        idx_path = tmp_path / "idx.json"
-        idx = IsrcIndex(idx_path)
+    def test_persists_across_reopen(self, tmp_path):
+        db_path = tmp_path / "library.db"
+        db = LibraryDB(db_path)
+        db.open()
         p = tmp_path / "track.flac"
         p.touch()
-        idx.add("US-XYZ-00-00001", p)
-        idx.save()
+        db.register_isrc_path("US-XYZ-00-00001", p, commit=True)
+        db.close()
 
-        idx2 = IsrcIndex(idx_path)
-        idx2.load()
-        assert idx2.get_path("US-XYZ-00-00001") == str(p.absolute())
+        db2 = LibraryDB(db_path)
+        db2.open()
+        assert db2.primary_path_for_isrc("US-XYZ-00-00001") == str(p.resolve())
+        db2.close()
 
 
 # ---------------------------------------------------------------------------
@@ -145,14 +154,11 @@ class TestDuplicateActionConfig:
 
 def _make_download_obj(tmp_path, isrc_data: dict[str, str], duplicate_action: str = "skip"):
     """Build a minimal Download-like object for testing preflight scan."""
-    from tidal_dl.helper.isrc_index import IsrcIndex
-
-    idx = IsrcIndex(tmp_path / "isrc_index.json")
+    db = LibraryDB(tmp_path / "library.db")
+    db.open()
     for isrc, path_str in isrc_data.items():
-        fake_path = pathlib.Path(path_str)
-        # add raw without requiring file existence (use internal dict directly)
-        with idx._lock:
-            idx._data[isrc] = path_str
+        db.record(path=path_str, status="downloaded", isrc=isrc)
+    db.commit()
 
     settings_data = MagicMock()
     settings_data.skip_duplicate_isrc = True
@@ -163,7 +169,7 @@ def _make_download_obj(tmp_path, isrc_data: dict[str, str], duplicate_action: st
     settings.save = MagicMock()
 
     dl = MagicMock()
-    dl._isrc_index = idx
+    dl._library_db = db
     dl.settings = settings
     dl.fn_logger = MagicMock()
 
@@ -333,6 +339,7 @@ class TestItemCopyAction:
                 event_abort=abort,
                 event_run=run,
             )
+        dl._library_db.open()
         return dl
 
     def test_copy_copies_file_to_destination(self, tmp_path):
@@ -340,7 +347,7 @@ class TestItemCopyAction:
         src.write_bytes(b"audio data")
 
         dl = self._build_minimal_download(tmp_path)
-        dl._isrc_index.add("US-TST-00-00001", src)
+        dl._library_db.register_isrc_path("US-TST-00-00001", src, commit=True)
 
         track = _make_track(99, "US-TST-00-00001")
         track.isrc = "US-TST-00-00001"
@@ -426,7 +433,7 @@ class TestItemCopyAction:
 
         assert outcome == DownloadOutcome.DOWNLOADED
         assert result_path == final_path
-        assert dl._isrc_index.get_path(track.isrc) == str(final_path.absolute())
+        assert dl._library_db.primary_path_for_isrc(track.isrc) == str(final_path.resolve())
 
     def test_detect_downloaded_audio_extension_reads_mp4_header(self, tmp_path):
         from tidal_dl.download import Download
@@ -469,7 +476,7 @@ class TestItemCopyAction:
 
         assert outcome == DownloadOutcome.DOWNLOADED
         assert result_path == final_path
-        assert dl._isrc_index.get_path(track.isrc) == str(final_path.absolute())
+        assert dl._library_db.primary_path_for_isrc(track.isrc) == str(final_path.resolve())
 
 
 class TestCheckpointOutcomeMapping:
