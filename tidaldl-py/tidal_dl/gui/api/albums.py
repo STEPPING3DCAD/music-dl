@@ -9,7 +9,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Query
 
 from tidal_dl.config import Tidal
-from tidal_dl.gui.api.search import _get_isrc_index, _serialize_track
+from tidal_dl.gui.api.search import _serialize_track
 from tidal_dl.helper.library_db import LibraryDB
 from tidal_dl.helper.path import path_config_base
 
@@ -125,7 +125,7 @@ def album_tracks(album_id: int) -> dict:
     except Exception as exc:
         raise HTTPException(status_code=404, detail=f"Album not found: {exc}") from exc
 
-    isrc_index = _get_isrc_index()
+
 
     cover_url = ""
     try:
@@ -141,7 +141,7 @@ def album_tracks(album_id: int) -> dict:
             "cover_url": cover_url,
             "num_tracks": getattr(album, "num_tracks", 0),
         },
-        "tracks": [_serialize_track(t, isrc_index) for t in tracks],
+        "tracks": [_serialize_track(t) for t in tracks],
         "total": len(tracks),
     }
 
@@ -254,13 +254,13 @@ def album_lookup(
     tidal_tracks = best_tracks
 
     # --- 3. Build local-match sets (ISRC + title/artist) ---
-    isrc_index = _get_isrc_index()
+
 
     # --- 5. Serialize with is_local annotation (album-scoped only) ---
     serialized = []
     missing_count = 0
     for t in tidal_tracks:
-        data = _serialize_track(t, isrc_index)
+        data = _serialize_track(t)
         # Override ISRC-based is_local — ISRC is global and causes false positives
         # across albums (same track on different albums shares an ISRC).
         # Only trust album-scoped triple match: (title, artist, album).

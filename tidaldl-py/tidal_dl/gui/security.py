@@ -200,24 +200,6 @@ def resolve_local_audio_path(
     return LocalAudioPathResolution("ok", library_resolved_path)
 
 
-def resolve_library_audio_path(
-    path_str: str,
-    allowed_dirs: list[str],
-    trusted_library_path: Path | None = None,
-) -> Path | None:
-    """Compatibility shim: thin Path|None wrapper for callers that don't need rich kinds.
-
-    Prefer resolve_local_audio_path for new code.
-    """
-    resolution = resolve_local_audio_path(
-        path_str,
-        allowed_dirs,
-        library_trusts_raw_path=trusted_library_path is not None,
-        library_resolved_path=trusted_library_path,
-    )
-    return resolution.path if resolution.kind == "ok" else None
-
-
 def validate_download_path(path_str: str) -> bool:
     """Validate that a path is safe to use as a download directory.
 

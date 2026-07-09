@@ -417,8 +417,9 @@ class TestStaticFileServing:
         assert "__CSRF_TOKEN__" not in resp.text
 
     def test_app_js_served(self, client):
-        resp = client.get("/app.js", headers=client._host_header)
-        assert resp.status_code == 200
+        for name in ("api.js", "views.js", "player.js"):
+            resp = client.get(f"/{name}", headers=client._host_header)
+            assert resp.status_code == 200
 
     def test_style_css_served(self, client):
         resp = client.get("/style.css", headers=client._host_header)

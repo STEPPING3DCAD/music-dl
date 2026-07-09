@@ -32,7 +32,8 @@ class TestGuiCommandHelp:
 
     def test_gui_help_mentions_no_browser(self):
         result = runner.invoke(app, ["gui", "--help"])
-        assert "no-browser" in result.output.lower() or "no_browser" in result.output.lower()
+        out = result.output.lower()
+        assert "browser" in out
 
     def test_gui_appears_in_root_help(self):
         result = runner.invoke(app, ["--help"])

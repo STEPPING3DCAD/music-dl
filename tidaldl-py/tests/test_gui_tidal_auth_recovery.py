@@ -2,11 +2,11 @@ from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-APP_JS = PROJECT_ROOT / "tidal_dl" / "gui" / "static" / "app.js"
+from tests.gui_js_source import read_gui_js
 
 
 def test_tidal_auth_errors_launch_gui_login_flow():
-    source = APP_JS.read_text()
+    source = read_gui_js()
 
     assert "function _isTidalAuthError(error)" in source
     assert "error.status === 401" in source
@@ -19,7 +19,7 @@ def test_tidal_auth_errors_launch_gui_login_flow():
 
 
 def test_settings_auth_status_offers_gui_login_button():
-    source = APP_JS.read_text()
+    source = read_gui_js()
 
     assert "document.createTextNode('Not logged in to Tidal')" in source
     assert "textEl('button', 'Log in to Tidal', 'banner-action')" in source
@@ -27,7 +27,7 @@ def test_settings_auth_status_offers_gui_login_button():
 
 
 def test_successful_login_acknowledges_and_clears_auth_banner():
-    source = APP_JS.read_text()
+    source = read_gui_js()
 
     assert "function _handleLoginSuccess()" in source
     assert "refreshStatusLights();" in source

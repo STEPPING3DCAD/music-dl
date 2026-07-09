@@ -95,20 +95,30 @@ def getVersion() -> str:
     return _API_KEYS["version"]
 
 
-# Attempt to refresh API keys from a remote gist at import time.
-try:
-    _resp = requests.get(
-        "https://api.github.com/gists/48d01f5a24b4b7b37f19443977c22cd6",
-        timeout=REQUESTS_TIMEOUT_SEC,
-    )
-    _resp.raise_for_status()
+def refresh_api_keys() -> bool:
+    """Refresh API keys from the remote gist on demand."""
+    global _API_KEYS
 
-    if _resp.status_code == 200:
-        _resp_json = cast(dict[str, Any], _resp.json())
-        _files = cast(dict[str, Any], _resp_json.get("files", {}))
-        _file_data = cast(dict[str, Any], _files.get("tidal-api-key.json", {}))
-        _content = cast(str, _file_data.get("content", ""))
-        if _content:
-            _API_KEYS = _load_api_keys(_content)
-except requests.RequestException as _e:
-    print(f"[music-dl] Could not refresh API keys from gist: {_e}")
+    try:
+        resp = requests.get(
+            "https://api.github.com/gists/48d01f5a24b4b7b37f19443977c22cd6",
+            timeout=REQUESTS_TIMEOUT_SEC,
+        )
+        resp.raise_for_status()
+    except requests.RequestException as exc:
+        print(f"[music-dl] Could not refresh API keys from gist: {exc}")
+        return False
+
+    resp_json = cast(dict[str, Any], resp.json())
+    files = cast(dict[str, Any], resp_json.get("files", {}))
+    file_data = cast(dict[str, Any], files.get("tidal-api-key.json", {}))
+    content = cast(str, file_data.get("content", ""))
+    if not content:
+        return False
+
+    try:
+        _API_KEYS = _load_api_keys(content)
+    except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        print(f"[music-dl] Could not parse API keys from gist: {exc}")
+        return False
+    return True

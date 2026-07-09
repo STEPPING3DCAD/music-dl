@@ -23,7 +23,7 @@ import { dirname, join } from "node:path";
 import { ensureAuthorized } from "./auth";
 import type { CommandDeps } from "./commands";
 import type { ResolvedItem } from "./musicDlClient";
-import { getConfigDir } from "./wizard/paths";
+import { getConfigDir } from "./paths";
 
 const ID = {
   search: "djai:search",

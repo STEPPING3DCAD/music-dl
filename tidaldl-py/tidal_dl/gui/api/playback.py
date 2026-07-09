@@ -118,14 +118,19 @@ def serve_bot_stream(token: str):
     if kind == "local":
         path_str = payload.get("path", "")
         from tidal_dl.gui.api.library import _trusted_library_path
-        from tidal_dl.gui.security import resolve_library_audio_path
+        from tidal_dl.gui.security import resolve_local_audio_path
 
         allowed = get_download_paths()
-        validated = resolve_library_audio_path(
-            path_str, allowed, trusted_library_path=_trusted_library_path(path_str)
+        trusted = _trusted_library_path(path_str)
+        resolution = resolve_local_audio_path(
+            path_str,
+            allowed,
+            library_trusts_raw_path=trusted is not None,
+            library_resolved_path=trusted,
         )
-        if validated is None:
+        if resolution.kind != "ok" or resolution.path is None:
             raise HTTPException(status_code=403, detail="Access denied")
+        validated = resolution.path
         media_types = {
             ".flac": "audio/flac",
             ".mp3": "audio/mpeg",

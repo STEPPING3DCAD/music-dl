@@ -42,105 +42,111 @@ const REPEAT_CHOICES: ReadonlyArray<{ name: string; value: RepeatMode }> = [
   { name: "all", value: "all" },
 ];
 
+const QUERY_OPTION = {
+  name: "query",
+  description: "URL, playlist name, or search text",
+} as const;
+
+const PLAYLIST_NAME_OPTION = {
+  name: "name",
+  description: "Playlist name or ID",
+} as const;
+
+type CommandOptionKind = "query" | "volume" | "repeat";
+
+type PlaylistSubcommandSpec = {
+  name: "list" | "switch" | "add";
+  description: string;
+  option?: typeof PLAYLIST_NAME_OPTION;
+};
+
+type CommandSpec = {
+  name: string;
+  description: string;
+  option?: CommandOptionKind;
+  subcommands?: readonly PlaylistSubcommandSpec[];
+};
+
+const COMMAND_SPECS = [
+  { name: "djai", description: "Show or refresh the DJAI remote controls" },
+  { name: "summon", description: "Join your current voice channel" },
+  { name: "leave", description: "Disconnect and clear playback state" },
+  { name: "play", description: "Resolve and queue a track, playlist, or search result", option: "query" },
+  {
+    name: "playlist",
+    description: "List, switch to, or add a saved playlist",
+    subcommands: [
+      { name: "list", description: "Show saved playlists" },
+      { name: "switch", description: "Replace the queue with a saved playlist", option: PLAYLIST_NAME_OPTION },
+      { name: "add", description: "Append a saved playlist to the queue", option: PLAYLIST_NAME_OPTION },
+    ],
+  },
+  { name: "pause", description: "Pause the current track" },
+  { name: "resume", description: "Resume paused playback" },
+  { name: "skip", description: "Skip to the next queued item" },
+  { name: "queue", description: "Show the current queue" },
+  { name: "nowplaying", description: "Show what is currently playing" },
+  { name: "volume", description: "Set playback volume (0 – 200%)", option: "volume" },
+  { name: "repeat", description: "Set repeat mode", option: "repeat" },
+  { name: "download", description: "Resolve and explicitly download", option: "query" },
+] as const satisfies readonly CommandSpec[];
+
+function addQueryOption(builder: SlashCommandBuilder, description = QUERY_OPTION.description): void {
+  builder.addStringOption((o) =>
+    o.setName(QUERY_OPTION.name).setDescription(description).setRequired(true),
+  );
+}
+
+function addPlaylistNameOption(
+  builder: ReturnType<SlashCommandBuilder["addSubcommand"]>,
+): void {
+  builder.addStringOption((o) =>
+    o.setName(PLAYLIST_NAME_OPTION.name).setDescription(PLAYLIST_NAME_OPTION.description).setRequired(true),
+  );
+}
+
+function buildCommand(spec: CommandSpec): SlashCommandBuilder {
+  const builder = new SlashCommandBuilder().setName(spec.name).setDescription(spec.description);
+
+  if (spec.option === "query") {
+    addQueryOption(builder);
+  } else if (spec.option === "volume") {
+    builder.addIntegerOption((o) =>
+      o
+        .setName("level")
+        .setDescription("Volume level (0 – 200)")
+        .setMinValue(0)
+        .setMaxValue(200)
+        .setRequired(true),
+    );
+  } else if (spec.option === "repeat") {
+    builder.addStringOption((o) =>
+      o
+        .setName("mode")
+        .setDescription("off | one | all")
+        .setRequired(true)
+        .addChoices(...REPEAT_CHOICES),
+    );
+  }
+
+  for (const sub of spec.subcommands ?? []) {
+    builder.addSubcommand((s) => {
+      s.setName(sub.name).setDescription(sub.description);
+      if (sub.option) addPlaylistNameOption(s);
+      return s;
+    });
+  }
+
+  return builder;
+}
+
 /** Definitions for exactly 13 slash commands (R4-AC13). */
 export function buildCommands() {
-  return [
-    new SlashCommandBuilder()
-      .setName("djai")
-      .setDescription("Show or refresh the DJAI remote controls"),
-    new SlashCommandBuilder()
-      .setName("summon")
-      .setDescription("Join your current voice channel"),
-    new SlashCommandBuilder()
-      .setName("leave")
-      .setDescription("Disconnect and clear playback state"),
-    new SlashCommandBuilder()
-      .setName("play")
-      .setDescription("Resolve and queue a track, playlist, or search result")
-      .addStringOption((o) =>
-        o.setName("query").setDescription("URL, playlist name, or search text").setRequired(true),
-      ),
-    new SlashCommandBuilder()
-      .setName("playlist")
-      .setDescription("List, switch to, or add a saved playlist")
-      .addSubcommand((s) => s.setName("list").setDescription("Show saved playlists"))
-      .addSubcommand((s) =>
-        s
-          .setName("switch")
-          .setDescription("Replace the queue with a saved playlist")
-          .addStringOption((o) =>
-            o.setName("name").setDescription("Playlist name or ID").setRequired(true),
-          ),
-      )
-      .addSubcommand((s) =>
-        s
-          .setName("add")
-          .setDescription("Append a saved playlist to the queue")
-          .addStringOption((o) =>
-            o.setName("name").setDescription("Playlist name or ID").setRequired(true),
-          ),
-      ),
-    new SlashCommandBuilder()
-      .setName("pause")
-      .setDescription("Pause the current track"),
-    new SlashCommandBuilder()
-      .setName("resume")
-      .setDescription("Resume paused playback"),
-    new SlashCommandBuilder()
-      .setName("skip")
-      .setDescription("Skip to the next queued item"),
-    new SlashCommandBuilder()
-      .setName("queue")
-      .setDescription("Show the current queue"),
-    new SlashCommandBuilder()
-      .setName("nowplaying")
-      .setDescription("Show what is currently playing"),
-    new SlashCommandBuilder()
-      .setName("volume")
-      .setDescription("Set playback volume (0 – 200%)")
-      .addIntegerOption((o) =>
-        o
-          .setName("level")
-          .setDescription("Volume level (0 – 200)")
-          .setMinValue(0)
-          .setMaxValue(200)
-          .setRequired(true),
-      ),
-    new SlashCommandBuilder()
-      .setName("repeat")
-      .setDescription("Set repeat mode")
-      .addStringOption((o) =>
-        o
-          .setName("mode")
-          .setDescription("off | one | all")
-          .setRequired(true)
-          .addChoices(...REPEAT_CHOICES),
-      ),
-    new SlashCommandBuilder()
-      .setName("download")
-      .setDescription("Resolve and explicitly download")
-      .addStringOption((o) =>
-        o.setName("query").setDescription("URL, playlist name, or search text").setRequired(true),
-      ),
-  ];
+  return COMMAND_SPECS.map(buildCommand);
 }
 
 /** Names of all commands this bot registers. Exported for test inspection. */
-export const COMMAND_NAMES = [
-  "djai",
-  "summon",
-  "leave",
-  "play",
-  "playlist",
-  "pause",
-  "resume",
-  "skip",
-  "queue",
-  "nowplaying",
-  "volume",
-  "repeat",
-  "download",
-] as const;
+export const COMMAND_NAMES = COMMAND_SPECS.map((spec) => spec.name);
 
 /**
  * Dispatcher. Called from the interactionCreate handler.

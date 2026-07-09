@@ -1,0 +1,173 @@
+"""Download duplicates helpers."""
+
+from tidal_dl.download._common import *  # noqa: F403
+
+class DuplicateMixin:
+    def _preflight_isrc_scan(
+        self,
+        items: list,
+        checkpoint: "DownloadCheckpoint | None" = None,
+        ensure_complete: bool = False,
+    ) -> dict[str, str]:
+        """Scan items for duplicate ISRCs before downloads start.
+
+        Returns a dict mapping str(track.id) -> action ('copy', 'redownload', 'skip').
+        Empty dict means no duplicates were found or ISRC dedup is disabled.
+
+        When *ensure_complete* is True (collections: albums, playlists, mixes),
+        duplicates are always copied or re-downloaded — never skipped.
+        """
+        if not self.settings.data.skip_duplicate_isrc:
+            return {}
+
+        hits_with_source: list[tuple] = []  # (Track, path_str) — source file exists
+        hits_missing_source: list[tuple] = []  # (Track, path_str) — source file gone
+
+        for item_media in items:
+            if not isinstance(item_media, Track):
+                continue
+            # Skip tracks already completed in checkpoint
+            if checkpoint is not None:
+                if checkpoint.status_of(str(item_media.id)) == STATUS_DOWNLOADED:
+                    continue
+            isrc = getattr(item_media, "isrc", None)
+            if not isrc:
+                continue
+            path_str = self._library_db.primary_path_for_isrc(isrc)
+            if path_str is None:
+                continue
+            if pathlib.Path(path_str).is_file():
+                hits_with_source.append((item_media, path_str))
+            else:
+                hits_missing_source.append((item_media, path_str))
+
+        if not hits_with_source and not hits_missing_source:
+            return {}
+
+        # Collections must always be complete: copy if source exists, re-download if not.
+        if ensure_complete:
+            resolved = {}
+            for track, _ in hits_with_source:
+                resolved[str(track.id)] = "copy"
+            for track, _ in hits_missing_source:
+                resolved[str(track.id)] = "redownload"
+            if resolved:
+                self.fn_logger.info(
+                    f"{len(hits_with_source)} track(s) will be copied from existing "
+                    f"library, {len(hits_missing_source)} will be re-downloaded."
+                )
+            return resolved
+
+        saved_action = getattr(self.settings.data, "duplicate_action", "ask")
+
+        if saved_action != "ask":
+            # Apply saved preference silently
+            resolved = {}
+            if saved_action == "copy":
+                for track, _ in hits_with_source:
+                    resolved[str(track.id)] = "copy"
+                for track, _ in hits_missing_source:
+                    self.fn_logger.warning(f"Copy source missing for '{name_builder_item(track)}'; will re-download.")
+                    resolved[str(track.id)] = "redownload"
+            elif saved_action == "redownload":
+                for track, _ in hits_with_source + hits_missing_source:
+                    resolved[str(track.id)] = "redownload"
+            else:  # skip
+                for track, _ in hits_with_source + hits_missing_source:
+                    resolved[str(track.id)] = "skip"
+            self.fn_logger.info(
+                f"Duplicate action '{saved_action}': "
+                f"{len(hits_with_source)} copyable, "
+                f"{len(hits_missing_source)} source-missing tracks resolved."
+            )
+            return resolved
+
+        return self._prompt_duplicate_action(hits_with_source, hits_missing_source)
+
+    def _prompt_duplicate_action(
+        self,
+        hits_with_source: list[tuple],
+        hits_missing_source: list[tuple],
+    ) -> dict[str, str]:
+        """Interactively prompt the user about duplicate ISRCs.
+
+        Returns a dict mapping str(track.id) -> action ('copy', 'redownload', 'skip').
+        """
+        console = Console()
+
+        if not sys.stdin.isatty():
+            self.fn_logger.warning("Non-interactive terminal: defaulting to skip for all duplicates.")
+            return {str(t.id): "skip" for t, _ in hits_with_source + hits_missing_source}
+
+        # Build display table
+        table = Table(
+            title="Duplicate tracks detected (already in ISRC index)",
+            style="cyan",
+            show_lines=True,
+        )
+        table.add_column("#", style="dim", width=4)
+        table.add_column("Artist \u2013 Title", style="white")
+        table.add_column("Source path", style="dim")
+        table.add_column("Source", width=8)
+
+        for i, (track, path_str) in enumerate(hits_with_source, start=1):
+            table.add_row(
+                str(i),
+                name_builder_item(track),
+                path_str,
+                "[green]EXISTS[/green]",
+            )
+        for i, (track, path_str) in enumerate(hits_missing_source, start=len(hits_with_source) + 1):
+            table.add_row(
+                str(i),
+                name_builder_item(track),
+                path_str,
+                "[red]MISSING[/red]",
+            )
+
+        console.print(table)
+
+        total = len(hits_with_source) + len(hits_missing_source)
+        console.print(f"\n[bold]{total} duplicate(s) found.[/bold]")
+        if hits_missing_source:
+            console.print(f"  [yellow]{len(hits_missing_source)} source file(s) are missing from disk.[/yellow]")
+
+        # Prompt for blanket action
+        action_map = {"C": "copy", "R": "redownload", "S": "skip"}
+        while True:
+            console.print("[bold]What would you like to do?[/bold]  [C]opy  [R]e-download  [S]kip all")
+            raw = input("Choice [C/R/S]: ").strip().upper()
+            if raw in action_map:
+                selected_action = action_map[raw]
+                break
+            console.print("[red]Invalid choice. Enter C, R, or S.[/red]")
+
+        resolved = {}
+
+        if selected_action == "copy":
+            for track, _ in hits_with_source:
+                resolved[str(track.id)] = "copy"
+            if hits_missing_source:
+                console.print(
+                    f"  [yellow]{len(hits_missing_source)} track(s) cannot be copied (source missing).[/yellow]"
+                )
+                sub = input("Re-download missing-source tracks instead? [Y/n]: ").strip().upper()
+                missing_action = "redownload" if sub in ("", "Y") else "skip"
+                for track, _ in hits_missing_source:
+                    resolved[str(track.id)] = missing_action
+        elif selected_action == "redownload":
+            for track, _ in hits_with_source + hits_missing_source:
+                resolved[str(track.id)] = "redownload"
+        else:  # skip
+            for track, _ in hits_with_source + hits_missing_source:
+                resolved[str(track.id)] = "skip"
+
+        # Offer to save preference
+        save_raw = input("Save this as your default preference for future runs? [y/N]: ").strip().upper()
+        if save_raw == "Y":
+            self.settings.data.duplicate_action = selected_action
+            if hasattr(self.settings, "save"):
+                self.settings.save()
+            console.print(f"  [green]Preference '{selected_action}' saved.[/green]")
+
+        return resolved

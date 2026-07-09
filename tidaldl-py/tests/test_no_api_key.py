@@ -25,7 +25,7 @@ from unittest.mock import patch
 import pytest  # pyright: ignore[reportMissingImports]
 from Crypto.Cipher import AES
 from Crypto.Util import Counter
-from dataclasses_json import DataClassJsonMixin, dataclass_json
+
 from typer.testing import CliRunner
 
 from tidal_dl import version_app
@@ -46,7 +46,11 @@ from tidal_dl.helper.path import (
     url_to_filename,
 )
 from tidal_dl.helper.tidal import get_tidal_media_id, get_tidal_media_type
-from tidal_dl.model.cfg import DEFAULT_FORMAT_PLAYLIST, LEGACY_DEFAULT_FORMAT_PLAYLIST
+from tidal_dl.model.cfg import (
+    DEFAULT_FORMAT_PLAYLIST,
+    LEGACY_DEFAULT_FORMAT_PLAYLIST,
+    _JsonDataclassMixin,
+)
 
 # ---------------------------------------------------------------------------
 # URL parsing
@@ -325,9 +329,8 @@ class TestSettings:
         assert hasattr(s, "file_path")
 
     def test_base_config_has_default_data_before_read(self, clear_singletons, tmp_path):
-        @dataclass_json
         @dataclass
-        class DummyConfig(DataClassJsonMixin):
+        class DummyConfig(_JsonDataclassMixin):
             enabled: bool = True
 
         class DummyBaseConfig(BaseConfig[DummyConfig]):
@@ -445,100 +448,116 @@ class TestPathHelpers:
 
 
 # ---------------------------------------------------------------------------
-# IsrcIndex
+# LibraryDB ISRC helpers
 # ---------------------------------------------------------------------------
 
 
-class TestIsrcIndex:
-    """IsrcIndex — persistent ISRC duplicate-detection index. No network."""
+class TestLibraryDbIsrc:
+    """LibraryDB ISRC helpers — persistent duplicate-detection. No network."""
 
-    def test_empty_on_missing_file(self, tmp_path):
-        from tidal_dl.helper.isrc_index import IsrcIndex
+    @pytest.fixture
+    def db(self, tmp_path):
+        from tidal_dl.helper.library_db import LibraryDB
 
-        idx = IsrcIndex(tmp_path / "isrc.json")
-        idx.load()  # file does not exist
-        assert idx.size == 0
+        opened = LibraryDB(tmp_path / "library.db")
+        opened.open()
+        yield opened
+        opened.close()
 
-    def test_add_and_contains_live_file(self, tmp_path):
-        from tidal_dl.helper.isrc_index import IsrcIndex
+    def test_empty_db_has_zero_isrc_entries(self, db):
+        assert db.isrc_entry_count() == 0
+
+    def test_register_and_has_live_isrc(self, tmp_path):
+        from tidal_dl.helper.library_db import LibraryDB
 
         track = tmp_path / "track.flac"
         track.write_bytes(b"")
-        idx = IsrcIndex(tmp_path / "isrc.json")
-        idx.add("USRC12345678", track)
-        assert idx.contains("USRC12345678")
+        db = LibraryDB(tmp_path / "library.db")
+        db.open()
+        db.register_isrc_path("USRC12345678", track, commit=True)
+        assert db.has_live_isrc("USRC12345678")
+        db.close()
 
-    def test_contains_returns_false_for_unknown_isrc(self, tmp_path):
-        from tidal_dl.helper.isrc_index import IsrcIndex
+    def test_has_live_isrc_returns_false_for_unknown_isrc(self, db):
+        assert not db.has_live_isrc("UNKNOWN")
 
-        idx = IsrcIndex(tmp_path / "isrc.json")
-        assert not idx.contains("UNKNOWN")
+    def test_has_live_isrc_returns_false_for_empty_isrc(self, db):
+        assert not db.has_live_isrc("")
 
-    def test_contains_returns_false_for_empty_isrc(self, tmp_path):
-        from tidal_dl.helper.isrc_index import IsrcIndex
-
-        idx = IsrcIndex(tmp_path / "isrc.json")
-        assert not idx.contains("")
-
-    def test_stale_entry_pruned(self, tmp_path):
-        """A file that existed during add() but was deleted should not match."""
-        from tidal_dl.helper.isrc_index import IsrcIndex
+    def test_stale_entry_not_considered_live(self, tmp_path):
+        """A file that existed during register() but was deleted should not match."""
+        from tidal_dl.helper.library_db import LibraryDB
 
         track = tmp_path / "gone.flac"
         track.write_bytes(b"")
-        idx = IsrcIndex(tmp_path / "isrc.json")
-        idx.add("GBSTALE0001", track)
-        track.unlink()  # delete the file
-        assert not idx.contains("GBSTALE0001")
-        # Stale entry should have been pruned from the in-memory dict
-        assert idx.size == 0
+        db = LibraryDB(tmp_path / "library.db")
+        db.open()
+        db.register_isrc_path("GBSTALE0001", track, commit=True)
+        track.unlink()
+        assert not db.has_live_isrc("GBSTALE0001")
+        assert db.primary_path_for_isrc("GBSTALE0001") is not None
+        db.close()
 
-    def test_save_and_reload(self, tmp_path):
-        """Persisted index is correctly deserialised."""
-        from tidal_dl.helper.isrc_index import IsrcIndex
+    def test_register_persists_across_reopen(self, tmp_path):
+        """Committed ISRC registrations survive reopen."""
+        from tidal_dl.helper.library_db import LibraryDB
 
-        index_path = tmp_path / "isrc.json"
         track = tmp_path / "persisted.flac"
         track.write_bytes(b"")
 
-        idx = IsrcIndex(index_path)
-        idx.add("GBPERS0001", track)
-        idx.save()
+        db = LibraryDB(tmp_path / "library.db")
+        db.open()
+        db.register_isrc_path("GBPERS0001", track, commit=True)
+        db.close()
 
-        idx2 = IsrcIndex(index_path)
-        idx2.load()
-        assert idx2.contains("GBPERS0001")
+        db2 = LibraryDB(tmp_path / "library.db")
+        db2.open()
+        assert db2.has_live_isrc("GBPERS0001")
+        db2.close()
 
-    def test_corrupt_file_handled_gracefully(self, tmp_path):
-        from tidal_dl.helper.isrc_index import IsrcIndex
+    def test_import_legacy_isrc_index_handles_corrupt_file(self, tmp_path):
+        from tidal_dl.helper.library_db import LibraryDB
 
-        index_path = tmp_path / "corrupt.json"
-        index_path.write_text("not valid json {{{")  # corrupt
-        idx = IsrcIndex(index_path)
-        idx.load()  # must not raise
-        assert idx.size == 0
+        index_path = tmp_path / "isrc_index.json"
+        index_path.write_text("not valid json {{{")
+        db = LibraryDB(tmp_path / "library.db")
+        db.open()
+        assert db.import_legacy_isrc_index(index_path) == 0
+        assert db.isrc_entry_count() == 0
+        db.close()
 
-    def test_thread_safety_concurrent_adds(self, tmp_path):
-        """Concurrent add() calls must not corrupt the index."""
-        import threading
+    def test_import_legacy_isrc_index_imports_live_files(self, tmp_path):
+        from tidal_dl.helper.library_db import LibraryDB
 
-        from tidal_dl.helper.isrc_index import IsrcIndex
+        track = tmp_path / "legacy.flac"
+        track.write_bytes(b"")
+        index_path = tmp_path / "isrc_index.json"
+        index_path.write_text(json.dumps({"LEGACY0001": str(track)}))
+        db = LibraryDB(tmp_path / "library.db")
+        db.open()
+        imported = db.import_legacy_isrc_index(index_path)
+        assert imported == 1
+        assert db.has_live_isrc("LEGACY0001")
+        db.close()
 
-        idx = IsrcIndex(tmp_path / "isrc.json")
+    def test_multiple_isrc_registrations_are_counted(self, tmp_path):
+        """Repeated register_isrc_path() calls accumulate distinct ISRC entries."""
+        from tidal_dl.helper.library_db import LibraryDB
 
-        tracks = []
+        db = LibraryDB(tmp_path / "library.db")
+        db.open()
+
         for i in range(20):
-            t = tmp_path / f"track_{i:02d}.flac"
-            t.write_bytes(b"")
-            tracks.append((f"ISRC{i:08d}", t))
+            track = tmp_path / f"track_{i:02d}.flac"
+            track.write_bytes(b"")
+            db.register_isrc_path(f"ISRC{i:08d}", track)
+        db.commit()
+        db.close()
 
-        threads = [threading.Thread(target=lambda item=item: idx.add(*item)) for item in tracks]
-        for th in threads:
-            th.start()
-        for th in threads:
-            th.join()
-
-        assert idx.size == 20
+        reopened = LibraryDB(tmp_path / "library.db")
+        reopened.open()
+        assert reopened.isrc_entry_count() == 20
+        reopened.close()
 
 
 # ---------------------------------------------------------------------------

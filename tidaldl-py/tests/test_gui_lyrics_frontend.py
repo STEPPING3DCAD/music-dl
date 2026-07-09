@@ -4,7 +4,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 INDEX_HTML = PROJECT_ROOT / "tidal_dl" / "gui" / "static" / "index.html"
 STYLE_CSS = PROJECT_ROOT / "tidal_dl" / "gui" / "static" / "style.css"
-APP_JS = PROJECT_ROOT / "tidal_dl" / "gui" / "static" / "app.js"
+from tests.gui_js_source import read_gui_js
 
 
 def test_index_contains_direct_body_child_lyrics_overlay_mount():
@@ -42,7 +42,7 @@ def test_style_contains_reduced_motion_and_open_state_action_hiding_rules():
 
 
 def test_app_has_lyrics_state_contract():
-    source = APP_JS.read_text()
+    source = read_gui_js()
 
     assert 'lyricsPanelState' in source
     assert 'lyricsCanonicalTrackPath' in source
@@ -52,7 +52,7 @@ def test_app_has_lyrics_state_contract():
 
 
 def test_app_has_payload_validation_and_cache_key_hooks():
-    source = APP_JS.read_text()
+    source = read_gui_js()
 
     assert 'function validateLyricsPayload(payload)' in source
     assert 'payload.track_path' in source
@@ -62,7 +62,7 @@ def test_app_has_payload_validation_and_cache_key_hooks():
 
 
 def test_app_wires_album_art_toggle_close_button_queue_and_escape():
-    source = APP_JS.read_text()
+    source = read_gui_js()
 
     assert 'function toggleLyricsPanel()' in source
     assert 'document.getElementById(\'lyrics-close\')' in source
@@ -72,7 +72,7 @@ def test_app_wires_album_art_toggle_close_button_queue_and_escape():
 
 
 def test_app_has_synced_rendering_and_artwork_motion_hooks():
-    source = APP_JS.read_text()
+    source = read_gui_js()
 
     assert 'function renderSyncedLyrics(payload)' in source
     assert 'function syncActiveLyricLine()' in source

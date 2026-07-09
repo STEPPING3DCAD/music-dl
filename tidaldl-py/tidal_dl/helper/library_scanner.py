@@ -27,7 +27,7 @@ import mutagen.oggvorbis
 from mutagen._file import File as mutagen_file
 
 if TYPE_CHECKING:
-    from tidal_dl.helper.isrc_index import IsrcIndex
+    from tidal_dl.helper.library_db import LibraryDB
 
 
 # Audio file extensions to consider during scanning.
@@ -145,20 +145,20 @@ def _extract_isrc(path: pathlib.Path) -> str | None:
 
 def scan_directory(
     root: pathlib.Path,
-    isrc_index: "IsrcIndex",
+    library_db: "LibraryDB",
     *,
     dry_run: bool = False,
     on_file: Callable[[pathlib.Path], None] | None = None,
 ) -> ScanResult:
-    """Walk *root* recursively, extract ISRCs, and populate *isrc_index*.
+    """Walk *root* recursively, extract ISRCs, and populate *library_db*.
 
-    The caller is responsible for calling ``isrc_index.save()`` after this
+    The caller is responsible for calling ``library_db.commit()`` after this
     function returns (unless ``dry_run`` is True, in which case no writes
     are performed at all).
 
     Args:
         root (pathlib.Path): Directory to scan recursively.
-        isrc_index (IsrcIndex): Index to populate with discovered ISRCs.
+        library_db (LibraryDB): Library DB to populate with discovered ISRCs.
         dry_run (bool): If True, discover ISRCs but do not mutate *isrc_index*.
         on_file (Callable | None): Optional callback invoked with each file
             path just before it is examined.  Useful for driving a progress bar.
@@ -192,13 +192,12 @@ def scan_directory(
             result.no_isrc += 1
             continue
 
-        if isrc_index.contains(isrc):
+        if library_db.has_live_isrc(isrc):
             result.already_indexed += 1
             continue
 
-        # New ISRC — record it.
         if not dry_run:
-            isrc_index.add(isrc, file_path)
+            library_db.register_isrc_path(isrc, file_path)
 
         result.isrcs_found += 1
 

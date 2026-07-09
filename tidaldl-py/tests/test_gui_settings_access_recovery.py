@@ -3,8 +3,7 @@ from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-APP_JS = PROJECT_ROOT / "tidal_dl" / "gui" / "static" / "app.js"
+from tests.gui_js_source import read_gui_js
 _HOST_HEADER = {"host": "localhost:8765"}
 
 
@@ -177,7 +176,7 @@ def test_index_embeds_always_visible_version_chip():
 
 
 def test_settings_ui_contains_persistent_access_recovery_controls():
-    source = APP_JS.read_text(encoding="utf-8")
+    source = read_gui_js()
 
     assert "Retry Access" in source
     assert "Choose Folder" in source

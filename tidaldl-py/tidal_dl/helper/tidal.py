@@ -4,8 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, cast
-from unittest.mock import MagicMock
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from tidalapi.album import Album
 from tidalapi.artist import Artist, Role
@@ -22,6 +21,13 @@ if TYPE_CHECKING:
     from tidal_dl.config import Tidal
     from tidal_dl.helper.cache import TTLCache
     from tidal_dl.hifi_api import HiFiApiClient
+
+
+TidalObjT = TypeVar("TidalObjT")
+
+
+def _blank_tidal_obj(cls: type[TidalObjT]) -> TidalObjT:
+    return object.__new__(cls)
 
 
 def name_builder_artist(media: Track | Video | Album, delimiter: str = ", ") -> str:
@@ -180,7 +186,7 @@ def _mark_hifi_resolved(media_obj):
 
 def _hifi_artist_obj(raw_artist: dict | None):
     data = raw_artist or {}
-    artist = MagicMock(spec=Artist)
+    artist = _blank_tidal_obj(Artist)
     artist.id = data.get("id")
     artist.name = data.get("name", "")
     artist.roles = [Role.main] if str(data.get("type", "")).upper() == "MAIN" else []
@@ -189,7 +195,7 @@ def _hifi_artist_obj(raw_artist: dict | None):
 
 def _hifi_album_obj(raw_album: dict | None, tracks: list | None = None):
     data = raw_album or {}
-    album = MagicMock(spec=Album)
+    album = _blank_tidal_obj(Album)
 
     title = data.get("title") or data.get("name") or ""
     release_dt = _parse_release_date(data.get("releaseDate"))
@@ -208,8 +214,7 @@ def _hifi_album_obj(raw_album: dict | None, tracks: list | None = None):
     album.num_volumes = data.get("numberOfVolumes", 1) or 1
     album.upc = data.get("upc", "")
     album.release_date = release_dt
-    album.available_release_date = release_dt
-    album.year = release_dt.year if release_dt else 0
+    album.tidal_release_date = release_dt
     album.copyright = data.get("copyright", "")
     album.artists = artists
     album.artist = artists[0] if artists else _hifi_artist_obj(data.get("artist"))
@@ -234,7 +239,7 @@ def _hifi_album_obj(raw_album: dict | None, tracks: list | None = None):
 
 def _hifi_track_obj(raw_track: dict, parent_album: object | None = None):
     data = raw_track or {}
-    track = MagicMock(spec=Track)
+    track = _blank_tidal_obj(Track)
 
     title = data.get("title") or data.get("name") or ""
     artists = [
@@ -341,7 +346,7 @@ def _instantiate_media_hifi(
             raw_tracks.extend(page_items)
             offset += len(page_items)
         tracks = [_hifi_track_obj(t) for t in raw_tracks]
-        playlist = MagicMock(spec=Playlist)
+        playlist = _blank_tidal_obj(Playlist)
         playlist.id = playlist_data.get("uuid", str(id_media))
         playlist.name = playlist_data.get("title", "")
         playlist.title = playlist.name
@@ -358,7 +363,7 @@ def _instantiate_media_hifi(
         mix_data = payload.get("mix", payload)
         raw_tracks = _hifi_items_unwrap(payload.get("items"))
         tracks = [_hifi_track_obj(t) for t in raw_tracks]
-        mix = MagicMock(spec=Mix)
+        mix = _blank_tidal_obj(Mix)
         mix.id = mix_data.get("id", str(id_media))
         mix.title = mix_data.get("title", "")
         mix.name = mix.title

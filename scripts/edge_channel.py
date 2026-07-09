@@ -18,14 +18,17 @@ def _version_parts(current_version: str) -> tuple[int, int, int]:
     return tuple(int(part) for part in match.groups())
 
 
-def edge_version(current_version: str, run_number: str) -> str:
+def _next_patch_version(current_version: str) -> str:
     major, minor, patch = _version_parts(current_version)
-    return f"{major}.{minor}.{patch + 1}-{run_number}"
+    return f"{major}.{minor}.{patch + 1}"
+
+
+def edge_version(current_version: str, run_number: str) -> str:
+    return f"{_next_patch_version(current_version)}-{run_number}"
 
 
 def python_edge_version(current_version: str, run_number: str) -> str:
-    major, minor, patch = _version_parts(current_version)
-    return f"{major}.{minor}.{patch + 1}.dev{run_number}"
+    return f"{_next_patch_version(current_version)}.dev{run_number}"
 
 
 def replace_version_assignment(text: str, version: str) -> str:

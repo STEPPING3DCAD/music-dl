@@ -9,7 +9,7 @@ import pytest
 from tidal_dl.constants import DownloadSource, HIFI_QUALITY_MAP, MediaType
 from tidal_dl.config import Tidal
 from tidal_dl.helper.checkpoint import DownloadCheckpoint
-from tidal_dl.helper.isrc_index import IsrcIndex
+from tidal_dl.helper.library_db import LibraryDB
 from tidal_dl.hifi_api import HiFiApiClient
 from tidal_dl.model.cfg import Settings
 from tidal_dl.model.downloader import HiFiStreamManifest
@@ -363,34 +363,49 @@ def test_adaptive_rate_limit_recovery_after_50_successes():
 
 
 # ---------------------------------------------------------------------------
-# ISRC periodic flush
+# LibraryDB ISRC batch commit (replaces legacy IsrcIndex periodic flush)
 # ---------------------------------------------------------------------------
 
-def test_isrc_maybe_flush_triggers_at_threshold(tmp_path):
-    idx = IsrcIndex(tmp_path / "isrc.json")
-    # Add 24 entries — flush should NOT happen yet
+def test_library_db_register_without_commit_is_not_visible_after_reopen(tmp_path):
+    db = LibraryDB(tmp_path / "library.db")
+    db.open()
+    track = tmp_path / "track.flac"
+    track.write_bytes(b"")
+    db.register_isrc_path("ISRC0001", track)
+    db.close()
+
+    reopened = LibraryDB(tmp_path / "library.db")
+    reopened.open()
+    try:
+        assert not reopened.has_live_isrc("ISRC0001")
+    finally:
+        reopened.close()
+
+
+def test_library_db_batch_commit_persists_isrc_registrations(tmp_path):
+    db = LibraryDB(tmp_path / "library.db")
+    db.open()
+    pending = 0
     for i in range(24):
-        idx.add(f"ISRC{i:04d}", pathlib.Path(f"/fake/path/{i}.flac"))
-    idx.maybe_flush(every_n=25)
-    assert not (tmp_path / "isrc.json").exists(), "Should not flush before threshold"
+        track = tmp_path / f"track_{i:02d}.flac"
+        track.write_bytes(b"")
+        db.register_isrc_path(f"ISRC{i:04d}", track)
+        pending += 1
+        if pending >= 25:
+            db.commit()
+            pending = 0
+    assert pending == 24
 
-    # 25th entry + flush should write the file
-    idx.add("ISRC0025", pathlib.Path("/fake/path/25.flac"))
-    idx.maybe_flush(every_n=25)
-    assert (tmp_path / "isrc.json").exists(), "Should flush at threshold"
+    track = tmp_path / "track_24.flac"
+    track.write_bytes(b"")
+    db.register_isrc_path("ISRC0024", track)
+    db.commit()
+    db.close()
 
-
-def test_isrc_maybe_flush_resets_counter(tmp_path):
-    idx = IsrcIndex(tmp_path / "isrc.json")
-    for i in range(25):
-        idx.add(f"ISRC{i:04d}", pathlib.Path(f"/fake/{i}.flac"))
-    idx.maybe_flush(every_n=25)  # flush fires, resets counter
-
-    # Remove the file so we can detect a second flush
-    (tmp_path / "isrc.json").unlink()
-
-    # Next 24 adds — should not flush again yet
-    for i in range(24):
-        idx.add(f"ISRC2_{i:04d}", pathlib.Path(f"/fake2/{i}.flac"))
-    idx.maybe_flush(every_n=25)
-    assert not (tmp_path / "isrc.json").exists(), "Counter should have been reset; no flush yet"
+    reopened = LibraryDB(tmp_path / "library.db")
+    reopened.open()
+    try:
+        assert reopened.isrc_entry_count() == 25
+        assert reopened.has_live_isrc("ISRC0024")
+    finally:
+        reopened.close()

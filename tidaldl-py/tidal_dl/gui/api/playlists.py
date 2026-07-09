@@ -9,7 +9,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 
 from tidal_dl.config import Tidal
-from tidal_dl.gui.api.search import _get_isrc_index, _serialize_track
+from tidal_dl.gui.api.search import _serialize_track
 from tidal_dl.helper.library_db import LibraryDB
 from tidal_dl.helper.path import path_config_base
 
@@ -110,14 +110,14 @@ def _serialize_playlist_tracks(session, playlist_id: str) -> list[dict]:
     except Exception as exc:
         raise HTTPException(status_code=404, detail=f"Playlist not found: {exc}") from exc
 
-    isrc_index = _get_isrc_index()
+
     db = _get_playlist_db()
     try:
         all_tracks = db.all_tracks()
         fallback_index = _build_title_artist_index(all_tracks)
         serialized = []
         for track in tracks:
-            data = _serialize_track(track, isrc_index)
+            data = _serialize_track(track)
             local_row = _best_local_row(data, db, all_tracks, fallback_index=fallback_index)
             data["is_local"] = bool(local_row)
             if local_row:

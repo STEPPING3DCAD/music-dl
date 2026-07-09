@@ -1,7 +1,6 @@
 from pathlib import Path
+import tomllib
 from unittest.mock import patch
-
-import toml
 
 from tidal_dl import distribution_name
 from tidal_dl.helper.path import path_config_base
@@ -14,7 +13,8 @@ def test_public_branding_matches_music_dl(monkeypatch):
     monkeypatch.setenv("HOME", "/tmp/test-home")
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
 
-    project = toml.load(PYPROJECT_PATH)["project"]
+    with PYPROJECT_PATH.open("rb") as f:
+        project = tomllib.load(f)["project"]
 
     assert project["name"] == "music-dl"
     assert project["scripts"]["music-dl"] == "tidal_dl.cli:main"

@@ -3,11 +3,11 @@ from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-APP_JS = PROJECT_ROOT / "tidal_dl" / "gui" / "static" / "app.js"
+from tests.gui_js_source import read_gui_js
 
 
 def test_upgrade_quality_context_menu_has_download_icon_template():
-    source = APP_JS.read_text()
+    source = read_gui_js()
 
     assert "icon: 'download'" in source
     match = re.search(r"const _ctxIcons = \{(.*?)\n\};", source, re.S)

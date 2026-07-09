@@ -12,8 +12,6 @@ from copy import deepcopy
 from typing import TYPE_CHECKING
 from urllib.parse import unquote, urlsplit
 
-from pathvalidate import sanitize_filename, sanitize_filepath
-from pathvalidate.error import ValidationError
 from tidalapi.album import Album
 from tidalapi.media import AudioExtensions, Track, Video
 from tidalapi.mix import Mix
@@ -36,6 +34,8 @@ if TYPE_CHECKING:
 
 
 PathMedia = Track | Album | Playlist | UserPlaylist | Video | Mix
+
+_INVALID_NAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
 
 def _album_from_media(media: Track | Video) -> Album | None:
@@ -92,8 +92,20 @@ def path_config_base() -> str:
     return base_dir
 
 
-def path_file_log() -> str:
-    return os.path.join(path_config_base(), "app.log")
+def _sanitize_name(name: str, replacement: str = "_") -> str:
+    if not name or name in {".", ".."}:
+        return FILENAME_SANITIZE_PLACEHOLDER
+    cleaned = _INVALID_NAME_CHARS.sub(replacement, name).rstrip(" .")
+    if sys.platform.startswith("win"):
+        reserved = {
+            "CON", "PRN", "AUX", "NUL",
+            *{f"COM{i}" for i in range(1, 10)},
+            *{f"LPT{i}" for i in range(1, 10)},
+        }
+        stem = cleaned.split(".", 1)[0].upper()
+        if stem in reserved:
+            cleaned = f"_{cleaned}"
+    return cleaned or FILENAME_SANITIZE_PLACEHOLDER
 
 
 def path_file_token() -> str:
@@ -152,7 +164,7 @@ def format_path_media(
 
         if result_fmt != match.group(1):
             value = (
-                sanitize_filename(result_fmt) if result_fmt != FORMAT_TEMPLATE_EXPLICIT else FORMAT_TEMPLATE_EXPLICIT
+                _sanitize_name(result_fmt) if result_fmt != FORMAT_TEMPLATE_EXPLICIT else FORMAT_TEMPLATE_EXPLICIT
             )
             result = result.replace(template_str, value)
 
@@ -529,27 +541,17 @@ def path_file_sanitize(
             stem = _truncate_to_bytes(stem, FILENAME_BYTES_MAX - ext_bytes)
             raw_name = stem + ext
 
-    sanitized_filename = sanitize_filename(
-        raw_name, replacement_text="_", validate_after_sanitize=True, platform="auto"
-    )
-
-    sanitized_path = pathlib.Path(
-        *[
-            (
-                sanitize_filename(part, replacement_text="_", validate_after_sanitize=True, platform="auto")
-                if part not in path_file.anchor
-                else part
-            )
-            for part in path_file.parent.parts
-        ]
-    )
+    sanitized_filename = _sanitize_name(raw_name)
 
     try:
-        sanitized_path = sanitize_filepath(
-            sanitized_path, replacement_text="_", validate_after_sanitize=True, platform="auto"
+        sanitized_path = pathlib.Path(
+            *[
+                part if part in path_file.anchor else _sanitize_name(part)
+                for part in path_file.parent.parts
+            ]
         )
-    except ValidationError as e:
-        if adapt and str(e).startswith("[PV1101]"):
+    except (ValueError, OSError):
+        if adapt:
             sanitized_path = pathlib.Path.home()
         else:
             raise
@@ -625,19 +627,6 @@ def check_file_exists(path_file: pathlib.Path, extension_ignore: bool = False) -
         path_files = [path_file]
 
     return any(win_long_path(p).is_file() for p in path_files)
-
-
-def resource_path(relative_path: str) -> str:
-    """Return an absolute path to a bundled resource (supports PyInstaller).
-
-    Args:
-        relative_path (str): Relative resource path.
-
-    Returns:
-        str: Absolute path.
-    """
-    base_path = getattr(sys, "_MEIPASS", os.path.abspath("."))
-    return os.path.join(base_path, relative_path)
 
 
 def url_to_filename(url: str) -> str:

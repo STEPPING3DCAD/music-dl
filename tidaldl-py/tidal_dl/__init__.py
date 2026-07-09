@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 import importlib.metadata
 from pathlib import Path
+import tomllib
 from urllib.parse import urlparse
 
 import requests
-import toml
 
 from tidal_dl.constants import APP_NAME, REQUESTS_TIMEOUT_SEC
 from tidal_dl.model.meta import ProjectInformation, ReleaseLatest
@@ -25,7 +25,8 @@ def metadata_project() -> ProjectInformation:
         pyproject_toml_file: Path = pyproject_toml_dir / "pyproject.toml"
 
         if pyproject_toml_file.is_file():
-            tmp_result = toml.load(pyproject_toml_file)
+            with pyproject_toml_file.open("rb") as f:
+                tmp_result = tomllib.load(f)
 
             break
 
