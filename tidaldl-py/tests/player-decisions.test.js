@@ -17,6 +17,21 @@ function loadDecisionHelpers() {
   return new Function(`${helperSource[0]}\nreturn { _setupMustBlock, _authStateNeedsExpiredBanner };`)();
 }
 
+function loadSearchRefreshHelper(state, document, doSearch) {
+  const helperSource = playerSource.match(
+    /async function _refreshSearchAfterLogin\(\) \{[\s\S]*?\n\}/,
+  );
+
+  if (!helperSource) throw new Error('Search refresh helper not found');
+
+  return new Function(
+    'state',
+    'document',
+    'doSearch',
+    `${helperSource[0]}\nreturn _refreshSearchAfterLogin;`,
+  )(state, document, doSearch);
+}
+
 describe('player onboarding decisions', () => {
   test('blocks only when scan paths are missing', () => {
     const { _setupMustBlock } = loadDecisionHelpers();
@@ -30,5 +45,45 @@ describe('player onboarding decisions', () => {
 
     expect(_authStateNeedsExpiredBanner('not_configured')).toBe(false);
     expect(_authStateNeedsExpiredBanner('expired')).toBe(true);
+  });
+
+  test('clears cached Tidal auth state and reruns the active search after login', async () => {
+    const state = {
+      view: 'search',
+      searchQuery: 'coast',
+      searchResults: { local: { tracks: [] }, tidal: null, tidalAuthRequired: true },
+    };
+    const resultsArea = { id: 'search-results' };
+    const doSearch = async area => {
+      expect(area).toBe(resultsArea);
+      expect(state.searchResults).toBeNull();
+      state.searchResults = { local: { tracks: [] }, tidal: { tracks: [{ id: '1' }] }, tidalAuthRequired: false };
+    };
+    const refreshSearch = loadSearchRefreshHelper(state, {
+      querySelector: selector => selector === '.results' ? resultsArea : null,
+    }, doSearch);
+
+    await refreshSearch();
+
+    expect(state.searchResults.tidalAuthRequired).toBe(false);
+    expect(state.searchResults.tidal.tracks).toHaveLength(1);
+  });
+
+  test('clears a stale auth-required result without rerunning an inactive search', async () => {
+    const state = {
+      view: 'library',
+      searchQuery: 'coast',
+      searchResults: { local: { tracks: [] }, tidal: null, tidalAuthRequired: true },
+    };
+    const doSearch = async () => {
+      throw new Error('inactive search should not rerun');
+    };
+    const refreshSearch = loadSearchRefreshHelper(state, {
+      querySelector: () => ({ id: 'search-results' }),
+    }, doSearch);
+
+    await refreshSearch();
+
+    expect(state.searchResults).toBeNull();
   });
 });

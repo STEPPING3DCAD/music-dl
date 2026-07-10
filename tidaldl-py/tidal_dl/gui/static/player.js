@@ -1271,9 +1271,20 @@ async function refreshStatusLights() {
 
 let _loginPoll = null;
 
+async function _refreshSearchAfterLogin() {
+  if (!state.searchResults?.tidalAuthRequired) return;
+
+  state.searchResults = null;
+  if (state.view !== 'search' || !state.searchQuery.trim()) return;
+
+  const resultsArea = document.querySelector('.results');
+  if (resultsArea) await doSearch(resultsArea);
+}
+
 async function _handleLoginSuccess() {
   refreshStatusLights();
   await _checkErrorBanners();
+  await _refreshSearchAfterLogin();
   const authSection = document.getElementById('settings-auth-status');
   if (authSection) await loadAuthStatus(authSection);
   toast('Connected to Tidal', 'success');
