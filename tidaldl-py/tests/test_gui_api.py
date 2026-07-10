@@ -154,6 +154,17 @@ def test_static_js_leads_onboarding_with_local_music_folders():
     assert "Tidal is optional. Connect it later for catalog search, streaming, and downloads." in js
 
 
+def test_static_js_requires_path_setup_when_tidal_is_connected():
+    client = _make_client()
+    js = _fetch_gui_js(client)
+    setup_source = js.split("async function _checkSetup() {")[1].split(
+        "function _renderWizard(setupData) {"
+    )[0]
+
+    assert "if (!data.scan_paths_configured) {\n      _renderWizard(data);\n      return true;" in setup_source
+    assert "data.logged_in" not in setup_source
+
+
 def test_static_js_offers_explicit_optional_tidal_connection_during_path_setup():
     client = _make_client()
     js = _fetch_gui_js(client)
