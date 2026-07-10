@@ -46,6 +46,61 @@ class TestLibraryTracks:
 
 
 class TestLocalArtworkAvailability:
+    def test_cached_art_for_unapproved_path_is_denied(self, tmp_path, monkeypatch, client):
+        import tidal_dl.gui.api.library as library_api
+
+        allowed_dir = tmp_path / "allowed"
+        allowed_dir.mkdir()
+        unapproved_audio = tmp_path / "outside" / "private.mp3"
+        unapproved_audio.parent.mkdir()
+        unapproved_audio.write_bytes(b"not audio")
+
+        class FakeSettings:
+            data = SimpleNamespace(download_base_path=str(allowed_dir), scan_paths="")
+
+        monkeypatch.setattr(library_api, "Settings", FakeSettings)
+        monkeypatch.setattr(library_api, "path_config_base", lambda: str(tmp_path))
+        cached_bytes = b"cached-private-artwork"
+        cache_file = tmp_path / "art_cache" / library_api._art_cache_key(str(unapproved_audio))
+        cache_file.parent.mkdir()
+        cache_file.write_bytes(cached_bytes)
+
+        response = client.get(
+            "/api/library/art",
+            params={"path": str(unapproved_audio)},
+            headers=client._host_header,
+        )
+
+        assert response.status_code == 403
+        assert response.content != cached_bytes
+
+    def test_cached_art_for_approved_path_is_served(self, tmp_path, monkeypatch, client):
+        import tidal_dl.gui.api.library as library_api
+
+        allowed_dir = tmp_path / "allowed"
+        allowed_dir.mkdir()
+        approved_audio = allowed_dir / "public.mp3"
+        approved_audio.write_bytes(b"not audio")
+
+        class FakeSettings:
+            data = SimpleNamespace(download_base_path=str(allowed_dir), scan_paths="")
+
+        monkeypatch.setattr(library_api, "Settings", FakeSettings)
+        monkeypatch.setattr(library_api, "path_config_base", lambda: str(tmp_path))
+        cached_bytes = b"cached-public-artwork"
+        cache_file = tmp_path / "art_cache" / library_api._art_cache_key(str(approved_audio))
+        cache_file.parent.mkdir()
+        cache_file.write_bytes(cached_bytes)
+
+        response = client.get(
+            "/api/library/art",
+            params={"path": str(approved_audio)},
+            headers=client._host_header,
+        )
+
+        assert response.status_code == 200
+        assert response.content == cached_bytes
+
     def test_newly_scanned_coverless_track_omits_art_url(self, tmp_path, monkeypatch):
         import tidal_dl.gui.api.library as library_api
 

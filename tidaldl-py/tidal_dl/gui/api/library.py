@@ -674,15 +674,6 @@ def library_art(path: str = Query(..., description="Absolute path to audio file"
 
     from tidal_dl.gui.security import resolve_local_audio_path
 
-    # Check disk cache first — instant response
-    cache_dir = _art_cache_dir()
-    cache_file = cache_dir / _art_cache_key(path)
-    if cache_file.is_file():
-        return FileResponse(
-            cache_file, media_type="image/jpeg",
-            headers={"Cache-Control": "public, max-age=86400"},
-        )
-
     settings = Settings()
     allowed = [str(Path(settings.data.download_base_path).expanduser())]
     if settings.data.scan_paths:
@@ -697,6 +688,15 @@ def library_art(path: str = Query(..., description="Absolute path to audio file"
     if resolution.kind != "ok" or resolution.path is None:
         raise HTTPException(status_code=403, detail="Access denied")
     validated = resolution.path
+
+    # Check disk cache only after the requested audio path is authorized.
+    cache_dir = _art_cache_dir()
+    cache_file = cache_dir / _art_cache_key(path)
+    if cache_file.is_file():
+        return FileResponse(
+            cache_file, media_type="image/jpeg",
+            headers={"Cache-Control": "public, max-age=86400"},
+        )
 
     art_data = None
     art_mime = "image/jpeg"
