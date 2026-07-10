@@ -136,6 +136,46 @@ def test_static_js_contains_recently_added_expanded_states():
     assert "Could not load recently added albums" in js
 
 
+def test_static_js_leads_onboarding_with_local_music_folders():
+    client = _make_client()
+    js = _fetch_gui_js(client)
+    setup_source = js.split("async function _checkSetup() {")[1].split(
+        "function _renderWizard(setupData) {"
+    )[0]
+    wizard_source = js.split("function _renderWizard(setupData) {")[1].split(
+        "function _teardownWizard() {"
+    )[0]
+
+    assert "if (!data.scan_paths_configured)" in setup_source
+    assert "hasAnySource" not in setup_source
+    assert "if (!setupData.scan_paths_configured) {\n    _wizardStepPaths(wizard);" in wizard_source
+    assert "_wizardStepLogin" not in wizard_source
+    assert "Select your music folders" in js
+    assert "Tidal is optional. Connect it later for catalog search, streaming, and downloads." in js
+
+
+def test_static_js_offers_explicit_optional_tidal_connection_during_path_setup():
+    client = _make_client()
+    js = _fetch_gui_js(client)
+    path_step_source = js.split("function _wizardStepPaths(wizard) {")[1].split(
+        "// ---- ERROR BANNERS ----"
+    )[0]
+
+    assert "textEl('button', 'Connect Tidal', 'wizard-btn wizard-btn-secondary')" in path_step_source
+    assert "connectTidalBtn.addEventListener('click', () => triggerLogin());" in path_step_source
+
+
+def test_static_js_shows_tidal_session_banner_only_for_expired_auth():
+    client = _make_client()
+    js = _fetch_gui_js(client)
+    banner_source = js.split("async function _checkErrorBanners() {")[1].split(
+        "// Library views: check scan_paths"
+    )[0]
+
+    assert "if (auth.auth_state === 'expired')" in banner_source
+    assert "Tidal session expired." in banner_source
+
+
 def test_static_js_playlist_sync_updates_download_badge_and_sse():
     client = _make_client()
     js = _fetch_gui_js(client)

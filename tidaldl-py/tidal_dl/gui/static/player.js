@@ -1768,12 +1768,7 @@ async function _checkSetup() {
   try {
     const resp = await fetch('/api/setup/status');
     const data = await resp.json();
-    // Allow app access if at least one source is configured:
-    // - Tidal login for streaming, OR
-    // - Local scan paths for offline playback
-    // Only block with wizard if NOTHING is configured.
-    const hasAnySource = data.logged_in || data.scan_paths_configured;
-    if (!hasAnySource) {
+    if (!data.scan_paths_configured) {
       _renderWizard(data);
       return true;
     }
@@ -1797,13 +1792,8 @@ function _renderWizard(setupData) {
   const wizard = h('div', { className: 'setup-wizard' });
   document.body.appendChild(wizard);
 
-  if (!setupData.logged_in && !setupData.scan_paths_configured) {
-    _wizardStepLogin(wizard, setupData);
-  } else if (!setupData.scan_paths_configured) {
+  if (!setupData.scan_paths_configured) {
     _wizardStepPaths(wizard);
-  } else if (!setupData.logged_in) {
-    // Has local paths but no Tidal - show login with skip option
-    _wizardStepLogin(wizard, setupData);
   }
 }
 
@@ -1955,9 +1945,9 @@ function _wizardStepPaths(wizard) {
   const paths = [];
 
   // Step indicator
-  card.appendChild(textEl('div', 'Step 2 of 2', 'wizard-step-label'));
-  card.appendChild(textEl('h2', 'Where\'s your music?', 'wizard-title'));
-  card.appendChild(textEl('p', 'Tell us where to find your existing music files. You can add multiple folders.', 'wizard-desc'));
+  card.appendChild(textEl('div', 'Set up your local library', 'wizard-step-label'));
+  card.appendChild(textEl('h2', 'Select your music folders', 'wizard-title'));
+  card.appendChild(textEl('p', 'Choose folders containing music on this device. Tidal is optional. Connect it later for catalog search, streaming, and downloads.', 'wizard-desc'));
 
   // Path input row
   const inputRow = h('div', { className: 'path-input-row' });
@@ -2068,6 +2058,11 @@ function _wizardStepPaths(wizard) {
   });
 
   card.appendChild(continueBtn);
+
+  const connectTidalBtn = textEl('button', 'Connect Tidal', 'wizard-btn wizard-btn-secondary');
+  connectTidalBtn.addEventListener('click', () => triggerLogin());
+  card.appendChild(connectTidalBtn);
+
   card.appendChild(statusArea);
   wizard.appendChild(card);
 }
@@ -2081,7 +2076,7 @@ async function _checkErrorBanners() {
   // Check auth status
   try {
     const auth = await api('/auth/status');
-    if (!auth.logged_in) {
+    if (auth.auth_state === 'expired') {
       const banner = h('div', { className: 'error-banner' });
       banner.appendChild(textEl('span', 'Tidal session expired.'));
       const reloginBtn = textEl('button', 'Re-connect', 'banner-action');
