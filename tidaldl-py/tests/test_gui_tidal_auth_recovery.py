@@ -5,7 +5,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 from tests.gui_js_source import read_gui_js
 
 
-def test_tidal_auth_errors_launch_gui_login_flow():
+def test_tidal_auth_errors_offer_explicit_catalog_login():
     source = read_gui_js()
 
     assert "function _isTidalAuthError(error)" in source
@@ -14,7 +14,9 @@ def test_tidal_auth_errors_launch_gui_login_flow():
     assert "async function apiTidal(path, options)" in source
     assert "toast('Tidal login required — opening sign-in…', 'error');" in source
     assert "triggerLogin();" in source
-    assert "tidalData = await apiTidal('/search?" in source
+    assert "tidalData = await api('/search?" in source
+    assert "Connect Tidal to search, stream, and download" in source
+    assert "connectButton.addEventListener('click', () => triggerLogin());" in source
     assert "await apiTidal('/download', {" in source
 
 
