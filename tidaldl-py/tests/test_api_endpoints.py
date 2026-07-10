@@ -101,6 +101,36 @@ class TestLocalArtworkAvailability:
         assert response.status_code == 200
         assert response.content == cached_bytes
 
+    def test_cached_art_marks_legacy_row_available(self, tmp_path, monkeypatch):
+        import tidal_dl.gui.api.library as library_api
+
+        allowed_dir = tmp_path / "allowed"
+        allowed_dir.mkdir()
+        audio_path = allowed_dir / "legacy.mp3"
+        audio_path.write_bytes(b"not audio")
+
+        class FakeSettings:
+            data = SimpleNamespace(download_base_path=str(allowed_dir), scan_paths="")
+
+        db = LibraryDB(tmp_path / "library.db")
+        db.open()
+        db.record(str(audio_path), status="tagged", artist="Artist", title="Legacy")
+        db.commit()
+
+        monkeypatch.setattr(library_api, "Settings", FakeSettings)
+        monkeypatch.setattr(library_api, "path_config_base", lambda: str(tmp_path))
+        monkeypatch.setattr(library_api, "_get_db", lambda: db)
+        cache_file = tmp_path / "art_cache" / library_api._art_cache_key(str(audio_path))
+        cache_file.parent.mkdir()
+        cache_file.write_bytes(b"cached-legacy-artwork")
+
+        response = library_api.library_art(str(audio_path))
+
+        assert response.status_code == 200
+        assert response.headers["cache-control"] == "public, max-age=86400"
+        assert db.get(str(audio_path))["art_available"] == 1
+        db.close()
+
     def test_newly_scanned_coverless_track_omits_art_url(self, tmp_path, monkeypatch):
         import tidal_dl.gui.api.library as library_api
 

@@ -693,6 +693,11 @@ def library_art(path: str = Query(..., description="Absolute path to audio file"
     cache_dir = _art_cache_dir()
     cache_file = cache_dir / _art_cache_key(path)
     if cache_file.is_file():
+        db = _get_db()
+        row = db.get(path)
+        if row and row.get("art_available") is None:
+            db._conn.execute("UPDATE scanned SET art_available = 1 WHERE path = ?", (path,))
+            db.commit()
         return FileResponse(
             cache_file, media_type="image/jpeg",
             headers={"Cache-Control": "public, max-age=86400"},
