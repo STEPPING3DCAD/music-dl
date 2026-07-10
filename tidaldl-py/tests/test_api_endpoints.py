@@ -653,3 +653,8 @@ class TestStaticFileServing:
     def test_style_css_served(self, client):
         resp = client.get("/style.css", headers=client._host_header)
         assert resp.status_code == 200
+
+    def test_favicon_served(self, client):
+        resp = client.get("/favicon.ico", headers=client._host_header)
+        assert resp.status_code == 200
+        assert "image" in resp.headers.get("content-type", "")
