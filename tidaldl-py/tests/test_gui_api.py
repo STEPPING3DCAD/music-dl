@@ -189,6 +189,27 @@ def test_static_js_tidal_login_retry_copy_works_during_setup():
     assert "tap the status light" not in login_source
 
 
+def test_static_js_search_explains_tidal_auth_without_hiding_local_results():
+    client = _make_client()
+    js = _fetch_gui_js(client)
+    search_source = js.split("async function doSearch(resultsArea) {")[1].split(
+        "function renderSearchResults(container, data) {"
+    )[0]
+    search_view_source = js.split("function renderSearch(container) {")[1].split(
+        "function _greeting() {"
+    )[0]
+
+    assert "tidalData = await api('/search?q='" in search_source
+    assert "tidalData = await apiTidal('/search?q='" not in search_source
+    assert "if (_isTidalAuthError(error)) {\n      tidalAuthRequired = true;\n    }" in search_source
+    assert "state.searchResults = { local: localData, tidal: tidalData, tidalAuthRequired };" in search_source
+    assert "renderUnifiedSearchResults(resultsArea, localData, tidalData, tidalAuthRequired);" in search_source
+    assert "state.searchResults.tidalAuthRequired" in search_view_source
+    assert "Connect Tidal to search, stream, and download" in search_source
+    assert "connectButton.addEventListener('click', () => triggerLogin());" in search_source
+    assert "if (localItems.length === 0 && tidalItems.length === 0 && !tidalAuthRequired)" in search_source
+
+
 def test_static_js_removes_unreachable_wizard_login_step():
     client = _make_client()
     js = _fetch_gui_js(client)

@@ -781,7 +781,12 @@ function renderSearch(container) {
   container.appendChild(resultsArea);
 
   if (state.searchResults && state.searchQuery) {
-    renderUnifiedSearchResults(resultsArea, state.searchResults.local, state.searchResults.tidal);
+    renderUnifiedSearchResults(
+      resultsArea,
+      state.searchResults.local,
+      state.searchResults.tidal,
+      state.searchResults.tidalAuthRequired
+    );
   } else {
     renderSearchEmpty(resultsArea);
   }
@@ -868,18 +873,34 @@ async function doSearch(resultsArea) {
     localData = await api('/library/search?q=' + encodeURIComponent(q) + '&type=' + state.searchType + '&limit=20');
   } catch (_) { /* local search optional */ }
 
-  // Tidal results (async, may fail if not logged in)
+  // Tidal results (async, may require a user-initiated login)
   let tidalData = null;
+  let tidalAuthRequired = false;
   try {
-    tidalData = await apiTidal('/search?q=' + encodeURIComponent(q) + '&type=' + state.searchType + '&limit=50');
-  } catch (_) { /* Tidal unavailable is OK */ }
+    tidalData = await api('/search?q=' + encodeURIComponent(q) + '&type=' + state.searchType + '&limit=50');
+  } catch (error) {
+    if (_isTidalAuthError(error)) {
+      tidalAuthRequired = true;
+    }
+  }
 
-  state.searchResults = { local: localData, tidal: tidalData };
-  renderUnifiedSearchResults(resultsArea, localData, tidalData);
+  state.searchResults = { local: localData, tidal: tidalData, tidalAuthRequired };
+  renderUnifiedSearchResults(resultsArea, localData, tidalData, tidalAuthRequired);
   refreshStatusLights();
 }
 
-function renderUnifiedSearchResults(container, localData, tidalData) {
+function renderTidalSearchAuthPanel(container) {
+  const panel = h('div', { className: 'search-tidal-auth-panel' });
+  panel.appendChild(textEl('div', 'Connect Tidal to search, stream, and download', 'search-tidal-auth-message'));
+
+  const connectButton = h('button', { className: 'search-tidal-auth-button', type: 'button' });
+  connectButton.textContent = 'Connect Tidal';
+  connectButton.addEventListener('click', () => triggerLogin());
+  panel.appendChild(connectButton);
+  container.appendChild(panel);
+}
+
+function renderUnifiedSearchResults(container, localData, tidalData, tidalAuthRequired) {
   while (container.firstChild) container.removeChild(container.firstChild);
 
   const type = state.searchType;
@@ -998,7 +1019,11 @@ function renderUnifiedSearchResults(container, localData, tidalData) {
     }
   }
 
-  if (localItems.length === 0 && tidalItems.length === 0) {
+  if (tidalAuthRequired) {
+    renderTidalSearchAuthPanel(container);
+  }
+
+  if (localItems.length === 0 && tidalItems.length === 0 && !tidalAuthRequired) {
     container.appendChild(textEl('div', 'No results found', 'search-empty-text'));
   }
 }
@@ -4188,4 +4213,3 @@ async function saveSetting(key, value) {
     toast('Failed to save: ' + err.message, 'error');
   }
 }
-
