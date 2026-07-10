@@ -733,6 +733,7 @@ function playTrack(track) {
   highlightPlayingTrack();
   updatePlayerHeart();
   _saveQueue();
+  audio.load();
 }
 
 function updateNowPlaying(track) {

@@ -131,6 +131,41 @@ class TestLocalArtworkAvailability:
         assert db.get(str(audio_path))["art_available"] == 1
         db.close()
 
+    def test_sibling_art_cache_ignores_unsupported_file_metadata(
+        self, tmp_path, monkeypatch, client,
+    ):
+        import shutil
+
+        import tidal_dl.gui.api.library as library_api
+
+        library_dir = tmp_path / "music"
+        library_dir.mkdir()
+        audio_path = library_dir / "track.mp3"
+        audio_path.write_bytes(b"not audio")
+        cover_path = library_dir / "cover.jpg"
+        cover_bytes = b"album artwork"
+        cover_path.write_bytes(cover_bytes)
+
+        class FakeSettings:
+            data = SimpleNamespace(download_base_path=str(library_dir), scan_paths="")
+
+        def reject_metadata_copy(*args, **kwargs):
+            raise PermissionError("filesystem does not allow metadata flags")
+
+        monkeypatch.setattr(library_api, "Settings", FakeSettings)
+        monkeypatch.setattr(library_api, "path_config_base", lambda: str(tmp_path))
+        monkeypatch.setattr(library_api, "MutagenFile", lambda *args, **kwargs: None)
+        monkeypatch.setattr(shutil, "copystat", reject_metadata_copy)
+
+        response = client.get(
+            "/api/library/art",
+            params={"path": str(audio_path)},
+            headers=client._host_header,
+        )
+
+        assert response.status_code == 200
+        assert response.content == cover_bytes
+
     def test_newly_scanned_coverless_track_omits_art_url(self, tmp_path, monkeypatch):
         import tidal_dl.gui.api.library as library_api
 

@@ -32,6 +32,31 @@ function loadSearchRefreshHelper(state, document, doSearch) {
   )(state, document, doSearch);
 }
 
+function loadPlayTrack(audio, state) {
+  const functionSource = playerSource.split('function playTrack(track) {')[1]
+    .split('\nfunction updateNowPlaying(track) {')[0];
+
+  if (!functionSource) throw new Error('playTrack function not found');
+
+  const noop = () => {};
+  return new Function(
+    'audio',
+    'state',
+    '_resetPlayCount',
+    '_recordRecentlyPlayed',
+    'toast',
+    'updatePlayButton',
+    'updateNowPlaying',
+    'handleLyricsTrackChange',
+    '_updateMediaSession',
+    '_fetchWaveform',
+    'highlightPlayingTrack',
+    'updatePlayerHeart',
+    '_saveQueue',
+    `function playTrack(track) {${functionSource}\nreturn playTrack;`,
+  )(audio, state, noop, noop, noop, noop, noop, noop, noop, noop, noop, noop, noop);
+}
+
 describe('player onboarding decisions', () => {
   test('blocks only when scan paths are missing', () => {
     const { _setupMustBlock } = loadDecisionHelpers();
@@ -85,5 +110,29 @@ describe('player onboarding decisions', () => {
     await refreshSearch();
 
     expect(state.searchResults).toBeNull();
+  });
+});
+
+describe('local playback decisions', () => {
+  test('loads a selected local source after installing the readiness listener', () => {
+    const calls = [];
+    const state = { playing: false };
+    const audio = {
+      src: '',
+      muted: false,
+      pause: () => calls.push('pause'),
+      addEventListener: eventName => calls.push(eventName),
+      load: () => {
+        expect(state.playing).toBe(true);
+        calls.push('load');
+      },
+      play: () => Promise.resolve(),
+    };
+    const playTrack = loadPlayTrack(audio, state);
+
+    playTrack({ is_local: true, local_path: '/music/local track.flac' });
+
+    expect(audio.src).toBe('/api/playback/local?path=%2Fmusic%2Flocal%20track.flac');
+    expect(calls).toEqual(['pause', 'canplay', 'load']);
   });
 });

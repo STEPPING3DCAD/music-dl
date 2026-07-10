@@ -756,7 +756,7 @@ def library_art(path: str = Query(..., description="Absolute path to audio file"
         if img_path.is_file():
             # Cache the folder art too
             import shutil
-            shutil.copy2(str(img_path), str(cache_file))
+            shutil.copyfile(str(img_path), str(cache_file))
             db = _get_db()
             row = db.get(path)
             if row and row.get("art_available") is None:
