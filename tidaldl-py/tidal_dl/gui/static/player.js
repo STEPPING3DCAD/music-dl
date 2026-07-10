@@ -1764,11 +1764,19 @@ function _renderScanResults(container, results) {
 
 // ---- SETUP WIZARD ----
 
+function _setupMustBlock(setupData) {
+  return !setupData.scan_paths_configured;
+}
+
+function _authStateNeedsExpiredBanner(authState) {
+  return authState === 'expired';
+}
+
 async function _checkSetup() {
   try {
     const resp = await fetch('/api/setup/status');
     const data = await resp.json();
-    if (!data.scan_paths_configured) {
+    if (_setupMustBlock(data)) {
       _renderWizard(data);
       return true;
     }
@@ -2076,7 +2084,7 @@ async function _checkErrorBanners() {
   // Check auth status
   try {
     const auth = await api('/auth/status');
-    if (auth.auth_state === 'expired') {
+    if (_authStateNeedsExpiredBanner(auth.auth_state)) {
       const banner = h('div', { className: 'error-banner' });
       banner.appendChild(textEl('span', 'Tidal session expired.'));
       const reloginBtn = textEl('button', 'Re-connect', 'banner-action');

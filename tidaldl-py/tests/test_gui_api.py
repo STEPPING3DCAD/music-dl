@@ -146,7 +146,7 @@ def test_static_js_leads_onboarding_with_local_music_folders():
         "function _teardownWizard() {"
     )[0]
 
-    assert "if (!data.scan_paths_configured)" in setup_source
+    assert "if (_setupMustBlock(data))" in setup_source
     assert "hasAnySource" not in setup_source
     assert "if (!setupData.scan_paths_configured) {\n    _wizardStepPaths(wizard);" in wizard_source
     assert "_wizardStepLogin" not in wizard_source
@@ -161,7 +161,8 @@ def test_static_js_requires_path_setup_when_tidal_is_connected():
         "function _renderWizard(setupData) {"
     )[0]
 
-    assert "if (!data.scan_paths_configured) {\n      _renderWizard(data);\n      return true;" in setup_source
+    assert "function _setupMustBlock(setupData) {\n  return !setupData.scan_paths_configured;\n}" in js
+    assert "if (_setupMustBlock(data)) {\n      _renderWizard(data);\n      return true;" in setup_source
     assert "data.logged_in" not in setup_source
 
 
@@ -183,7 +184,8 @@ def test_static_js_shows_tidal_session_banner_only_for_expired_auth():
         "// Library views: check scan_paths"
     )[0]
 
-    assert "if (auth.auth_state === 'expired')" in banner_source
+    assert "function _authStateNeedsExpiredBanner(authState) {\n  return authState === 'expired';\n}" in js
+    assert "if (_authStateNeedsExpiredBanner(auth.auth_state))" in banner_source
     assert "Tidal session expired." in banner_source
 
 
