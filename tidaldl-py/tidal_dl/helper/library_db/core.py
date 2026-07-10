@@ -5,7 +5,7 @@ from tidal_dl.helper.library_db._common import *  # noqa: F403
 class LibraryDBCore:
     """Thin wrapper around a SQLite scan ledger."""
 
-    _SCHEMA_VERSION = 4
+    _SCHEMA_VERSION = 5
 
     def __init__(self, db_path: pathlib.Path) -> None:
         self._path = db_path
@@ -54,6 +54,7 @@ class LibraryDBCore:
                     genre      TEXT,
                     waveform   TEXT,
                     waveform_hires TEXT,
+                    art_available INTEGER,
                     scanned_at INTEGER NOT NULL
                 )"""
             )
@@ -97,6 +98,11 @@ class LibraryDBCore:
                 self._conn.execute("ALTER TABLE scanned ADD COLUMN waveform TEXT")
             if "waveform_hires" not in cols:
                 self._conn.execute("ALTER TABLE scanned ADD COLUMN waveform_hires TEXT")
+
+            # v4 -> v5: local embedded or sibling cover-art availability.
+            # NULL preserves legacy rows until art is checked on demand.
+            if "art_available" not in cols:
+                self._conn.execute("ALTER TABLE scanned ADD COLUMN art_available INTEGER")
 
         # play_events table (time-series for activity charts)
         self._conn.execute(

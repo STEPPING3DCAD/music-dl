@@ -65,7 +65,7 @@ class TestPragmas:
         finally:
             migrated.close()
 
-        assert {"isrc", "artist", "title", "scanned_at"} <= cols
+        assert {"isrc", "artist", "title", "scanned_at", "art_available"} <= cols
         assert row is not None
         assert row["status"] == "tagged"
 
@@ -91,6 +91,14 @@ class TestCRUD:
         db.record("/a.flac", status="tagged", artist="B")
         db.commit()
         assert db.get("/a.flac")["artist"] == "B"
+
+    def test_record_persists_art_availability_without_erasing_known_value(self, db):
+        db.record("/a.flac", status="tagged", art_available=True)
+        db.commit()
+        db.record("/a.flac", status="tagged")
+        db.commit()
+
+        assert db.get("/a.flac")["art_available"] == 1
 
     def test_remove(self, db):
         db.record("/a.flac", status="tagged")
@@ -548,7 +556,7 @@ class TestMigration:
                     "quality_probes", "library_meta", "download_history", "favorites"}
         assert expected.issubset(tables)
 
-    def test_v1_to_v4_migration(self, tmp_path):
+    def test_v1_to_v5_migration(self, tmp_path):
         """Create a v1-style DB, then open with LibraryDB to trigger migration."""
         db_path = tmp_path / "legacy.db"
         conn = sqlite3.connect(str(db_path))
@@ -570,9 +578,11 @@ class TestMigration:
         assert "genre" in cols
         assert "waveform" in cols
         assert "waveform_hires" in cols
-        assert LibraryDB._SCHEMA_VERSION == 4
+        assert "art_available" in cols
+        assert LibraryDB._SCHEMA_VERSION == 5
         row = db.get("/a.flac")
         assert row["artist"] == "X"
+        assert row["art_available"] is None
         db.close()
 
     def test_backup_includes_committed_wal_rows(self, tmp_path):

@@ -37,6 +37,7 @@ class PlaybackMixin:
         rows = self._conn.execute(
             """SELECT s.path, s.isrc, s.artist, s.title, s.album, s.duration,
                       s.quality, s.format, s.genre, s.play_count, s.last_played,
+                      s.art_available,
                       latest.played_at
                FROM (
                    SELECT path, MAX(played_at) AS played_at

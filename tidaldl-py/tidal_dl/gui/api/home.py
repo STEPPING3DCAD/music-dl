@@ -177,11 +177,11 @@ def recent_plays(limit: int = Query(50, ge=1, le=100)):
     db = _get_db()
     tracks = db.recent_plays(limit=limit)
 
-    from urllib.parse import quote
+    from tidal_dl.gui.api.library import _local_cover_url
 
     for track in tracks:
         if track.get("path"):
-            track["cover_url"] = "/api/library/art?path=" + quote(track["path"], safe="")
+            track["cover_url"] = _local_cover_url(track["path"], track.get("art_available"))
     return {"tracks": tracks}
 
 
@@ -195,26 +195,26 @@ def home_stats():
     # cold NAS stat() call doesn't stall every /home request.
     stats["volume_available"] = _volume_available_cached()
 
-    # Convert cover_path to cover_url for artist tiles
-    from urllib.parse import quote
+    # Convert cover_path to cover_url for artist tiles.
+    from tidal_dl.gui.api.library import _local_cover_url
+
+    def cover_url(path):
+        row = db.get(path) if path else None
+        return _local_cover_url(path, row.get("art_available") if row else None)
 
     if stats["top_artist"] and stats["top_artist"].get("cover_path"):
-        stats["top_artist"]["cover_url"] = (
-            "/api/library/art?path=" + quote(stats["top_artist"]["cover_path"], safe="")
-        )
+        stats["top_artist"]["cover_url"] = cover_url(stats["top_artist"]["cover_path"])
     for a in stats.get("top_artists", []):
         if a.get("cover_path"):
-            a["cover_url"] = "/api/library/art?path=" + quote(a["cover_path"], safe="")
+            a["cover_url"] = cover_url(a["cover_path"])
 
     if stats["most_replayed"] and stats["most_replayed"].get("cover_path"):
-        stats["most_replayed"]["cover_url"] = (
-            "/api/library/art?path=" + quote(stats["most_replayed"]["cover_path"], safe="")
-        )
+        stats["most_replayed"]["cover_url"] = cover_url(stats["most_replayed"]["cover_path"])
 
     # Convert recent_albums cover paths
     for a in stats.get("recent_albums", []):
         if a.get("cover_path"):
-            a["cover_url"] = "/api/library/art?path=" + quote(a["cover_path"], safe="")
+            a["cover_url"] = cover_url(a["cover_path"])
 
     # Inject cached artist image URLs so frontend doesn't need a second fetch
     def _inject_artist_image(artist_dict):
@@ -242,16 +242,12 @@ def home_stats():
     # Convert this_week cover paths to URLs
     tw = stats.get("this_week", {})
     if tw.get("top_artist") and tw["top_artist"].get("cover_path"):
-        tw["top_artist"]["cover_url"] = (
-            "/api/library/art?path=" + quote(tw["top_artist"]["cover_path"], safe="")
-        )
+        tw["top_artist"]["cover_url"] = cover_url(tw["top_artist"]["cover_path"])
     for a in tw.get("top_artists", []):
         if a.get("cover_path"):
-            a["cover_url"] = "/api/library/art?path=" + quote(a["cover_path"], safe="")
+            a["cover_url"] = cover_url(a["cover_path"])
     if tw.get("most_replayed") and tw["most_replayed"].get("cover_path"):
-        tw["most_replayed"]["cover_url"] = (
-            "/api/library/art?path=" + quote(tw["most_replayed"]["cover_path"], safe="")
-        )
+        tw["most_replayed"]["cover_url"] = cover_url(tw["most_replayed"]["cover_path"])
     # Inject cached artist images for this_week too
     if tw.get("top_artist"):
         _inject_artist_image(tw["top_artist"])

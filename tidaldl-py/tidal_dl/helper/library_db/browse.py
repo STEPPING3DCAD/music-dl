@@ -22,10 +22,13 @@ class BrowseMixin:
         ).fetchone()[0]
 
         rows = self._conn.execute(
-            f"""SELECT artist, COUNT(*) as track_count,
+            f"""SELECT s.artist, COUNT(*) as track_count,
                        COUNT(DISTINCT album) as album_count,
-                       MIN(path) as cover_path
-                FROM scanned
+                       MIN(s.path) as cover_path,
+                       (SELECT s2.art_available FROM scanned s2
+                        WHERE s2.artist = s.artist AND s2.status != 'unreadable'
+                        ORDER BY s2.path ASC LIMIT 1) as cover_art_available
+                FROM scanned s
                 WHERE {where}
                 GROUP BY artist
                 ORDER BY artist COLLATE NOCASE ASC
@@ -44,11 +47,14 @@ class BrowseMixin:
             like = f"%{query}%"
             params.extend([like, like])
         rows = self._conn.execute(
-            f"""SELECT album, COUNT(*) as track_count, MIN(path) as cover_path,
+            f"""SELECT s.album, COUNT(*) as track_count, MIN(s.path) as cover_path,
+                       (SELECT s2.art_available FROM scanned s2
+                        WHERE s2.album = s.album AND s2.status != 'unreadable'
+                        ORDER BY s2.path ASC LIMIT 1) as cover_art_available,
                        MAX(quality) as best_quality,
                        COUNT(DISTINCT artist) as artist_count,
                        MIN(artist) as first_artist
-                FROM scanned
+                FROM scanned s
                 WHERE {where}
                 GROUP BY album
                 ORDER BY album COLLATE NOCASE ASC""",
@@ -76,6 +82,9 @@ class BrowseMixin:
             """SELECT dh.album,
                       COUNT(DISTINCT s.path) AS track_count,
                       MIN(s.path) AS cover_path,
+                      (SELECT s2.art_available FROM scanned s2
+                       WHERE s2.album = dh.album AND s2.status != 'unreadable'
+                       ORDER BY s2.path ASC LIMIT 1) AS cover_art_available,
                       MAX(dh.finished_at) AS recent_at,
                       COUNT(DISTINCT dh.artist) AS artist_count,
                       MIN(dh.artist) AS first_artist
@@ -94,6 +103,7 @@ class BrowseMixin:
                 "artist": artist,
                 "track_count": row["track_count"],
                 "cover_path": row["cover_path"],
+                "cover_art_available": row["cover_art_available"],
                 "recent_at": int(row["recent_at"]),
                 "recent_source": "download",
             }
@@ -103,11 +113,14 @@ class BrowseMixin:
         for row in self._conn.execute(
             """SELECT album,
                       COUNT(*) AS track_count,
-                      MIN(path) AS cover_path,
+                      MIN(s.path) AS cover_path,
+                      (SELECT s2.art_available FROM scanned s2
+                       WHERE s2.album = s.album AND s2.status != 'unreadable'
+                       ORDER BY s2.path ASC LIMIT 1) AS cover_art_available,
                       MAX(scanned_at) AS recent_at,
                       COUNT(DISTINCT artist) AS artist_count,
                       MIN(artist) AS first_artist
-               FROM scanned
+               FROM scanned s
                WHERE album IS NOT NULL
                  AND status != 'unreadable'
                GROUP BY album"""
@@ -118,6 +131,7 @@ class BrowseMixin:
                 "artist": artist,
                 "track_count": row["track_count"],
                 "cover_path": row["cover_path"],
+                "cover_art_available": row["cover_art_available"],
                 "recent_at": int(row["recent_at"]),
                 "recent_source": "scan",
             }
@@ -137,10 +151,14 @@ class BrowseMixin:
         """Return albums for an artist with track count and a representative path for art."""
         assert self._conn
         rows = self._conn.execute(
-            """SELECT album, COUNT(*) as track_count, MIN(path) as cover_path,
+            """SELECT s.album, COUNT(*) as track_count, MIN(s.path) as cover_path,
+                      (SELECT s2.art_available FROM scanned s2
+                       WHERE s2.artist = s.artist AND s2.album = s.album
+                         AND s2.status != 'unreadable'
+                       ORDER BY s2.path ASC LIMIT 1) as cover_art_available,
                       GROUP_CONCAT(DISTINCT genre) as genres,
                       MAX(quality) as best_quality
-               FROM scanned
+               FROM scanned s
                WHERE artist = ? AND album IS NOT NULL AND status != 'unreadable'
                GROUP BY album ORDER BY album COLLATE NOCASE ASC""",
             (artist,),

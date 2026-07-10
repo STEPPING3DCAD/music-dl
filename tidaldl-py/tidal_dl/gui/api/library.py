@@ -14,6 +14,7 @@ import os
 import sqlite3
 import threading
 import time
+from base64 import b64decode
 from pathlib import Path
 
 from fastapi import APIRouter, Query
@@ -26,6 +27,14 @@ from tidal_dl.helper.path import path_config_base
 router = APIRouter()
 
 _AUDIO_EXTENSIONS = {".flac", ".mp3", ".m4a", ".ogg", ".wav", ".aac"}
+_COVER_NAMES = [
+    "cover.jpg", "cover.png", "folder.jpg", "folder.png",
+    "front.jpg", "front.png", "album.jpg", "album.png",
+]
+_NO_ART_PNG = b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL9"
+    "9wAAAABJRU5ErkJggg=="
+)
 
 _GENRE_MAP = {
     "electronica/dance": "Electronic",
@@ -206,9 +215,33 @@ def _read_metadata(file_path: Path) -> dict | None:
         return None
 
 
+def _has_local_art(file_path: Path) -> bool:
+    """Return whether an audio file has embedded or sibling cover art."""
+    try:
+        audio = MutagenFile(str(file_path))
+        if audio is not None:
+            if hasattr(audio, "pictures") and audio.pictures:
+                return True
+            tags = audio.tags or {}
+            if any(str(key).startswith("APIC") for key in tags):
+                return True
+            if tags.get("covr"):
+                return True
+    except Exception:
+        pass
+    return any((file_path.parent / name).is_file() for name in _COVER_NAMES)
+
+
+def _local_cover_url(path: str | None, art_available: bool | int | None) -> str:
+    if not path or art_available == 0:
+        return ""
+    from urllib.parse import quote
+
+    return "/api/library/art?path=" + quote(path, safe="")
+
+
 def _db_row_to_track(row: dict) -> dict:
     p = Path(row["path"])
-    from urllib.parse import quote
     return {
         "path": row["path"],
         "name": row.get("title") or p.stem,
@@ -219,7 +252,7 @@ def _db_row_to_track(row: dict) -> dict:
         "genre": row.get("genre") or "",
         "quality": row.get("quality") or p.suffix[1:].upper(),
         "format": row.get("format") or p.suffix[1:].upper(),
-        "cover_url": "/api/library/art?path=" + quote(row["path"], safe=""),
+        "cover_url": _local_cover_url(row["path"], row.get("art_available")),
         "play_count": row.get("play_count") or 0,
         "is_local": True,
     }
@@ -416,7 +449,9 @@ def _background_scan(rescan: bool) -> None:
             new_paths = disk_paths - known
             _scan_progress["scanned"] = 0
             for path_str in new_paths:
-                meta = _read_metadata(Path(path_str))
+                file_path = Path(path_str)
+                art_available = _has_local_art(file_path)
+                meta = _read_metadata(file_path)
                 if meta:
                     # Extract waveform peaks (single ffmpeg decode, ~30ms per file)
                     waveform_json = None
@@ -439,9 +474,10 @@ def _background_scan(rescan: bool) -> None:
                         fmt=meta["format"],
                         waveform=waveform_json,
                         waveform_hires=hires_json,
+                        art_available=art_available,
                     )
                 else:
-                    db.record(path_str, status="unreadable")
+                    db.record(path_str, status="unreadable", art_available=art_available)
                 batch += 1
                 if batch >= 50:
                     db.commit()
@@ -528,8 +564,6 @@ def library_artists(
     q: str = Query("", description="Search filter"),
 ) -> dict:
     """Return paginated artists with track/album counts."""
-    from urllib.parse import quote
-
     db = _get_db()
     rows, total = db.artists_page(limit=limit, offset=offset, query=q.strip())
     artists = [
@@ -537,7 +571,7 @@ def library_artists(
             "name": r["artist"],
             "track_count": r["track_count"],
             "album_count": r["album_count"],
-            "cover_url": "/api/library/art?path=" + quote(r["cover_path"], safe="") if r.get("cover_path") else "",
+            "cover_url": _local_cover_url(r.get("cover_path"), r.get("cover_art_available")),
         }
         for r in rows
     ]
@@ -547,8 +581,6 @@ def library_artists(
 @router.get("/library/albums")
 def all_albums(q: str = Query("", description="Search filter")):
     """Return all albums in the local library as a gallery."""
-    from urllib.parse import quote
-
     db = _get_db()
     albums = db.all_albums(query=q)
     return {
@@ -557,7 +589,7 @@ def all_albums(q: str = Query("", description="Search filter")):
                 "name": a["album"],
                 "artist": a["artist"],
                 "track_count": a["track_count"],
-                "cover_url": "/api/library/art?path=" + quote(a["cover_path"], safe=""),
+                "cover_url": _local_cover_url(a.get("cover_path"), a.get("cover_art_available")),
                 "best_quality": a.get("best_quality") or "",
             }
             for a in albums
@@ -571,8 +603,6 @@ def library_recent_albums(
     limit: int = Query(12, ge=1, le=50),
     offset: int = Query(0, ge=0),
 ) -> dict:
-    from urllib.parse import quote
-
     db = _get_db()
     rows, total = db.recent_albums_page(limit=limit, offset=offset)
     albums = [
@@ -580,7 +610,7 @@ def library_recent_albums(
             "name": row["album"],
             "artist": row["artist"],
             "track_count": row["track_count"],
-            "cover_url": "/api/library/art?path=" + quote(row["cover_path"], safe="") if row.get("cover_path") else "",
+            "cover_url": _local_cover_url(row.get("cover_path"), row.get("cover_art_available")),
             "recent_at": row["recent_at"],
             "recent_source": row["recent_source"],
         }
@@ -592,8 +622,6 @@ def library_recent_albums(
 @router.get("/library/artist/{artist_name}/albums")
 def artist_albums(artist_name: str):
     """Return all albums by an artist from the local library."""
-    from urllib.parse import quote
-
     db = _get_db()
     albums = db.albums_by_artist(artist_name)
     return {
@@ -602,7 +630,7 @@ def artist_albums(artist_name: str):
             {
                 "name": a["album"],
                 "track_count": a["track_count"],
-                "cover_url": "/api/library/art?path=" + quote(a["cover_path"], safe=""),
+                "cover_url": _local_cover_url(a.get("cover_path"), a.get("cover_art_available")),
                 "genres": a.get("genres") or "",
                 "best_quality": a.get("best_quality") or "",
             }
@@ -675,30 +703,28 @@ def library_art(path: str = Query(..., description="Absolute path to audio file"
 
     try:
         audio = MutagenFile(str(validated))
-        if audio is None:
-            raise HTTPException(status_code=404, detail="Not a recognized audio file")
+        if audio is not None:
+            # FLAC
+            if hasattr(audio, "pictures") and audio.pictures:
+                pic = audio.pictures[0]
+                art_data = pic.data
+                art_mime = pic.mime or "image/jpeg"
 
-        # FLAC
-        if hasattr(audio, "pictures") and audio.pictures:
-            pic = audio.pictures[0]
-            art_data = pic.data
-            art_mime = pic.mime or "image/jpeg"
+            # MP3 / ID3
+            if not art_data:
+                tags = audio.tags or {}
+                for key in tags:
+                    if key.startswith("APIC"):
+                        apic = tags[key]
+                        art_data = apic.data
+                        art_mime = apic.mime or "image/jpeg"
+                        break
 
-        # MP3 / ID3
-        if not art_data:
-            tags = audio.tags or {}
-            for key in tags:
-                if key.startswith("APIC"):
-                    apic = tags[key]
-                    art_data = apic.data
-                    art_mime = apic.mime or "image/jpeg"
-                    break
-
-        # M4A / MP4
-        if not art_data:
-            tags = audio.tags or {}
-            if "covr" in tags and tags["covr"]:
-                art_data = bytes(tags["covr"][0])
+            # M4A / MP4
+            if not art_data:
+                tags = audio.tags or {}
+                if "covr" in tags and tags["covr"]:
+                    art_data = bytes(tags["covr"][0])
 
     except HTTPException:
         raise
@@ -708,27 +734,41 @@ def library_art(path: str = Query(..., description="Absolute path to audio file"
     # Write to disk cache and return
     if art_data:
         cache_file.write_bytes(art_data)
+        db = _get_db()
+        row = db.get(path)
+        if row and row.get("art_available") is None:
+            db._conn.execute("UPDATE scanned SET art_available = 1 WHERE path = ?", (path,))
+            db.commit()
         return Response(
             content=art_data, media_type=art_mime,
             headers={"Cache-Control": "public, max-age=86400"},
         )
 
     # Fallback: look for cover image in the same directory as the audio file
-    cover_names = ["cover.jpg", "cover.png", "folder.jpg", "folder.png", "front.jpg", "front.png", "album.jpg", "album.png"]
     parent = validated.parent
-    for name in cover_names:
+    for name in _COVER_NAMES:
         img_path = parent / name
         if img_path.is_file():
             # Cache the folder art too
             import shutil
             shutil.copy2(str(img_path), str(cache_file))
+            db = _get_db()
+            row = db.get(path)
+            if row and row.get("art_available") is None:
+                db._conn.execute("UPDATE scanned SET art_available = 1 WHERE path = ?", (path,))
+                db.commit()
             mime = "image/png" if name.endswith(".png") else "image/jpeg"
             return FileResponse(
                 img_path, media_type=mime,
                 headers={"Cache-Control": "public, max-age=86400"},
             )
 
-    raise HTTPException(status_code=404, detail="No embedded art found")
+    db = _get_db()
+    row = db.get(path)
+    if row and row.get("art_available") is None:
+        db._conn.execute("UPDATE scanned SET art_available = 0 WHERE path = ?", (path,))
+        db.commit()
+    return Response(content=_NO_ART_PNG, media_type="image/png")
 
 
 @router.get("/library")
@@ -760,14 +800,13 @@ def library_search(
 
     if type == "albums":
         albums = db.all_albums(query=q.strip())
-        from urllib.parse import quote
         return {
             "albums": [
                 {
                     "name": a["album"],
                     "artist": a["artist"],
                     "track_count": a["track_count"],
-                    "cover_url": "/api/library/art?path=" + quote(a["cover_path"], safe=""),
+                    "cover_url": _local_cover_url(a.get("cover_path"), a.get("cover_art_available")),
                     "is_local": True,
                 }
                 for a in albums[:limit]
@@ -779,21 +818,23 @@ def library_search(
         assert db._conn
         like = f"%{q.strip()}%"
         rows = db._conn.execute(
-            """SELECT artist, COUNT(*) as track_count, COUNT(DISTINCT album) as album_count,
-                      MIN(path) as cover_path
-               FROM scanned
+            """SELECT s.artist, COUNT(*) as track_count, COUNT(DISTINCT album) as album_count,
+                      MIN(s.path) as cover_path,
+                      (SELECT s2.art_available FROM scanned s2
+                       WHERE s2.artist = s.artist AND s2.status != 'unreadable'
+                       ORDER BY s2.path ASC LIMIT 1) as cover_art_available
+               FROM scanned s
                WHERE artist LIKE ? AND status != 'unreadable'
                GROUP BY artist ORDER BY track_count DESC LIMIT ?""",
             (like, limit),
         ).fetchall()
-        from urllib.parse import quote
         return {
             "artists": [
                 {
                     "name": r["artist"],
                     "track_count": r["track_count"],
                     "album_count": r["album_count"],
-                    "cover_url": "/api/library/art?path=" + quote(r["cover_path"], safe=""),
+                    "cover_url": _local_cover_url(r["cover_path"], r["cover_art_available"]),
                     "is_local": True,
                 }
                 for r in rows
@@ -844,8 +885,6 @@ class FavoriteToggleRequest(BaseModel):
 @router.get("/library/favorites")
 def get_favorites():
     """Return all favorited tracks."""
-    from urllib.parse import quote
-
     db = _get_db()
     favs = db.all_favorites()
     total_duration = 0
@@ -870,7 +909,7 @@ def get_favorites():
             "is_local": f.get("path") is not None,
         }
         if entry["path"]:
-            entry["cover_url"] = "/api/library/art?path=" + quote(entry["path"], safe="")
+            entry["cover_url"] = _local_cover_url(entry["path"], f.get("scanned_art_available"))
         result.append(entry)
     return {"favorites": result, "total": len(result), "total_duration": total_duration}
 
