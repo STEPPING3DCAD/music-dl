@@ -33,6 +33,11 @@ class _FakeTidalSession:
         return self.logged_in
 
 
+class _UnavailableTidalSession:
+    def check_login(self) -> bool:
+        raise RuntimeError("Tidal session unavailable")
+
+
 class _FakeTidal:
     def __init__(self, logged_in: bool, access_token: str | None, username: str = ""):
         self.session = _FakeTidalSession(logged_in, username)
@@ -81,6 +86,17 @@ def test_auth_state_reports_expired_with_persisted_token_and_failed_session():
 
     assert resp.status_code == 200
     assert resp.json()["auth_state"] == "expired"
+
+
+def test_auth_state_reports_unavailable_when_tidal_status_check_fails():
+    tidal = _FakeTidal(logged_in=False, access_token="token")
+    tidal.session = _UnavailableTidalSession()
+    client = _make_auth_client(tidal)
+
+    resp = client.get("/api/auth/status", headers=_HOST_HEADER)
+
+    assert resp.status_code == 200
+    assert resp.json() == {"logged_in": False, "username": "", "auth_state": "unavailable"}
 
 
 def test_static_css_served():

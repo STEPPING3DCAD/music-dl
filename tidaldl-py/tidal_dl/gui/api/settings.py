@@ -142,8 +142,12 @@ def settings_status() -> dict:
 @router.get("/auth/status")
 def auth_status(tidal: Tidal = Depends(get_tidal_instance)) -> dict:
     """Return OAuth session status."""
-    logged_in = tidal.session.check_login()
     username = ""
+    try:
+        logged_in = tidal.session.check_login()
+    except Exception:
+        return {"logged_in": False, "username": username, "auth_state": "unavailable"}
+
     if logged_in:
         auth_state = "connected"
         try:
