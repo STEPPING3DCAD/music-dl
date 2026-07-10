@@ -1418,8 +1418,8 @@ async function triggerLogin() {
           _loginPoll = null;
           _dismissDeviceCodeModal();
           const msg = status.status === 'timeout'
-            ? 'Tidal login timed out — tap the status light to try again'
-            : 'Tidal login failed — tap the status light to try again';
+            ? 'Tidal login timed out. Try Connect Tidal again.'
+            : 'Tidal login failed. Try Connect Tidal again.';
           toast(msg, 'error');
           refreshStatusLights();
         }
@@ -1427,13 +1427,13 @@ async function triggerLogin() {
         clearInterval(_loginPoll);
         _loginPoll = null;
         _dismissDeviceCodeModal();
-        toast('Connection lost during login — tap the status light to retry', 'error');
+        toast('Connection lost during login. Try Connect Tidal again.', 'error');
         refreshStatusLights();
       }
     }, 3000);
   } catch (err) {
     console.error('[music-dl] login failed:', err);
-    toast('Could not start Tidal login — check your connection', 'error');
+    toast('Could not start Tidal login. Try Connect Tidal again.', 'error');
     refreshStatusLights();
   }
 }
@@ -1812,138 +1812,6 @@ function _teardownWizard() {
   const playerEl = document.querySelector('.player');
   if (appEl) appEl.style.display = '';
   if (playerEl) playerEl.style.display = '';
-}
-
-function _wizardStepLogin(wizard, setupData) {
-  while (wizard.firstChild) wizard.removeChild(wizard.firstChild);
-
-  // Check if we can at least access local music (offline mode)
-  const canPlayOffline = setupData.scan_paths_configured;
-
-  const card = h('div', { className: 'wizard-card' });
-
-  // Show offline-capable banner if applicable
-  if (canPlayOffline && !setupData.logged_in) {
-    const offlineBanner = h('div', { className: 'wizard-offline-banner' });
-    offlineBanner.innerHTML = '<strong>Offline mode available</strong><br>Your local music library is ready. Connect Tidal to stream online.';
-    card.appendChild(offlineBanner);
-  }
-
-  // Step indicator
-  card.appendChild(textEl('div', 'Connect Tidal for streaming (optional if you have local music)', 'wizard-step-label'));
-  card.appendChild(textEl('h2', 'Connect your Tidal account', 'wizard-title'));
-  card.appendChild(textEl('p', 'Sign in to stream and download from Tidal. You\'ll be given a code to enter on Tidal\'s website.', 'wizard-desc'));
-
-  const connectBtn = textEl('button', 'Connect to Tidal', 'wizard-btn');
-  const statusArea = h('div', { className: 'wizard-status' });
-
-  connectBtn.addEventListener('click', async () => {
-    connectBtn.disabled = true;
-    connectBtn.textContent = 'Starting...';
-    statusArea.textContent = '';
-
-    try {
-      const data = await api('/auth/login', { method: 'POST' });
-
-      if (data.status === 'already_logged_in') {
-        // Re-check setup and advance
-        const fresh = await fetch('/api/setup/status').then(r => r.json());
-        if (fresh.setup_complete) {
-          _teardownWizard();
-          _initApp();
-        } else {
-          _renderWizard(fresh);
-        }
-        return;
-      }
-
-      // Show device code
-      while (statusArea.firstChild) statusArea.removeChild(statusArea.firstChild);
-
-      const codeBox = h('div', { className: 'device-code' });
-      codeBox.appendChild(textEl('div', 'Go to the link below and enter this code:', 'device-code-label'));
-
-      const codeEl = h('div', { className: 'code' });
-      codeEl.textContent = data.user_code || '';
-      codeBox.appendChild(codeEl);
-
-      if (data.verification_uri) {
-        const linkEl = h('a', {
-          className: 'wizard-link',
-          href: data.verification_uri,
-          target: '_blank',
-          rel: 'noopener',
-        });
-        linkEl.textContent = data.verification_uri;
-        linkEl.addEventListener('click', e => { e.preventDefault(); _openExternal(data.verification_uri); });
-        codeBox.appendChild(linkEl);
-
-        // Also auto-open in browser
-        _openExternal(data.verification_uri);
-      }
-
-      statusArea.appendChild(codeBox);
-
-      const spinnerRow = h('div', { className: 'wizard-spinner-row' });
-      spinnerRow.appendChild(h('div', { className: 'spinner' }));
-      spinnerRow.appendChild(textEl('span', 'Waiting for you to confirm in browser...', 'wizard-waiting-text'));
-      statusArea.appendChild(spinnerRow);
-
-      connectBtn.textContent = 'Waiting...';
-
-      // Poll login status
-      const poll = setInterval(async () => {
-        try {
-          const status = await api('/auth/login/status');
-          if (status.status === 'success') {
-            clearInterval(poll);
-            // Re-check setup and advance
-            const fresh = await fetch('/api/setup/status').then(r => r.json());
-            if (fresh.setup_complete) {
-              _teardownWizard();
-              _initApp();
-            } else {
-              _renderWizard(fresh);
-            }
-          } else if (status.status === 'failed' || status.status === 'timeout') {
-            clearInterval(poll);
-            while (statusArea.firstChild) statusArea.removeChild(statusArea.firstChild);
-            const errMsg = status.status === 'timeout'
-              ? 'Login timed out. Please try again.'
-              : 'Login failed. Please try again.';
-            statusArea.appendChild(textEl('div', errMsg, 'wizard-error'));
-            connectBtn.disabled = false;
-            connectBtn.textContent = 'Retry';
-          }
-        } catch (_) {
-          clearInterval(poll);
-          statusArea.appendChild(textEl('div', 'Connection lost. Please try again.', 'wizard-error'));
-          connectBtn.disabled = false;
-          connectBtn.textContent = 'Retry';
-        }
-      }, 2000);
-
-    } catch (err) {
-      statusArea.appendChild(textEl('div', 'Failed to start login: ' + err.message, 'wizard-error'));
-      connectBtn.disabled = false;
-      connectBtn.textContent = 'Retry';
-    }
-  });
-
-  card.appendChild(connectBtn);
-  card.appendChild(statusArea);
-
-  // Add skip button for offline users
-  if (canPlayOffline) {
-    const skipBtn = textEl('button', 'Skip and use local library only', 'wizard-btn wizard-btn-secondary');
-    skipBtn.addEventListener('click', () => {
-      _teardownWizard();
-      _initApp();
-    });
-    card.appendChild(skipBtn);
-  }
-
-  wizard.appendChild(card);
 }
 
 function _wizardStepPaths(wizard) {

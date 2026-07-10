@@ -177,6 +177,25 @@ def test_static_js_offers_explicit_optional_tidal_connection_during_path_setup()
     assert "connectTidalBtn.addEventListener('click', () => triggerLogin());" in path_step_source
 
 
+def test_static_js_tidal_login_retry_copy_works_during_setup():
+    client = _make_client()
+    js = _fetch_gui_js(client)
+    login_source = js.split("async function triggerLogin() {")[1].split("// ---- QUEUE PANEL ----")[0]
+
+    assert "Tidal login timed out. Try Connect Tidal again." in login_source
+    assert "Tidal login failed. Try Connect Tidal again." in login_source
+    assert "Connection lost during login. Try Connect Tidal again." in login_source
+    assert "Could not start Tidal login. Try Connect Tidal again." in login_source
+    assert "tap the status light" not in login_source
+
+
+def test_static_js_removes_unreachable_wizard_login_step():
+    client = _make_client()
+    js = _fetch_gui_js(client)
+
+    assert "function _wizardStepLogin" not in js
+
+
 def test_static_js_shows_tidal_session_banner_only_for_expired_auth():
     client = _make_client()
     js = _fetch_gui_js(client)

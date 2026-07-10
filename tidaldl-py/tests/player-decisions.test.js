@@ -18,10 +18,11 @@ function loadDecisionHelpers() {
 }
 
 describe('player onboarding decisions', () => {
-  test('blocks setup when a logged-in account has no scan paths', () => {
+  test('blocks only when scan paths are missing', () => {
     const { _setupMustBlock } = loadDecisionHelpers();
 
     expect(_setupMustBlock({ logged_in: true, scan_paths_configured: false })).toBe(true);
+    expect(_setupMustBlock({ logged_in: false, scan_paths_configured: true })).toBe(false);
   });
 
   test('shows expired banner only for an expired auth state', () => {
