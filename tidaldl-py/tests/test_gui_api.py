@@ -1,4 +1,6 @@
 """Tests for the GUI API layer."""
+from types import SimpleNamespace
+
 from fastapi.testclient import TestClient
 
 from tests.gui_js_source import GUI_JS_FILES
@@ -22,12 +24,63 @@ def _make_client():
     return TestClient(create_app(port=_TEST_PORT))
 
 
+class _FakeTidalSession:
+    def __init__(self, logged_in: bool, username: str = ""):
+        self.logged_in = logged_in
+        self.user = SimpleNamespace(name=username)
+
+    def check_login(self) -> bool:
+        return self.logged_in
+
+
+class _FakeTidal:
+    def __init__(self, logged_in: bool, access_token: str | None, username: str = ""):
+        self.session = _FakeTidalSession(logged_in, username)
+        self.data = SimpleNamespace(access_token=access_token)
+
+
+def _make_auth_client(tidal: _FakeTidal) -> TestClient:
+    from tidal_dl.gui import create_app
+    from tidal_dl.gui.api.settings import get_tidal_instance
+
+    app = create_app(port=_TEST_PORT)
+    app.dependency_overrides[get_tidal_instance] = lambda: tidal
+    return TestClient(app)
+
+
 def test_app_factory_returns_fastapi_instance():
     client = _make_client()
     resp = client.get("/", headers=_HOST_HEADER)
     assert resp.status_code == 200
     assert "text/html" in resp.headers["content-type"]
     assert "csrf-token" in resp.text
+
+
+def test_auth_state_reports_connected_session():
+    client = _make_auth_client(_FakeTidal(logged_in=True, access_token="token", username="Ada"))
+
+    resp = client.get("/api/auth/status", headers=_HOST_HEADER)
+
+    assert resp.status_code == 200
+    assert resp.json() == {"logged_in": True, "username": "Ada", "auth_state": "connected"}
+
+
+def test_auth_state_reports_not_configured_without_persisted_token():
+    client = _make_auth_client(_FakeTidal(logged_in=False, access_token=None))
+
+    resp = client.get("/api/auth/status", headers=_HOST_HEADER)
+
+    assert resp.status_code == 200
+    assert resp.json()["auth_state"] == "not_configured"
+
+
+def test_auth_state_reports_expired_with_persisted_token_and_failed_session():
+    client = _make_auth_client(_FakeTidal(logged_in=False, access_token="expired-token"))
+
+    resp = client.get("/api/auth/status", headers=_HOST_HEADER)
+
+    assert resp.status_code == 200
+    assert resp.json()["auth_state"] == "expired"
 
 
 def test_static_css_served():

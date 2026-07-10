@@ -6,7 +6,7 @@ import os
 import threading
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from tidal_dl import __version__
@@ -140,18 +140,20 @@ def settings_status() -> dict:
 
 
 @router.get("/auth/status")
-def auth_status() -> dict:
+def auth_status(tidal: Tidal = Depends(get_tidal_instance)) -> dict:
     """Return OAuth session status."""
-    tidal = get_tidal_instance()
     logged_in = tidal.session.check_login()
     username = ""
     if logged_in:
+        auth_state = "connected"
         try:
             user = tidal.session.user
             username = getattr(user, "name", "") or ""
         except Exception:
             pass
-    return {"logged_in": logged_in, "username": username}
+    else:
+        auth_state = "expired" if tidal.data.access_token else "not_configured"
+    return {"logged_in": logged_in, "username": username, "auth_state": auth_state}
 
 
 _login_lock = threading.Lock()
