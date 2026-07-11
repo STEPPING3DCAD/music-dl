@@ -25,8 +25,10 @@ Extend existing ownership boundaries:
 - `Tidal.logout()` prepares a fresh session, removes the token file, then swaps
   session and token state as one successful operation instead of deleting the
   `session` attribute.
-- `gui/api/settings.py` exposes `POST /auth/reset`, increments an OAuth attempt
-  generation under the existing login lock, and returns the fixed local payload
+- `gui/api/settings.py` exposes `POST /auth/reset`. While holding the existing
+  login lock, it first completes `Tidal.logout()`. Only after that succeeds does
+  it increment the OAuth attempt generation and replace login state with exactly
+  `{"status": "idle"}`. It then returns the fixed local payload
   `{"status": "reset", "auth_state": "not_configured"}` without calling
   `check_login()` or another provider method.
 - Each OAuth worker captures its generation and verifies it under the login lock
@@ -48,6 +50,9 @@ existing Settings auth renderer.
   token model to replace current state.
 - Token-file deletion remains idempotent when no token exists.
 - Backend reset failure returns a clear HTTP 500 without starting OAuth.
+- Failed reset preserves OAuth generation and login state exactly. A pending
+  worker remains authoritative and can finish normally; reset never leaves a
+  login attempt permanently pending by invalidating its worker early.
 - Frontend failure keeps current status visible and shows an error toast.
 - Reset invalidates concurrent login completion with the OAuth generation guard;
   it does not depend on holding the login lock during the five-minute wait.
@@ -61,6 +66,9 @@ existing Settings auth renderer.
 - API tests use provider methods that fail on call and prove reset returns the
   fixed logged-out payload, clears login polling state, and invalidates a stale
   OAuth worker without making a provider request.
+- API failure-injection test starts from a pending login and proves failed reset
+  preserves generation and login state while its existing worker remains
+  authoritative.
 - Executable Bun tests cover the auth-state visibility matrix: connected,
   expired, and unavailable show Reset; not-configured does not. They also prove
   cancel sends nothing, confirm sends exactly one `POST /auth/reset`, success
