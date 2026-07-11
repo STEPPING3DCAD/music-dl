@@ -2176,6 +2176,7 @@ const LIBRARY_PAGE_SIZE = 50;
 const LIBRARY_ALBUM_BATCH_SIZE = 80;
 let libraryOffset = 0;
 let libraryTotal = 0;
+let libraryArtistTracks = [];
 let _libSearchTimer = null;
 let _libRequestId = 0;
 const _libraryAlbumCache = new Map();
@@ -2719,17 +2720,50 @@ async function loadLibraryAlbums(resultsArea, query) {
   }
 }
 
-async function loadLibraryArtistGrouped(resultsArea, query) {
+function _groupArtistTracks(tracks) {
+  const groups = [];
+  let currentArtist = null;
+  let currentGroup = null;
+
+  tracks.forEach(track => {
+    track.local_path = track.path;
+    const artist = track.artist || 'Unknown Artist';
+    if (artist !== currentArtist) {
+      currentArtist = artist;
+      currentGroup = { artist: artist, tracks: [] };
+      groups.push(currentGroup);
+    }
+    currentGroup.tracks.push(track);
+  });
+
+  groups.forEach(group => {
+    group.tracks.sort((a, b) => {
+      const albumCmp = (a.album || '').localeCompare(b.album || '');
+      if (albumCmp !== 0) return albumCmp;
+      return (a.track_number || 0) - (b.track_number || 0);
+    });
+  });
+
+  return groups;
+}
+
+async function loadLibraryArtistGrouped(resultsArea, query, append) {
   const reqId = ++_libRequestId;
-  while (resultsArea.firstChild) resultsArea.removeChild(resultsArea.firstChild);
-  resultsArea.appendChild(h('div', { className: 'skeleton-row' }));
+  if (!append) {
+    libraryOffset = 0;
+    libraryArtistTracks = [];
+    while (resultsArea.firstChild) resultsArea.removeChild(resultsArea.firstChild);
+    resultsArea.appendChild(h('div', { className: 'skeleton-row' }));
+  }
 
   try {
     // Keep first paint page-sized; rendering many track rows synchronously makes navigation feel stuck.
-    const data = await api('/library?sort=artist&limit=' + LIBRARY_PAGE_SIZE + '&offset=0' +
+    const data = await api('/library?sort=artist&limit=' + LIBRARY_PAGE_SIZE + '&offset=' + libraryOffset +
       (query ? '&q=' + encodeURIComponent(query) : ''));
     if (reqId !== _libRequestId) return;
-    const tracks = data.tracks || [];
+    const pageTracks = data.tracks || [];
+    libraryArtistTracks = append ? libraryArtistTracks.concat(pageTracks) : pageTracks;
+    const tracks = libraryArtistTracks;
 
     while (resultsArea.firstChild) resultsArea.removeChild(resultsArea.firstChild);
 
@@ -2749,29 +2783,7 @@ async function loadLibraryArtistGrouped(resultsArea, query) {
       return;
     }
 
-    // Group tracks by artist
-    const groups = [];
-    let currentArtist = null;
-    let currentGroup = null;
-    tracks.forEach(t => {
-      t.local_path = t.path;
-      const artist = t.artist || 'Unknown Artist';
-      if (artist !== currentArtist) {
-        currentArtist = artist;
-        currentGroup = { artist: artist, tracks: [] };
-        groups.push(currentGroup);
-      }
-      currentGroup.tracks.push(t);
-    });
-
-    // Sort tracks within each group by album, then track number
-    groups.forEach(g => {
-      g.tracks.sort((a, b) => {
-        const albumCmp = (a.album || '').localeCompare(b.album || '');
-        if (albumCmp !== 0) return albumCmp;
-        return (a.track_number || 0) - (b.track_number || 0);
-      });
-    });
+    const groups = _groupArtistTracks(tracks);
 
     // Update header with artist count
     const countEl = resultsArea.querySelector('.results-count');
@@ -2808,11 +2820,10 @@ async function loadLibraryArtistGrouped(resultsArea, query) {
         className: 'load-more pill active',
       });
       loadMore.textContent = 'Load more (' + ((data.total || 0) - tracks.length) + ' remaining)';
-      loadMore.addEventListener('click', async () => {
-        // Fall back to flat list for remaining tracks
+      loadMore.addEventListener('click', () => {
+        loadMore.disabled = true;
         libraryOffset = tracks.length;
-        loadMore.remove();
-        loadLibrary(resultsArea, true);
+        loadLibraryArtistGrouped(resultsArea, query, true);
       });
       resultsArea.appendChild(loadMore);
     }

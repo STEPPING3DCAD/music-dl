@@ -57,6 +57,61 @@ function loadPlayTrack(audio, state) {
   )(audio, state, noop, noop, noop, noop, noop, noop, noop, noop, noop, noop, noop);
 }
 
+function loadRepeatHandler(state) {
+  const section = playerSource
+    .split("btnRepeat.addEventListener('click', () => {")[1]
+    .split('\nfunction _updateRepeatIcon')[0];
+  const handlerBody = section.slice(0, section.lastIndexOf('});'));
+
+  if (!handlerBody) throw new Error('repeat handler not found');
+
+  const noop = () => {};
+  const btnRepeat = {
+    classList: { toggle: noop },
+    querySelector: () => null,
+    title: '',
+  };
+  return new Function(
+    'state',
+    'btnRepeat',
+    '_updateRepeatIcon',
+    '_saveQueue',
+    '_savePlayerPrefs',
+    `return () => {${handlerBody}};`,
+  )(state, btnRepeat, noop, noop, noop);
+}
+
+function loadPlayButtonHandler(audio, state, playTrack) {
+  const section = playerSource
+    .split("btnPlay.addEventListener('click', () => {")[1]
+    .split("\nbtnNext.addEventListener('click', () => {")[0];
+  const handlerBody = section.slice(0, section.lastIndexOf('});'));
+
+  if (!handlerBody) throw new Error('play button handler not found');
+
+  return new Function(
+    'audio',
+    'state',
+    'location',
+    'playTrack',
+    'updatePlayButton',
+    `return () => {${handlerBody}};`,
+  )(audio, state, { href: 'http://localhost/' }, playTrack, () => {});
+}
+
+function loadUpgradeQualityJump(qualityTitle) {
+  const helperSource = playerSource.match(
+    /function _upgradeQualityJump\(result\) \{[\s\S]*?\n\}/,
+  );
+
+  if (!helperSource) throw new Error('upgrade quality label helper not found');
+
+  return new Function(
+    'qualityTitle',
+    `${helperSource[0]}\nreturn _upgradeQualityJump;`,
+  )(qualityTitle);
+}
+
 describe('player onboarding decisions', () => {
   test('blocks only when scan paths are missing', () => {
     const { _setupMustBlock } = loadDecisionHelpers();
@@ -134,5 +189,59 @@ describe('local playback decisions', () => {
 
     expect(audio.src).toBe('/api/playback/local?path=%2Fmusic%2Flocal%20track.flac');
     expect(calls).toEqual(['pause', 'canplay', 'load']);
+  });
+
+  test('repeat one preserves the current queue and position', () => {
+    const queue = [{ name: 'First' }, { name: 'Current' }, { name: 'Last' }];
+    const state = { repeat: 'all', queue, queueIndex: 1 };
+    const toggleRepeat = loadRepeatHandler(state);
+
+    toggleRepeat();
+
+    expect(state.repeat).toBe('one');
+    expect(state.queue).toEqual(queue);
+    expect(state.queueIndex).toBe(1);
+  });
+
+  test('play starts a restored queue when no resume position supplied a source', () => {
+    const current = { name: 'Restored track', is_local: true };
+    const state = { playing: false, queue: [current], queueIndex: 0 };
+    const audio = {
+      src: '',
+      paused: true,
+      play: () => Promise.resolve(),
+      pause: () => {},
+    };
+    let startedTrack = null;
+    const clickPlay = loadPlayButtonHandler(audio, state, track => {
+      startedTrack = track;
+    });
+
+    clickPlay();
+
+    expect(startedTrack).toBe(current);
+  });
+
+  test('queue prevents removing the active track', () => {
+    expect(playerSource).toContain('remove.disabled = i === state.queueIndex;');
+  });
+
+  test('upgrade results keep distinct high-resolution quality descriptions', () => {
+    const qualityDescriptions = {
+      '44100Hz/24bit': '44100Hz/24bit · Hi-Res',
+      HI_RES_LOSSLESS: 'Hi-Res Lossless · 24-bit FLAC',
+    };
+    const qualityJump = loadUpgradeQualityJump(quality => qualityDescriptions[quality]);
+
+    expect(qualityJump({
+      current_quality: '44100Hz/24bit',
+      available_quality: 'HI_RES_LOSSLESS',
+    })).toBe('44100Hz/24bit · Hi-Res → Hi-Res Lossless · 24-bit FLAC');
+  });
+
+  test('remote stream failures do not auto-skip through more Tidal tracks', () => {
+    expect(playerSource).toContain('if (!current || !current.is_local) {');
+    expect(playerSource).toContain("toast('Tidal stream unavailable \\u2014 try again later', 'error');");
+    expect(playerSource).toContain('const canAutoSkip = state.queueIndex < state.queue.length - 1;');
   });
 });

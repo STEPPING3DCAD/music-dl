@@ -5,11 +5,13 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 from tests.gui_js_source import read_gui_js
 
 
-def test_queue_playback_errors_advance_to_next_track_without_dead_air():
+def test_local_errors_skip_but_remote_errors_stop_without_queue_traversal():
     source = read_gui_js()
 
+    assert "if (!current || !current.is_local) {" in source
+    assert "toast('Tidal stream unavailable \\u2014 try again later', 'error');" in source
     assert "toast(label + ' unavailable', 'error');" in source
-    assert "const canAutoSkip = current && state.queueIndex < state.queue.length - 1;" in source
+    assert "const canAutoSkip = state.queueIndex < state.queue.length - 1;" in source
     assert "setTimeout(() => { state.queueIndex++; playTrack(state.queue[state.queueIndex]); }, 800);" in source
 
 

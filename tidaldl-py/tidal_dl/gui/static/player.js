@@ -863,7 +863,11 @@ function highlightPlayingTrack() {
 
 // Transport controls
 btnPlay.addEventListener('click', () => {
-  if (!audio.src || audio.src === location.href) return;
+  if (!audio.src || audio.src === location.href) {
+    const current = state.queue[state.queueIndex];
+    if (current) playTrack(current);
+    return;
+  }
   if (state.playing) {
     audio.pause();
     state.playing = false;
@@ -908,14 +912,6 @@ btnRepeat.addEventListener('click', () => {
   else state.repeat = 'off';
   btnRepeat.classList.toggle('active', state.repeat !== 'off');
   _updateRepeatIcon(btnRepeat);
-  // Repeat-one: collapse queue to just the current track
-  if (state.repeat === 'one' && state.queue.length > 0) {
-    const current = state.queue[state.queueIndex];
-    if (current) {
-      state.queue = [current];
-      state.queueIndex = 0;
-    }
-  }
   _saveQueue();
   _savePlayerPrefs();
 });
@@ -988,14 +984,19 @@ audio.addEventListener('error', () => {
   state.playing = false;
   updatePlayButton();
   setWaveformPlaying(false);
-  _consecutiveErrors++;
   const current = state.queue[state.queueIndex];
+  if (!current || !current.is_local) {
+    _consecutiveErrors = 0;
+    toast('Tidal stream unavailable \u2014 try again later', 'error');
+    return;
+  }
+  _consecutiveErrors++;
   const label = current ? (current.name || 'Track') : 'Track';
   if (_consecutiveErrors >= 3) {
     toast('Multiple tracks failed \u2014 check your Tidal session', 'error');
     return;
   }
-  const canAutoSkip = current && state.queueIndex < state.queue.length - 1;
+  const canAutoSkip = state.queueIndex < state.queue.length - 1;
   toast(label + ' unavailable', 'error');
   if (canAutoSkip) {
     setTimeout(() => { state.queueIndex++; playTrack(state.queue[state.queueIndex]); }, 800);
@@ -1492,6 +1493,7 @@ function renderQueue() {
       'aria-label': 'Remove from queue',
     });
     remove.textContent = '\u00d7';
+    remove.disabled = i === state.queueIndex;
     remove.addEventListener('click', (e) => {
       e.stopPropagation();
       const removedTrack = state.queue[i];
@@ -1704,6 +1706,10 @@ async function renderUpgradeScanner(container) {
   viewEl._viewCleanup = () => { if (eventSource) { eventSource.close(); eventSource = null; } };
 }
 
+function _upgradeQualityJump(result) {
+  return qualityTitle(result.current_quality) + ' \u2192 ' + qualityTitle(result.available_quality);
+}
+
 function _renderScanResults(container, results) {
   if (!results.length) {
     container.appendChild(textEl('div', 'All tracks are at their best available quality.', 'upgrade-empty'));
@@ -1713,7 +1719,7 @@ function _renderScanResults(container, results) {
   // Group by quality jump
   const groups = {};
   results.forEach(r => {
-    const key = qualityLabel(r.current_quality) + ' \u2192 ' + qualityLabel(r.available_quality);
+    const key = _upgradeQualityJump(r);
     if (!groups[key]) groups[key] = [];
     groups[key].push(r);
   });
@@ -1747,7 +1753,7 @@ function _renderScanResults(container, results) {
       const row = h('div', { className: 'upgrade-row' });
       row.appendChild(textEl('span', t.title || '', 'upgrade-row-title'));
       row.appendChild(textEl('span', t.artist || '', 'upgrade-row-artist'));
-      row.appendChild(textEl('span', qualityLabel(t.current_quality) + ' \u2192 ' + qualityLabel(t.available_quality), 'upgrade-row-quality'));
+      row.appendChild(textEl('span', _upgradeQualityJump(t), 'upgrade-row-quality'));
       const upBtn = h('button', { className: 'pill small' });
       upBtn.textContent = 'Upgrade';
       upBtn.addEventListener('click', async () => {

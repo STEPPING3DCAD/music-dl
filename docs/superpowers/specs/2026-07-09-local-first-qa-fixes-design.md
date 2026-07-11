@@ -21,6 +21,17 @@ music and no Tidal account session.
    element uses `preload="none"`.
 8. Sibling artwork can be cached from filesystems that reject metadata or flag
    preservation.
+9. Repeat One loops the current track without deleting other queued tracks.
+10. A restored queue remains playable when no saved resume position supplied an
+    audio source.
+11. Queue editing cannot remove the active track and desynchronize playback
+    from queue state.
+12. Upgrade results preserve detailed source and destination quality labels so
+    distinct high-resolution tiers do not look identical.
+13. A failed Tidal stream stops after one request instead of rapidly skipping
+    through more remote tracks.
+14. Search, albums, playlists, and bot resolution use thread-local SQLite
+    connections under FastAPI worker threads.
 
 ## User Flow
 
@@ -116,6 +127,16 @@ SMB-backed libraries.
 - Selecting a local track calls `audio.load()` after the readiness listener is
   installed.
 - Sibling artwork still returns successfully when metadata copying is rejected.
+- Switching to Repeat One preserves queue order and the current queue index.
+- Pressing Play starts the restored current queue item when its audio source is
+  not initialized yet.
+- The active queue entry is not removable; upcoming entries remain removable.
+- Upgrade rows distinguish local 24-bit/44.1kHz audio from Tidal Hi-Res
+  Lossless instead of displaying `Hi-Res to Hi-Res`.
+- Remote stream failures show a provider-specific error without automatic
+  queue traversal; local unavailable files may still skip to the next file.
+- Shared GUI database access remains valid when consecutive requests run on
+  different worker threads.
 
 ## Validation
 
