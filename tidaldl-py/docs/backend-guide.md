@@ -38,7 +38,7 @@
 | `download.py` | Download orchestrator: stream fetch → segment merge → decrypt → tag → register |
 | `api.py` | Authenticated tidalapi client key handling |
 | `dash.py` | DASH manifest parser for `dash+xml` stream manifests |
-| `hifi_api.py` | Legacy stream-source client retained for compatibility; do not document it as a public user path |
+| `hifi_api.py` | Legacy stream-source client retained for compatibility; tracker discovery is cached for 60 seconds, status checks are passive, requests are serialized, and each host is tried once per operation |
 | `metadata.py` | Mutagen-based metadata writer for FLAC, MP3, and MP4 |
 | `constants.py` | Enums (`DownloadSource`, `MediaType`), quality maps, chunk sizes |
 | `gui/__init__.py` | FastAPI app factory: middleware stack, static files, CSRF injection |
@@ -471,6 +471,10 @@ All routes prefixed `/api`.
 | `GET` | `/playback/bot-stream/{token}` | Stream a signed bot playback handle |
 | `GET` | `/playback/waveform` | Return cached or generated waveform peaks |
 | `POST` | `/home/play` | Record play event |
+
+`GET /hifi/status` reports tracker-advertised streaming instances. It never
+fetches a track as a health probe. An empty tracker result remains empty rather
+than activating stale hard-coded fallback hosts.
 
 ### Collections
 

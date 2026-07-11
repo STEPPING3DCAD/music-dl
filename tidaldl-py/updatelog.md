@@ -20,6 +20,14 @@ uv tool install --from git+https://github.com/alfdav/music-dl.git#subdirectory=t
 
 ---
 
+## Unreleased
+
+- Made Hi-Fi discovery and status checks passive, cached tracker results for 60
+  seconds, and removed stale hard-coded fallback instances.
+- Serialized Hi-Fi requests across clients, limited rotation to one attempt per
+  host, and stopped immediately on authentication, authorization, or rate-limit
+  responses.
+
 ## v1.6.8 (2026-06-05)
 
 - Hardened upgrade queue handling by validating direct Tidal upgrade paths

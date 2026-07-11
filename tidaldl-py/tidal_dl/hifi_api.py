@@ -2,17 +2,15 @@ from __future__ import annotations
 
 import base64
 import json
+import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, ClassVar
 
 import requests
 
 from tidal_dl.constants import (
-    HIFI_API_FALLBACK_INSTANCES,
     HIFI_UPTIME_TRACKER_URLS,
-    QUALITY_PROBE_TRACK_ID,
     REQUESTS_TIMEOUT_SEC,
 )
 from tidal_dl.dash import parse_manifest
@@ -31,6 +29,11 @@ class HiFiStreamResult:
 
 
 class HiFiApiClient:
+    _discovery_cache: ClassVar[tuple[float, list[str]] | None] = None
+    _discovery_lock: ClassVar[threading.Lock] = threading.Lock()
+    _request_lock: ClassVar[threading.Lock] = threading.Lock()
+    _discovery_ttl_sec: ClassVar[int] = 60
+
     def __init__(
         self,
         instances: list[str] | None = None,
@@ -98,18 +101,34 @@ class HiFiApiClient:
         )
 
     def discover_instances(self) -> list[str]:
-        for tracker in HIFI_UPTIME_TRACKER_URLS:
-            try:
-                response = requests.get(tracker, timeout=self.timeout)
-                response.raise_for_status()
-                payload = response.json()
-                streaming = payload.get("streaming", [])
-                urls = [str(item.get("url", "")).strip().rstrip("/") for item in streaming if item.get("url")]
-                if urls:
-                    return urls
-            except requests.RequestException:
-                continue
-        return list(HIFI_API_FALLBACK_INSTANCES)
+        with self._discovery_lock:
+            now = time.monotonic()
+            cached = self._discovery_cache
+            if cached and now - cached[0] < self._discovery_ttl_sec:
+                return list(cached[1])
+
+            for tracker in HIFI_UPTIME_TRACKER_URLS:
+                try:
+                    response = requests.get(tracker, timeout=self.timeout)
+                    response.raise_for_status()
+                    payload = response.json()
+                    if not isinstance(payload, dict):
+                        continue
+                    streaming = payload.get("streaming", [])
+                    if not isinstance(streaming, list):
+                        continue
+                    urls = [
+                        str(item.get("url", "")).strip().rstrip("/")
+                        for item in streaming
+                        if isinstance(item, dict) and item.get("url")
+                    ]
+                    type(self)._discovery_cache = (now, urls)
+                    return list(urls)
+                except (requests.RequestException, ValueError):
+                    continue
+
+            type(self)._discovery_cache = (now, [])
+            return []
 
     def refresh_instances(self) -> list[str]:
         discovered = self.discover_instances()
@@ -137,23 +156,25 @@ class HiFiApiClient:
         return [inst for inst in self.instances if not self._is_instance_dead(inst)]
 
     def _request_with_rotation(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        with self._request_lock:
+            return self._request_once_per_instance(path, params)
+
+    def _request_once_per_instance(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         instances = self._iter_live_instances()
         if not instances:
             raise requests.RequestException("No live Hi-Fi API instances available.")
 
         last_error: Exception | None = None
         for instance in instances:
-            for attempt in range(3):
-                try:
-                    response = requests.get(f"{instance}{path}", params=params, timeout=self.timeout)
-                    response.raise_for_status()
-                    return response.json()
-                except (requests.Timeout, requests.ConnectionError, requests.HTTPError, ValueError) as exc:
-                    last_error = exc
-                    if attempt < 2:
-                        time.sleep(2**attempt)
-                        continue
-                    self._mark_instance_dead(instance)
+            try:
+                response = requests.get(f"{instance}{path}", params=params, timeout=self.timeout)
+                response.raise_for_status()
+                return response.json()
+            except (requests.Timeout, requests.ConnectionError, requests.HTTPError, ValueError) as exc:
+                last_error = exc
+                self._mark_instance_dead(instance)
+                response = getattr(exc, "response", None)
+                if response is not None and response.status_code in {401, 403, 429}:
                     break
         if last_error:
             raise requests.RequestException(str(last_error)) from last_error
@@ -164,32 +185,7 @@ class HiFiApiClient:
         return live[0] if live else None
 
     def live_instances(self) -> list[str]:
-        instances = self._iter_live_instances()
-        if not instances:
-            return []
-
-        def is_live(instance: str) -> bool:
-            try:
-                response = requests.get(
-                    f"{instance}/track/",
-                    params={"id": QUALITY_PROBE_TRACK_ID, "quality": "LOSSLESS"},
-                    timeout=self.timeout,
-                )
-                response.raise_for_status()
-                payload = response.json()
-                return isinstance(payload, dict) and isinstance(payload.get("data"), dict)
-            except (requests.RequestException, ValueError):
-                self._mark_instance_dead(instance)
-                return False
-
-        live: list[str] = []
-        with ThreadPoolExecutor(max_workers=min(len(instances), 8)) as executor:
-            futures = {executor.submit(is_live, instance): instance for instance in instances}
-            for future in as_completed(futures):
-                instance = futures[future]
-                if future.result():
-                    live.append(instance)
-        return [instance for instance in instances if instance in live]
+        return self._iter_live_instances()
 
     def track_info(self, track_id: int) -> dict[str, Any]:
         return self._request_with_rotation("/info/", params={"id": track_id})

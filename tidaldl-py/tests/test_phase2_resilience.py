@@ -1,10 +1,11 @@
 import base64
 import json
-import pathlib
+import threading
 import time
 import unittest.mock as mock
 
 import pytest
+import requests
 
 from tidal_dl.constants import DownloadSource, HIFI_QUALITY_MAP, MediaType
 from tidal_dl.config import Tidal
@@ -81,34 +82,110 @@ def test_hifi_client_circuit_breaker_ttl():
     assert client._is_instance_dead("https://a.invalid") is False
 
 
-def test_hifi_client_live_instances_require_track_payload(monkeypatch):
-    class Response:
-        def raise_for_status(self):
-            return None
-
-        def json(self):
-            return {"data": {"manifest": "abc"}}
-
-    monkeypatch.setattr("tidal_dl.hifi_api.requests.get", mock.Mock(return_value=Response()))
+def test_hifi_client_live_instances_use_passive_discovery(monkeypatch):
+    get = mock.Mock()
+    monkeypatch.setattr("tidal_dl.hifi_api.requests.get", get)
 
     client = HiFiApiClient(instances=["https://a.invalid"])
     assert client.live_instances() == ["https://a.invalid"]
     assert client.health_check() == "https://a.invalid"
+    get.assert_not_called()
 
 
-def test_hifi_client_live_instances_reject_html_placeholder(monkeypatch):
+def test_hifi_client_caches_empty_tracker_result_without_fallback(monkeypatch):
     class Response:
         def raise_for_status(self):
             return None
 
         def json(self):
-            raise ValueError("not json")
+            return {"streaming": []}
 
-    monkeypatch.setattr("tidal_dl.hifi_api.requests.get", mock.Mock(return_value=Response()))
+    get = mock.Mock(return_value=Response())
+    monkeypatch.setattr("tidal_dl.hifi_api.requests.get", get)
+    monkeypatch.setattr(HiFiApiClient, "_discovery_cache", None)
 
-    client = HiFiApiClient(instances=["https://a.invalid"])
-    assert client.live_instances() == []
-    assert HiFiApiClient(instances=["https://a.invalid"]).health_check() is None
+    assert HiFiApiClient().instances == []
+    assert HiFiApiClient().instances == []
+    assert get.call_count == 1
+
+
+def test_hifi_client_caches_malformed_tracker_results(monkeypatch):
+    class Response:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self.payload
+
+    get = mock.Mock(side_effect=[Response([]), Response({"streaming": ["invalid"]})])
+    monkeypatch.setattr("tidal_dl.hifi_api.requests.get", get)
+    monkeypatch.setattr(HiFiApiClient, "_discovery_cache", None)
+
+    assert HiFiApiClient().instances == []
+    assert HiFiApiClient().instances == []
+    assert get.call_count == 2
+
+
+def test_hifi_client_tries_each_instance_once(monkeypatch):
+    get = mock.Mock(side_effect=requests.ConnectionError("offline"))
+    monkeypatch.setattr("tidal_dl.hifi_api.requests.get", get)
+
+    client = HiFiApiClient(instances=["https://a.invalid", "https://b.invalid"])
+    with pytest.raises(requests.RequestException):
+        client.track_info(1)
+
+    assert get.call_count == 2
+
+
+def test_hifi_client_stops_rotation_on_rate_limit(monkeypatch):
+    response = requests.Response()
+    response.status_code = 429
+    error = requests.HTTPError("rate limited", response=response)
+    get = mock.Mock(side_effect=error)
+    monkeypatch.setattr("tidal_dl.hifi_api.requests.get", get)
+
+    client = HiFiApiClient(instances=["https://a.invalid", "https://b.invalid"])
+    with pytest.raises(requests.RequestException):
+        client.track_info(1)
+
+    assert get.call_count == 1
+
+
+def test_hifi_client_serializes_requests_across_clients(monkeypatch):
+    active = 0
+    max_active = 0
+    counter_lock = threading.Lock()
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"data": {"id": 1}}
+
+    def get(*args, **kwargs):
+        nonlocal active, max_active
+        with counter_lock:
+            active += 1
+            max_active = max(max_active, active)
+        time.sleep(0.05)
+        with counter_lock:
+            active -= 1
+        return Response()
+
+    monkeypatch.setattr("tidal_dl.hifi_api.requests.get", get)
+    clients = [HiFiApiClient(instances=["https://a.invalid"]) for _ in range(2)]
+    threads = [threading.Thread(target=client.track_info, args=(1,)) for client in clients]
+
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert max_active == 1
 
 
 def test_hifi_stream_manifest_adapter():

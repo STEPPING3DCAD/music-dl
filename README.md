@@ -457,6 +457,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the full development workflow.
 
 The GUI binds to `localhost` only — it is not accessible from other machines. CSRF protection is enabled for all write operations. The Docker image runs as a non-root user (UID 1000) and binds to localhost on the host side by default.
 
+Legacy Hi-Fi compatibility checks use cached uptime-tracker data and do not fetch tracks for health monitoring. Hi-Fi requests run one at a time, try each configured host once, and stop rotation on `401`, `403`, or `429` responses.
+
 Do not expose port 8765 to untrusted networks without adding your own authentication layer.
 
 ## License
