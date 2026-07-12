@@ -2614,31 +2614,6 @@ function _renderWebUpdaterSettings(container) {
   container.prepend(card);
 }
 
-// ---- TOKEN KEEPALIVE ----
-// Pings /auth/keepalive every 10 min while the window is visible so the token
-// never expires silently during idle periods.  Stops when the tab is hidden
-// and fires immediately + restarts the interval when it becomes visible again.
-let _keepaliveTimer = null;
-const _KEEPALIVE_MS = 10 * 60 * 1000; // 10 minutes
-
-function _keepaliveTick() {
-  api('/auth/keepalive', { method: 'POST' }).catch(() => {});
-}
-
-function _startKeepalive() {
-  if (_keepaliveTimer) return;
-  _keepaliveTick(); // immediate tick on visibility restore
-  _keepaliveTimer = setInterval(_keepaliveTick, _KEEPALIVE_MS);
-}
-
-function _stopKeepalive() {
-  if (_keepaliveTimer) { clearInterval(_keepaliveTimer); _keepaliveTimer = null; }
-}
-
-document.addEventListener('visibilitychange', () => {
-  if (document.hidden) _stopKeepalive(); else _startKeepalive();
-});
-
 async function _initApp() {
   // Load settings into state for upgrade quality checks
   api('/settings').then(s => { state.settings = s; }).catch(() => {});
@@ -2648,7 +2623,6 @@ async function _initApp() {
   _restorePosition();
   initUpdater();
   _checkWebUpdate();
-  _startKeepalive();
   await _syncRecentFromServer();
   navigate(normalizeView(location.hash.slice(1) || 'home'));
 }

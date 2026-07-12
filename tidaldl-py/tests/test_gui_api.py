@@ -1,4 +1,5 @@
 """Tests for the GUI API layer."""
+import time
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
@@ -30,7 +31,7 @@ class _FakeTidalSession:
         self.user = SimpleNamespace(name=username)
 
     def check_login(self) -> bool:
-        return self.logged_in
+        raise AssertionError("auth status called provider-backed check_login")
 
 
 class _UnavailableTidalSession:
@@ -39,9 +40,17 @@ class _UnavailableTidalSession:
 
 
 class _FakeTidal:
-    def __init__(self, logged_in: bool, access_token: str | None, username: str = ""):
+    def __init__(
+        self,
+        logged_in: bool,
+        access_token: str | None,
+        username: str = "",
+        expiry_time: object | None = None,
+    ):
         self.session = _FakeTidalSession(logged_in, username)
-        self.data = SimpleNamespace(access_token=access_token)
+        if expiry_time is None:
+            expiry_time = time.time() + 3600 if logged_in else time.time() - 60
+        self.data = SimpleNamespace(access_token=access_token, expiry_time=expiry_time)
 
 
 def _make_auth_client(tidal: _FakeTidal) -> TestClient:
@@ -89,8 +98,7 @@ def test_auth_state_reports_expired_with_persisted_token_and_failed_session():
 
 
 def test_auth_state_reports_unavailable_when_tidal_status_check_fails():
-    tidal = _FakeTidal(logged_in=False, access_token="token")
-    tidal.session = _UnavailableTidalSession()
+    tidal = _FakeTidal(logged_in=False, access_token="token", expiry_time=object())
     client = _make_auth_client(tidal)
 
     resp = client.get("/api/auth/status", headers=_HOST_HEADER)

@@ -37,6 +37,23 @@ class TestSetupStatus:
         expected = data["logged_in"] and data["scan_paths_configured"]
         assert data["setup_complete"] == expected
 
+    def test_status_uses_local_token_state_without_check_login(self):
+        import time
+        from types import SimpleNamespace
+
+        from tidal_dl.gui.api import setup as setup_api
+
+        tidal = SimpleNamespace(
+            data=SimpleNamespace(access_token="stored", expiry_time=time.time() + 3600),
+            session=SimpleNamespace(
+                user=SimpleNamespace(name="Ada"),
+                check_login=lambda: pytest.fail("setup called provider-backed check_login"),
+            ),
+        )
+        result = setup_api.setup_status(tidal)
+
+        assert result["logged_in"] is True
+
 
 class TestSetupValidatePath:
     def test_valid_existing_directory(self, client):

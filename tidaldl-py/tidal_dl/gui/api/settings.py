@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import threading
+import time
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -141,23 +142,28 @@ def settings_status() -> dict:
 
 @router.get("/auth/status")
 def auth_status(tidal: Tidal = Depends(get_tidal_instance)) -> dict:
-    """Return OAuth session status."""
+    """Return OAuth state from local token data without provider requests."""
+    return _local_auth_status(tidal)
+
+
+def _local_auth_status(tidal: Tidal) -> dict:
     username = ""
+    access_token = getattr(tidal.data, "access_token", None)
+    if not access_token:
+        return {"logged_in": False, "username": username, "auth_state": "not_configured"}
+
     try:
-        logged_in = tidal.session.check_login()
-    except Exception:
+        raw_expiry = getattr(tidal.data, "expiry_time", 0) or 0
+        expiry_time = raw_expiry.timestamp() if hasattr(raw_expiry, "timestamp") else float(raw_expiry)
+    except (TypeError, ValueError):
         return {"logged_in": False, "username": username, "auth_state": "unavailable"}
 
-    if logged_in:
-        auth_state = "connected"
-        try:
-            user = tidal.session.user
-            username = getattr(user, "name", "") or ""
-        except Exception:
-            pass
-    else:
-        auth_state = "expired" if tidal.data.access_token else "not_configured"
-    return {"logged_in": logged_in, "username": username, "auth_state": auth_state}
+    if expiry_time > 0 and expiry_time <= time.time():
+        return {"logged_in": False, "username": username, "auth_state": "expired"}
+
+    user = getattr(tidal.session, "user", None)
+    username = getattr(user, "name", "") or ""
+    return {"logged_in": True, "username": username, "auth_state": "connected"}
 
 
 _login_lock = threading.Lock()
@@ -233,15 +239,12 @@ def auth_login() -> dict:
 
 @router.post("/auth/keepalive")
 def auth_keepalive() -> dict:
-    """Proactively refresh the token if it's within 30 min of expiry.
+    """Refresh the token only when local expiry data says it is near expiry.
 
-    Called by the frontend heartbeat to prevent silent expiration during idle
-    periods.  Uses a wide refresh window (1800s) so the token stays fresh even
-    when the user isn't actively making API calls.
+    Retained for older clients. This avoids provider-backed login checks; current
+    clients rely on request middleware before explicit Tidal-facing actions.
     """
     tidal = get_tidal_instance()
-    if not tidal.session.check_login():
-        return {"refreshed": False, "reason": "not_logged_in"}
     try:
         refreshed = tidal._ensure_token_fresh(refresh_window_sec=1800)
         return {"refreshed": refreshed}

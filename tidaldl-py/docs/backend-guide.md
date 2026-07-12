@@ -440,8 +440,10 @@ All routes prefixed `/api`.
 | `POST` | `/setup/validate-path` | Check if path is safe and writable |
 | `GET` | `/settings` | Current settings as JSON |
 | `PATCH` | `/settings` | Update settings |
-| `POST` | `/settings/login` | Start OAuth device-code flow |
-| `GET` | `/settings/login-status` | Poll login progress |
+| `GET` | `/auth/status` | Report connected, expired, unavailable, or not-configured state from local token data |
+| `POST` | `/auth/login` | Start OAuth device-code flow |
+| `GET` | `/auth/login/status` | Poll login progress |
+| `POST` | `/auth/reset` | Delete local OAuth credentials and rebuild an unauthenticated session without contacting Tidal |
 
 ### Library
 
@@ -602,7 +604,7 @@ except (json.JSONDecodeError, KeyError):
 1. **Singletons are the API.** `Settings()`, `Tidal()`, `HandlingApp()` — call the class, get the instance. No dependency injection, no factories.
 2. **SQLite is the cache, not the source.** The filesystem is truth. The DB is a fast index over it. If the DB is lost, a scan rebuilds it.
 3. **Downloads never fail silently.** Every error broadcasts via SSE and logs. DB persistence failure must not prevent the broadcast.
-4. **Token refresh is opportunistic.** Middleware tries before Tidal-facing requests. Failure is not fatal — the request will surface the real error.
+4. **Token refresh is opportunistic.** Middleware checks local expiry before explicit Tidal-facing requests. The browser does not run a background keepalive, and failure is not fatal — the request will surface the real error.
 5. **Localhost only.** Server binds `127.0.0.1`. Host validation rejects everything else. No exceptions.
 6. **Migrations are additive.** `ALTER TABLE ADD COLUMN`. Never drop, rename, or restructure. Schema grows forward.
 7. **Config corruption is recoverable.** `.bak` fallback, tolerant deserialization, defaults for missing fields.

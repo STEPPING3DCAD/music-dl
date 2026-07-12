@@ -245,18 +245,18 @@ class TestLogoutReset:
     def test_logout_rebuilds_usable_unauthenticated_session(self, tidal):
         import certifi
 
-        from tidal_dl import api as tidal_api
-
         old_session, old_data = self._prepare(tidal)
+        key = {"valid": "True", "clientId": "managed-id", "clientSecret": "managed-secret"}
 
-        assert tidal.logout() is True
+        with patch("tidal_dl.config._api.getItem", return_value=key):
+            assert tidal.logout() is True
 
         assert tidal.session is not old_session
         assert tidal.data is not old_data
         assert tidal.session.check_login() is False
         assert tidal.session.config.item_limit == 10000
         assert tidal.session.request_session.verify == certifi.where()
-        assert tidal.session.config.client_id == tidal_api.getItem(0)["clientId"]
+        assert tidal.session.config.client_id == "managed-id"
         assert tidal.session.audio_quality == Quality.high_lossless
         assert tidal.session.video_quality == VideoQuality.high
         assert tidal.data.access_token is None

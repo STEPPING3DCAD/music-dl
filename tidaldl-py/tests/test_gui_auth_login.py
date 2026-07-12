@@ -126,3 +126,19 @@ def test_failed_reset_preserves_pending_login_generation_and_worker():
     settings_api._wait_for_login(tidal, _ImmediateFuture(), generation=11)
     assert tidal.calls == ["logout", "login_finalize"]
     assert settings_api._login_state == {"status": "success"}
+
+
+def test_auth_keepalive_uses_local_expiry_guard_without_check_login(monkeypatch):
+    from tidal_dl.gui.api import settings as settings_api
+
+    calls = []
+    tidal = SimpleNamespace(
+        session=SimpleNamespace(check_login=lambda: pytest.fail("keepalive called check_login")),
+        _ensure_token_fresh=lambda refresh_window_sec: calls.append(refresh_window_sec) or False,
+    )
+    monkeypatch.setattr(settings_api, "get_tidal_instance", lambda: tidal)
+
+    result = settings_api.auth_keepalive()
+
+    assert result == {"refreshed": False}
+    assert calls == [1800]

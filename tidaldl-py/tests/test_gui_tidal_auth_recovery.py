@@ -1,7 +1,3 @@
-from pathlib import Path
-
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
 from tests.gui_js_source import read_gui_js
 
 
@@ -42,3 +38,9 @@ def test_successful_login_acknowledges_and_clears_auth_banner():
     assert "if (data.status === 'already_logged_in') {" in source
     assert "await _handleLoginSuccess();" in source
     assert "if (status.status === 'success') {" in source
+
+
+def test_gui_does_not_send_background_tidal_keepalive_requests():
+    source = read_gui_js()
+
+    assert "/auth/keepalive" not in source
