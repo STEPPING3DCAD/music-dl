@@ -99,6 +99,27 @@ def test_auth_state_reports_unavailable_when_tidal_status_check_fails():
     assert resp.json() == {"logged_in": False, "username": "", "auth_state": "unavailable"}
 
 
+def test_auth_reset_endpoint_uses_local_logout_only(client):
+    from tidal_dl.gui.api.settings import get_tidal_instance
+
+    class ResetTidal:
+        def __init__(self):
+            self.calls = []
+
+        def logout(self):
+            self.calls.append("logout")
+            return True
+
+    tidal = ResetTidal()
+    client.app.dependency_overrides[get_tidal_instance] = lambda: tidal
+
+    resp = client.post("/api/auth/reset", headers=client._headers)
+
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "reset", "auth_state": "not_configured"}
+    assert tidal.calls == ["logout"]
+
+
 def test_static_css_served():
     client = _make_client()
     resp = client.get("/style.css", headers=_HOST_HEADER)
