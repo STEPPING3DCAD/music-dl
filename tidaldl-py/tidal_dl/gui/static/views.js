@@ -3923,27 +3923,57 @@ function renderSettings(container) {
   }
 }
 
+function _authStateCanReset(authState) {
+  return ['connected', 'expired', 'unavailable'].includes(authState);
+}
+
+async function _resetTidalConnection(container) {
+  if (!window.confirm('Reset the saved Tidal connection? You will need to log in again.')) return false;
+
+  try {
+    await api('/auth/reset', { method: 'POST' });
+    if (_loginPoll) {
+      clearInterval(_loginPoll);
+      _loginPoll = null;
+    }
+    _dismissDeviceCodeModal();
+    await loadAuthStatus(container);
+    await refreshStatusLights();
+    toast('Tidal connection reset', 'success');
+    return true;
+  } catch (_) {
+    toast('Could not reset Tidal connection', 'error');
+    return false;
+  }
+}
+
 async function loadAuthStatus(container) {
   try {
     const data = await api('/auth/status');
     while (container.firstChild) container.removeChild(container.firstChild);
+    container.appendChild(textEl('div', 'Tidal Account', 'settings-section-header'));
+    const row = h('div', { className: 'connection', style: { padding: '0 0 16px', gap: '12px' } });
     if (data.logged_in) {
       const dot = h('span', { className: 'connection-dot' });
-      container.appendChild(h('div', { className: 'connection', style: { padding: '0 0 16px' } },
-        dot,
-        document.createTextNode('Connected' + (data.username ? ' as ' + data.username : ''))
-      ));
+      row.appendChild(dot);
+      row.appendChild(document.createTextNode('Connected' + (data.username ? ' as ' + data.username : '')));
     } else {
       const dot = h('span', { className: 'connection-dot disconnected' });
-      const row = h('div', { className: 'connection', style: { padding: '0 0 16px', gap: '12px' } },
-        dot,
-        document.createTextNode('Not logged in to Tidal')
-      );
+      const statusText = data.auth_state === 'expired'
+        ? 'Tidal connection expired'
+        : data.auth_state === 'unavailable' ? 'Tidal connection unavailable' : 'Not logged in to Tidal';
+      row.appendChild(dot);
+      row.appendChild(document.createTextNode(statusText));
       const loginBtn = textEl('button', 'Log in to Tidal', 'banner-action');
       loginBtn.addEventListener('click', () => { triggerLogin(); });
       row.appendChild(loginBtn);
-      container.appendChild(row);
     }
+    if (_authStateCanReset(data.auth_state)) {
+      const resetBtn = textEl('button', 'Reset Tidal connection', 'banner-action');
+      resetBtn.addEventListener('click', () => { _resetTidalConnection(container); });
+      row.appendChild(resetBtn);
+    }
+    container.appendChild(row);
   } catch (_) {
     container.appendChild(textEl('div', 'Could not check auth status', 'track-artist'));
   }
