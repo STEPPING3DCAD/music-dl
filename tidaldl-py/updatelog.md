@@ -20,8 +20,7 @@ uv tool install --from git+https://github.com/alfdav/music-dl.git#subdirectory=t
 
 ---
 
-## Unreleased
-
+## v1.6.9 (2026-07-13)
 - Added a Settings action to reset stale Tidal credentials locally without
   restarting the app or automatically starting another OAuth request.
 - Removed browser-driven Tidal keepalive polling; token refresh now remains
