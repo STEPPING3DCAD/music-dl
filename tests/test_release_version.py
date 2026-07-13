@@ -30,6 +30,10 @@ def write_project(root: Path, *, version: str = "1.6.7", changelog: str | None =
         f'[package]\nname = "music-dl"\nversion = "{version}"\n',
         encoding="utf-8",
     )
+    (tauri_dir / "Cargo.lock").write_text(
+        f'[[package]]\nname = "music-dl"\nversion = "{version}"\n',
+        encoding="utf-8",
+    )
     (tauri_dir / "tauri.conf.json").write_text(
         json.dumps({"productName": "music-dl", "version": version}),
         encoding="utf-8",
@@ -80,6 +84,9 @@ def test_set_release_version_updates_metadata_and_changelog_without_lock(tmp_pat
     )
     assert 'version = "1.6.8"' in (
         tmp_path / "tidaldl-py" / "src-tauri" / "Cargo.toml"
+    ).read_text(encoding="utf-8")
+    assert 'version = "1.6.8"' in (
+        tmp_path / "tidaldl-py" / "src-tauri" / "Cargo.lock"
     ).read_text(encoding="utf-8")
     assert json.loads(
         (tmp_path / "tidaldl-py" / "src-tauri" / "tauri.conf.json").read_text(

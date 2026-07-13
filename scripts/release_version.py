@@ -12,6 +12,9 @@ from pathlib import Path
 
 SEMVER_RE = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
 VERSION_ASSIGNMENT_RE = re.compile(r'(?m)^(version\s*=\s*)"([^"]+)"')
+CARGO_LOCK_VERSION_RE = re.compile(
+    r'(?m)^(\[\[package\]\]\nname = "music-dl"\nversion = ")([^"]+)(")'
+)
 UNRELEASED_RE = re.compile(r"(?m)^## Unreleased\s*$")
 
 
@@ -19,6 +22,7 @@ UNRELEASED_RE = re.compile(r"(?m)^## Unreleased\s*$")
 class ReleaseFiles:
     pyproject: Path
     cargo_toml: Path
+    cargo_lock: Path
     tauri_conf: Path
     changelog: Path
 
@@ -27,6 +31,7 @@ def release_files(root: Path) -> ReleaseFiles:
     return ReleaseFiles(
         pyproject=root / "tidaldl-py" / "pyproject.toml",
         cargo_toml=root / "tidaldl-py" / "src-tauri" / "Cargo.toml",
+        cargo_lock=root / "tidaldl-py" / "src-tauri" / "Cargo.lock",
         tauri_conf=root / "tidaldl-py" / "src-tauri" / "tauri.conf.json",
         changelog=root / "tidaldl-py" / "updatelog.md",
     )
@@ -61,9 +66,14 @@ def read_toml_version(path: Path) -> str:
 def read_versions(root: Path) -> dict[str, str]:
     files = release_files(root)
     config = json.loads(files.tauri_conf.read_text(encoding="utf-8"))
+    cargo_lock = files.cargo_lock.read_text(encoding="utf-8")
+    cargo_lock_match = CARGO_LOCK_VERSION_RE.search(cargo_lock)
+    if not cargo_lock_match:
+        raise ValueError(f"Could not find music-dl package version in {files.cargo_lock}")
     return {
         str(files.pyproject): read_toml_version(files.pyproject),
         str(files.cargo_toml): read_toml_version(files.cargo_toml),
+        str(files.cargo_lock): cargo_lock_match.group(2),
         str(files.tauri_conf): str(config.get("version", "")),
     }
 
@@ -91,6 +101,14 @@ def replace_tauri_version(path: Path, version: str) -> None:
     config = json.loads(path.read_text(encoding="utf-8"))
     config["version"] = version
     path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+
+
+def replace_cargo_lock_version(path: Path, version: str) -> None:
+    text = path.read_text(encoding="utf-8")
+    updated, count = CARGO_LOCK_VERSION_RE.subn(rf'\g<1>{version}\g<3>', text, count=1)
+    if count != 1:
+        raise ValueError(f"Could not replace music-dl package version in {path}")
+    path.write_text(updated, encoding="utf-8")
 
 
 def update_changelog(path: Path, version: str, release_date: date) -> None:
@@ -145,6 +163,7 @@ def set_release_version(
     ensure_changelog_has_unreleased(files.changelog)
     replace_toml_version(files.pyproject, version)
     replace_toml_version(files.cargo_toml, version)
+    replace_cargo_lock_version(files.cargo_lock, version)
     replace_tauri_version(files.tauri_conf, version)
     update_changelog(files.changelog, version, release_date)
     if lock:
