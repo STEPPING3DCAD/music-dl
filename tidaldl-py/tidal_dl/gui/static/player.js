@@ -2524,9 +2524,14 @@ function _renderWebUpdaterPanel(container) {
 }
 
 function _checkWebUpdate() {
-  api('/settings/update-check').then(data => {
-    if (!data.update_available) return;
+  return api('/settings/update-check').then(data => {
     _updater.webUpdate = data;
+    if (!data.update_available) {
+      if (_updater.settingsEl && !_isTauri()) {
+        _renderWebUpdaterPanel(_updater.settingsEl);
+      }
+      return;
+    }
 
     // Badge on Settings nav
     const settingsNav = document.querySelector('[data-view="settings"]');

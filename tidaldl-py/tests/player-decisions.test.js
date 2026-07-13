@@ -112,6 +112,40 @@ function loadUpgradeQualityJump(qualityTitle) {
   )(qualityTitle);
 }
 
+function loadWebUpdateCheck(updater, response, renderPanel) {
+  const helperSource = playerSource.match(
+    /function _checkWebUpdate\(\) \{[\s\S]*?\n\}/,
+  );
+
+  if (!helperSource) throw new Error('Web update check helper not found');
+
+  const noop = () => {};
+  return new Function(
+    '_updater',
+    'api',
+    'document',
+    '_isTauri',
+    '_renderWebUpdaterPanel',
+    '_renderWebUpdaterSettings',
+    'h',
+    'textEl',
+    '_openExternal',
+    'toastSticky',
+    `${helperSource[0]}\nreturn _checkWebUpdate;`,
+  )(
+    updater,
+    () => Promise.resolve(response),
+    { querySelector: () => null },
+    () => false,
+    renderPanel,
+    noop,
+    noop,
+    noop,
+    noop,
+    noop,
+  );
+}
+
 describe('player onboarding decisions', () => {
   test('blocks only when scan paths are missing', () => {
     const { _setupMustBlock } = loadDecisionHelpers();
@@ -165,6 +199,27 @@ describe('player onboarding decisions', () => {
     await refreshSearch();
 
     expect(state.searchResults).toBeNull();
+  });
+});
+
+describe('web update decisions', () => {
+  test('keeps automatic no-update response so Settings shows current version', async () => {
+    const settingsEl = { id: 'settings-updater' };
+    const updater = { settingsEl, webUpdate: null };
+    const response = {
+      current_version: '1.6.9',
+      latest_version: '1.6.8',
+      update_available: false,
+    };
+    let renderedWith = null;
+    const check = loadWebUpdateCheck(updater, response, container => {
+      renderedWith = container;
+    });
+
+    await check();
+
+    expect(updater.webUpdate).toBe(response);
+    expect(renderedWith).toBe(settingsEl);
   });
 });
 
