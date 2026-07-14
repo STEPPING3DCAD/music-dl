@@ -60,7 +60,8 @@ tidaldl-py/tidal-gui.spec
 .claude/
 .claude/settings.local.json
 
-# Superpowers brainstorm artifacts
+# Local Superpowers artifacts. Accepted plans/specs are force-added when promoted
+# to project documentation; unpromoted working notes remain local.
 .superpowers/
 .checkpoint/
 .playwright/

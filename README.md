@@ -35,8 +35,8 @@
     cd tidaldl-py && uv sync && music-dl gui   # opens http://localhost:8765
 
   DESIGN:
-    Read DESIGN.md before UI work. Keep DESIGN.md, tidaldl-py/docs/design-system.md,
-    and tidaldl-py/tidal_dl/gui/static/style.css aligned.
+    Read tidaldl-py/docs/design-system.md before UI work and keep it aligned
+    with tidaldl-py/tidal_dl/gui/static/style.css.
 
   Repository: https://github.com/alfdav/music-dl
   License: Apache-2.0
@@ -72,9 +72,9 @@ STACK: Python 3.12+, FastAPI, vanilla JS, Tauri v2, Bun/discord.js for the optio
 REPO:  monorepo — Python app under tidaldl-py/, Discord bot under apps/discord-bot/.
 
 KEY PATHS:
-  DESIGN.md                         — agent-readable design tokens and visual identity contract
-  tidaldl-py/docs/design-system.md  — detailed UI component/layout/animation rules
-  tidaldl-py/tidal_dl/gui/static/{app.js,style.css,index.html} — frontend (no framework)
+  tidaldl-py/docs/design-system.md  — UI component/layout/animation rules
+  tidaldl-py/tidal_dl/gui/static/{api.js,views.js,player.js,routes.js} — frontend logic
+  tidaldl-py/tidal_dl/gui/static/{style.css,index.html} — frontend presentation and shell
   tidaldl-py/tidal_dl/gui/__init__.py    — FastAPI app factory
   tidaldl-py/tidal_dl/gui/api/           — all API routes
   tidaldl-py/tidal_dl/gui/security.py    — CSRF, path validation, host validation
@@ -82,8 +82,8 @@ KEY PATHS:
   apps/discord-bot/           — optional private Discord voice bot
 
 RULES:
-  - Audio: direct <audio src="..."> only. NO Web Audio API. Non-negotiable.
-  - Design: read DESIGN.md before UI work; keep it aligned with design-system.md and style.css.
+  - Audio: native <audio> playback only. NO Web Audio API. Lossless M4A may use a cached FLAC copy.
+  - Design: keep design-system.md and style.css aligned.
   - Security: localhost-only, CSRF on writes, path validation on file ops.
   - Tooling: uv over pip, bun over npm.
 ```
@@ -245,7 +245,7 @@ Your browser opens automatically. The wizard handles the rest.
 - **Home dashboard** — recent additions, recently played, top artists, genres, repeat listening stats, and Continue Listening resume
 - **Tidal search & download** — search the full Tidal catalog, see which tracks you already own, download what you're missing
 - **Quality upgrades** — re-download existing tracks at higher quality without duplicates
-- **Duplicate cleanup** — ISRC-based deduplication finds exact copies across your collection
+- **Duplicate cleanup** — canonical library reads collapse copies that share an ISRC or complete title, artist, album, and duration metadata
 - **In-browser playback** — play anything in your library with persisted queue, volume, repeat/shuffle preferences, keyboard shortcuts, and queue actions; browser-incompatible lossless M4A files use a cached FLAC playback copy without modifying the source
 - **Waveform visualizer** — pre-computed amplitude data drives a ripple animation from the playhead, zero audio post-processing
 - **Playlist sync** — point it at a Tidal playlist and it downloads only the tracks you don't have
@@ -268,7 +268,7 @@ music-dl cfg                    # view/edit settings
 music-dl login                  # authenticate with Tidal from the terminal
 music-dl logout                 # clear stored Tidal credentials
 music-dl sync                   # sync library database
-music-dl import <file>          # import a playlist from CSV/JSON
+music-dl import <file>          # import a playlist from CSV, TSV, or plain text
 music-dl isrc-tag <path>        # write ISRC tags to local audio files
 music-dl scan add <PATH>        # add and scan a local library directory
 music-dl dl_fav tracks --since 2026-01-01  # download favorite tracks incrementally
@@ -303,18 +303,17 @@ graph TD
     GUI["GUI · FastAPI<br/><code>gui/</code>"] --> Core
     Bot["Discord bot · Bun/discord.js<br/><code>apps/discord-bot</code>"] --> BotAPI["Bot API<br/><code>/api/bot/*</code>"]
     BotAPI --> Core
-    Core["config.py<br/>Settings · Tidal"] --> DB["library_db.py<br/>SQLite + WAL"]
-    Core --> DL["download.py<br/>Download class"]
+    Core["config.py<br/>Settings · Tidal"] --> DB["helper/library_db/<br/>SQLite + WAL"]
+    Core --> DL["download/<br/>Download class"]
     Tidal["Tidal API<br/>tidalapi"] --> DL
     DL --> Tag["mutagen<br/>tagging"]
 ```
 
-CLI, GUI, and the optional bot share the same backend core. CLI and GUI use the same singletons (`Settings`, `Tidal`, `LibraryDB`). The Discord bot stays thin: slash commands, queue state, and Discord voice transport live in Bun; source resolution, playable URLs, downloads, and auth stay in `music-dl`. The `<audio>` element plays files directly from source — no Web Audio API, no processing.
+CLI, GUI, and the optional bot share the same backend core. CLI and GUI use the same singletons (`Settings`, `Tidal`, `LibraryDB`). The Discord bot stays thin: slash commands, queue state, and Discord voice transport live in Bun; source resolution, playable URLs, downloads, and auth stay in `music-dl`. Browser playback uses the native `<audio>` element without Web Audio processing. Browser-incompatible lossless M4A files are converted once into a seekable cached FLAC copy; source files remain unchanged.
 
 For deep dives, see:
 
 - **[Backend Reference](tidaldl-py/docs/backend-guide.md)** — API routes, DB schema, download pipeline, middleware, security model
-- **[DESIGN.md](DESIGN.md)** — agent-readable design tokens and visual identity contract
 - **[Design System](tidaldl-py/docs/design-system.md)** — detailed UI component patterns, layout, and animation rules
 - **[Docker Guide](docker/README.md)** — detailed Docker usage, mounts, CLI commands, headless/cron
 

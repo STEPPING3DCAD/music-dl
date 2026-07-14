@@ -4,6 +4,10 @@
 
 **Goal:** Repair stale local metadata, remove excluded cache rows, classify actual codecs, and make every library read choose one deterministic best local copy.
 
+**Status:** Implemented in commit `8d4e103` and verified locally with the full
+Python and Bun suites. The unchecked steps below are preserved as the original
+execution plan, not as current outstanding work.
+
 **Architecture:** Extend the existing `LibraryDB` row schema and scanner. Store raw inspection facts on each row, reconcile stale rows without waveform work, and centralize canonical identity/preference helpers in the existing `library_db` package. Keep SQLite authoritative and keep playlist ordering intact.
 
 **Tech Stack:** Python 3.12+, SQLite/WAL, Mutagen, FastAPI, pytest, Bun tests, vanilla JavaScript.

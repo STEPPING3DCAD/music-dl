@@ -14,13 +14,13 @@
        └────────┬───────────┘                     │
                 │                                 │
         ┌───────▼────────┐               ┌────────▼────────┐
-        │  config.py     │               │  download.py    │
+        │  config.py     │               │  download/      │
         │  Settings()    │◄──────────────│  Download class │
         │  Tidal()       │               └────────┬────────┘
         └───────┬────────┘                        │
                 │                          ┌──────▼──────┐
         ┌───────▼────────┐                 │  mutagen    │
-        │  library_db.py │                 │  (tagging)  │
+        │  library_db/   │                 │  (tagging)  │
         │  SQLite + WAL  │                 └─────────────┘
         └────────────────┘
 ```
@@ -35,7 +35,7 @@
 |------|---------|
 | `cli.py` | Typer CLI — subcommands: `gui`, `dl`, `cfg`, `login`, `logout`, `sync`, `import`, `isrc-tag`, `source`, `scan`, `dl_fav` |
 | `config.py` | Singleton config: `Settings`, `Tidal`, `HandlingApp`. Token management, key rotation |
-| `download.py` | Download orchestrator: stream fetch → segment merge → decrypt → tag → register |
+| `download/` | Download package: collection orchestration, stream fetch, segment merge, decrypt, tag, duplicate handling, and library registration |
 | `api.py` | Authenticated tidalapi client key handling |
 | `dash.py` | DASH manifest parser for `dash+xml` stream manifests |
 | `hifi_api.py` | Legacy stream-source client retained for compatibility; tracker discovery is cached for 60 seconds, status checks are passive, requests are serialized, and each host is tried once per operation |
@@ -49,7 +49,7 @@
 | `gui/bot_onboarding.py` | Canonical Discord bot config paths and shared-token discovery |
 | `gui/bot_first_run.py` | `music-dl gui --setup-bot` dispatch and first-run hint |
 | `gui/services/` | Persisted download/upgrade job lifecycle primitives and worker service |
-| `helper/library_db.py` | SQLite wrapper: schema, migrations, CRUD, WAL mode |
+| `helper/library_db/` | SQLite package: connection lifecycle, schema migrations, canonical library reads, playback history, downloads, favorites, and caches |
 | `helper/path.py` | Config paths, download path templates, filename sanitization |
 | `helper/cache.py` | `TTLCache` — thread-safe in-memory cache with TTL expiry |
 | `helper/library_scanner.py` | Walk directories, extract ISRC from audio tags via mutagen |
@@ -61,7 +61,7 @@
 | `helper/decryption.py` | AES decryption for encrypted TIDAL streams |
 | `helper/exceptions.py` | Custom exception classes (`LoginError`, etc.) |
 | `helper/isrc_index.py` | Persistent thread-safe ISRC-to-path index for deduplication |
-| `helper/playlist_import.py` | Cross-platform playlist import (CSV/JSON) |
+| `helper/playlist_import.py` | Cross-platform playlist import (CSV, TSV, or plain text) |
 | `helper/wrapper.py` | Logger wrapper with optional debug traceback output |
 | `model/cfg.py` | `ModelSettings`, `ModelToken` dataclasses |
 | `model/downloader.py` | Download-related data models and state |
@@ -231,9 +231,14 @@ SQLite at `~/.config/music-dl/library.db`. WAL mode. 5-second busy timeout.
 | `duration` | INTEGER | Seconds |
 | `quality` | TEXT | `HI_RES_LOSSLESS`, `LOSSLESS`, etc. |
 | `format` | TEXT | `FLAC`, `MP3`, etc. |
+| `codec` | TEXT | Inspected stream codec such as `flac`, `alac`, `aac`, or `mp3` |
+| `metadata_complete` | INTEGER | Whether title, artist, and album were present in source tags |
 | `play_count` | INTEGER | Default 0 |
 | `last_played` | INTEGER | Unix timestamp |
 | `genre` | TEXT | |
+| `waveform` | TEXT | Cached compact waveform peaks as JSON |
+| `waveform_hires` | TEXT | Cached high-resolution waveform peaks as JSON |
+| `art_available` | INTEGER | Embedded or sibling artwork availability |
 | `scanned_at` | INTEGER | Unix timestamp |
 
 Indexes: `idx_scanned_status`, `idx_scanned_isrc`
@@ -327,18 +332,20 @@ Additive only. Runs on every `open()`:
 
 1. **v1 → v2**: Add `album`, `duration`, `quality`, `format` columns to `scanned`
 2. **v2 → v3**: Add `play_count`, `last_played`, `genre` to `scanned`
-3. **Late additions**: `cover_url`, `quality` columns on `download_history`
-4. **Download jobs**: Add `download_jobs` table and job lookup indexes
+3. **v3 → v4**: Add compact and high-resolution waveform caches
+4. **v4 → v5**: Add local artwork availability
+5. **v5 → v6**: Add inspected codec and raw-tag metadata completeness
+6. **Supporting tables**: Add download history/jobs, favorites, play events, images, quality probes, and library metadata as needed
 
 Pattern: check `PRAGMA table_info()`, `ALTER TABLE ADD COLUMN` if missing. Never destructive.
 
 ### Connection Patterns
 
-**LibraryDB class** (`helper/library_db.py`):
+**LibraryDB class** (`helper/library_db/`):
 ```python
 db = LibraryDB(path)
 db.open()                    # PRAGMA journal_mode=WAL, busy_timeout=5000
-db.upsert_track(...)         # INSERT OR REPLACE
+db.record(path, status="tagged", artist=artist, title=title, album=album)
 db.commit()
 db.close()
 ```
@@ -472,7 +479,12 @@ All routes prefixed `/api`.
 | `GET` | `/playback/stream/{track_id}` | Proxy a Tidal stream to browser |
 | `GET` | `/playback/bot-stream/{token}` | Stream a signed bot playback handle |
 | `GET` | `/playback/waveform` | Return cached or generated waveform peaks |
-| `POST` | `/home/play` | Record play event |
+
+Local playback normally serves the validated source file through `FileResponse`.
+When an M4A contains ALAC or FLAC that the browser cannot decode, the backend
+uses ffmpeg once to create a seekable FLAC copy under
+`$MUSIC_DL_CONFIG_DIR/playback_cache/`. Cache identity includes source path,
+modification time, and size. The source file is never modified.
 
 `GET /hifi/status` reports tracker-advertised streaming instances. It never
 fetches a track as a health probe. An empty tracker result remains empty rather
@@ -485,6 +497,7 @@ than activating stale hard-coded fallback hosts.
 | `GET` | `/playlists` | Tidal playlists with local match info |
 | `GET` | `/albums/{id}` | Album detail with track list |
 | `GET` | `/home` | Dashboard stats (top artists, genres, play counts) |
+| `POST` | `/home/play` | Record play event |
 | `GET` | `/duplicates/preview` | Find ISRC-based duplicates |
 | `POST` | `/duplicates/clean` | Remove duplicate files |
 | `GET` | `/upgrade/scan` | Find tracks upgradable to higher quality |

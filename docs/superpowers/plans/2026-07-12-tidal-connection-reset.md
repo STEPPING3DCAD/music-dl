@@ -4,6 +4,9 @@
 
 **Goal:** Add a Settings action that safely removes stored Tidal OAuth state and leaves the running app ready for an explicit future login.
 
+**Status:** Implemented and verified in v1.6.9. The unchecked steps below are
+preserved as the original execution plan, not as current outstanding work.
+
 **Architecture:** Extend `Tidal.logout()` for atomic same-process reset, then expose it through the existing Settings auth router with OAuth-generation invalidation. Keep UI behavior in the existing Settings renderer and test it through executable Bun helpers. Reset uses only local state and never starts OAuth or checks provider status.
 
 **Tech Stack:** Python 3.13, FastAPI, tidalapi, vanilla JavaScript, Bun test, pytest, Ruff.

@@ -32,16 +32,16 @@ Create a branch, make your changes, open a PR against `master`.
 
 - **Python 3.12+** — use modern syntax (`match`, `type X = ...`, `|` unions)
 - **uv** over pip — always
-- **No frameworks for the frontend** — vanilla JS, single `app.js` file
+- **No frontend framework** — vanilla JS split by responsibility across `api.js`, `views.js`, `player.js`, and `routes.js`
 - **Singletons** — `Settings()`, `Tidal()`, `LibraryDB()` are shared across CLI and GUI
 - **Path validation** — any endpoint that touches the filesystem must use `validate_audio_path()` or equivalent
 
 ### Frontend
 
 - **bun** over npm — always
-- **No build step** — `app.js`, `style.css`, and `index.html` are served directly
-- **No Web Audio API** — the `<audio>` element plays files from source, untouched. Quality is non-negotiable.
-- **CSS variables** for theming — keep [DESIGN.md](DESIGN.md), [design-system.md](tidaldl-py/docs/design-system.md), and `style.css` aligned
+- **No frontend build step** — JavaScript, `style.css`, and `index.html` are served directly
+- **No Web Audio API** — playback uses the native `<audio>` element. Lossless M4A may use a cached FLAC playback copy; source files remain untouched.
+- **CSS variables** for theming — keep [design-system.md](tidaldl-py/docs/design-system.md) and `style.css` aligned
 
 ### Packaging
 

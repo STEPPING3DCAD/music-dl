@@ -20,6 +20,18 @@ uv tool install --from git+https://github.com/alfdav/music-dl.git#subdirectory=t
 
 ---
 
+## Unreleased
+
+- Repaired cached local metadata and codec facts without regenerating waveforms.
+- Made Library, search, artist, album, and playlist reads choose one deterministic
+  best local copy while excluding recycle, trash, and staging folders.
+- Classified quality from the inspected codec so ALAC and FLAC in M4A remain
+  lossless while AAC remains lossy.
+- Added seekable cached FLAC playback for browser-incompatible lossless M4A files
+  without modifying source audio.
+- Restored the Home dashboard's all-time principal artist and two secondary
+  artist cards.
+
 ## v1.6.9 (2026-07-13)
 - Fixed update checks incorrectly offering an older published release to newer
   local or source builds, and made the current version appear without requiring
