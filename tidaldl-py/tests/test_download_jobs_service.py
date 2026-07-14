@@ -79,6 +79,48 @@ def test_service_enqueue_suppresses_duplicate_active_jobs(tmp_path):
     assert service.queue_state()["active_count"] == 1
 
 
+def test_scan_new_downloads_skips_excluded_paths_and_persists_inspection_facts(
+    tmp_path, monkeypatch
+):
+    from types import SimpleNamespace
+
+    from tidal_dl.gui.services.download_job_service import scan_new_downloads
+    from tidal_dl.helper.library_db import LibraryDB
+
+    active = tmp_path / "song.m4a"
+    excluded = tmp_path / "#recycle" / "song.m4a"
+    active.write_bytes(b"audio")
+    excluded.parent.mkdir()
+    excluded.write_bytes(b"audio")
+    monkeypatch.setattr(
+        "tidal_dl.gui.api.library._read_metadata",
+        lambda path: {
+            "name": "Song",
+            "artist": "Artist",
+            "album": "Album",
+            "duration": 180,
+            "isrc": "ABC",
+            "genre": "",
+            "quality": "44100Hz/16bit",
+            "format": "M4A",
+            "codec": "flac",
+            "metadata_complete": True,
+        },
+    )
+    db = LibraryDB(tmp_path / "library.db")
+    db.open()
+
+    scan_new_downloads(
+        db, SimpleNamespace(data=SimpleNamespace(download_base_path=str(tmp_path)))
+    )
+
+    assert db.get(str(excluded)) is None
+    row = db.get(str(active))
+    assert row["codec"] == "flac"
+    assert row["metadata_complete"] == 1
+    db.close()
+
+
 def test_service_startup_recovery_keeps_queued_and_interrupts_running(tmp_path):
     service = _service(tmp_path)
     service.enqueue_download([1, 2])

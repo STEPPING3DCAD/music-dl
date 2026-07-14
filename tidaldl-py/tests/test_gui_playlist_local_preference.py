@@ -1,7 +1,15 @@
 from types import SimpleNamespace
 
 
-def _fake_track(track_id=1, *, isrc="ISRC123", name="Song", artist="Artist", album="Album"):
+def _fake_track(
+    track_id=1,
+    *,
+    isrc="ISRC123",
+    name="Song",
+    artist="Artist",
+    album="Album",
+    duration=180,
+):
     album_obj = SimpleNamespace(id=99, name=album, image=lambda size: "cover-url")
     artist_obj = SimpleNamespace(name=artist)
     return SimpleNamespace(
@@ -10,7 +18,7 @@ def _fake_track(track_id=1, *, isrc="ISRC123", name="Song", artist="Artist", alb
         full_name=name,
         artists=[artist_obj],
         album=album_obj,
-        duration=180,
+        duration=duration,
         audio_quality="LOSSLESS",
         isrc=isrc,
         media_metadata_tags=[],
@@ -169,3 +177,151 @@ def test_playlist_sync_downloads_when_title_artist_match_is_ambiguous(monkeypatc
 
     assert result == {"status": "syncing", "missing": 1, "total": 1}
     assert queued == [9]
+
+
+def test_best_local_row_prefers_actual_lossless_codec_and_excludes_recycle():
+    from tidal_dl.gui.api import playlists as playlists_api
+
+    rows = [
+        {
+            "path": "/music/lossy.m4a",
+            "artist": "Artist",
+            "title": "Song",
+            "album": "Album",
+            "quality": "44100Hz/16bit",
+            "format": "M4A",
+            "codec": "aac",
+            "metadata_complete": True,
+        },
+        {
+            "path": "/music/lossless.m4a",
+            "artist": "Artist",
+            "title": "Song",
+            "album": "Album",
+            "quality": "44100Hz/16bit",
+            "format": "M4A",
+            "codec": "flac",
+            "metadata_complete": True,
+        },
+        {
+            "path": "/music/#recycle/hires.flac",
+            "artist": "Artist",
+            "title": "Song",
+            "album": "Album",
+            "quality": "192000Hz/24bit",
+            "format": "FLAC",
+            "codec": "flac",
+            "metadata_complete": True,
+        },
+    ]
+    db = _FakePlaylistDB({"ISRC123": rows})
+
+    selected = playlists_api._best_local_row(
+        {"isrc": "ISRC123", "name": "Song", "artist": "Artist", "album": "Album"},
+        db,
+        rows,
+    )
+
+    assert selected["path"] == "/music/lossless.m4a"
+
+
+def test_best_local_row_considers_exact_lossless_metadata_beyond_tidal_isrc():
+    from tidal_dl.gui.api import playlists as playlists_api
+
+    lossy = {
+        "path": "/music/lossy.m4a",
+        "artist": "Marco Barrientos",
+        "title": "Será Llena la Tierra",
+        "album": "Más de Ti",
+        "duration": 407,
+        "quality": "44100Hz/16bit",
+        "format": "M4A",
+        "codec": "aac",
+        "metadata_complete": True,
+    }
+    lossless = dict(lossy, path="/music/lossless.m4a", codec="alac")
+    rows = [lossy, lossless]
+    db = _FakePlaylistDB({"TIDAL-ISRC": [lossy]}, all_rows=rows)
+
+    selected = playlists_api._best_local_row(
+        {
+            "isrc": "TIDAL-ISRC",
+            "name": "Será Llena la Tierra",
+            "artist": "Marco Barrientos",
+            "album": "Más de Ti",
+            "duration": 407,
+        },
+        db,
+        rows,
+        fallback_index=playlists_api._build_title_artist_index(rows),
+    )
+
+    assert selected["path"] == "/music/lossless.m4a"
+
+
+def test_fallback_prefers_closest_duration_before_quality():
+    from tidal_dl.gui.api import playlists as playlists_api
+
+    rows = [
+        {
+            "path": "/music/hires.flac",
+            "artist": "Artist",
+            "title": "Song",
+            "album": "Album",
+            "duration": 175,
+            "quality": "192000Hz/24bit",
+            "codec": "flac",
+        },
+        {
+            "path": "/music/close.m4a",
+            "artist": "Artist",
+            "title": "Song",
+            "album": "Album",
+            "duration": 181,
+            "quality": "44100Hz/16bit",
+            "codec": "aac",
+        },
+    ]
+    db = _FakePlaylistDB({}, all_rows=rows)
+
+    selected = playlists_api._best_local_row(
+        {
+            "isrc": "",
+            "name": "Song",
+            "artist": "Artist",
+            "album": "Album",
+            "duration": 180,
+        },
+        db,
+        rows,
+        fallback_index=playlists_api._build_title_artist_index(rows),
+    )
+
+    assert selected["path"] == "/music/close.m4a"
+
+
+def test_playlist_keeps_repeated_entries_and_serializes_local_codec(
+    monkeypatch, clear_singletons
+):
+    from tidal_dl.gui.api import playlists as playlists_api
+
+    repeated = _fake_track()
+    session = SimpleNamespace(
+        check_login=lambda: True,
+        playlist=lambda playlist_id: SimpleNamespace(tracks=lambda: [repeated, repeated]),
+    )
+    row = {
+        "path": "/music/song.m4a",
+        "artist": "Artist",
+        "title": "Song",
+        "album": "Album",
+        "codec": "flac",
+    }
+    monkeypatch.setattr(playlists_api, "get_tidal_session", lambda: session)
+    _patch_playlist_library_db(monkeypatch, playlists_api, _FakePlaylistDB({"ISRC123": [row]}))
+    playlists_api._playlist_tracks_cache.clear()
+
+    data = playlists_api.playlist_tracks("pl-repeated")
+
+    assert data["total"] == 2
+    assert [track["codec"] for track in data["tracks"]] == ["flac", "flac"]

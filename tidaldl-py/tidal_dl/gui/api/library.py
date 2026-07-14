@@ -22,6 +22,7 @@ from mutagen import File as MutagenFile
 
 from tidal_dl.config import Settings
 from tidal_dl.helper.library_db import LibraryDB
+from tidal_dl.helper.library_db.utils import _is_excluded_library_path
 from tidal_dl.helper.path import path_config_base
 
 router = APIRouter()
@@ -166,6 +167,37 @@ def _trusted_library_path(path: str) -> Path | None:
         return None
 
 
+def _codec_family(info: object | None) -> str | None:
+    if info is None:
+        return None
+    value = getattr(info, "codec", None) or getattr(info, "codec_description", None)
+    if not value:
+        return None
+    codec = str(value).lower()
+    for family, markers in (
+        ("flac", ("flac",)),
+        ("alac", ("alac", "apple lossless")),
+        ("aac", ("aac", "mp4a")),
+        ("mp3", ("mp3", "mpeg layer iii", "mpeg-1 layer 3")),
+        ("opus", ("opus",)),
+        ("vorbis", ("vorbis",)),
+        ("pcm", ("pcm", "wave")),
+    ):
+        if any(marker in codec for marker in markers):
+            return family
+    return codec
+
+
+def _native_codec_from_extension(file_path: Path) -> str | None:
+    return {
+        ".flac": "flac",
+        ".mp3": "mp3",
+        ".aac": "aac",
+        ".ogg": "ogg",
+        ".wav": "pcm",
+    }.get(file_path.suffix.lower())
+
+
 def _read_metadata(file_path: Path) -> dict | None:
     try:
         # easy=True gives uniform tag keys across ID3, MP4, Vorbis, etc.
@@ -199,16 +231,22 @@ def _read_metadata(file_path: Path) -> dict | None:
                             isrc = str(val)
                         break
 
+        raw_title = _tag("title")
+        raw_artist = _tag("artist")
+        raw_album = _tag("album")
+
         return {
             "path": str(file_path),
-            "name": _tag("title", file_path.stem),
-            "artist": _tag("artist", "Unknown Artist"),
-            "album": _tag("album", "Unknown Album"),
+            "name": raw_title or file_path.stem,
+            "artist": raw_artist or "Unknown Artist",
+            "album": raw_album or "Unknown Album",
             "duration": round(audio.info.length) if audio.info else 0,
             "isrc": isrc,
             "genre": _normalize_genre(_tag("genre")),
             "quality": quality,
             "format": file_path.suffix[1:].upper(),
+            "codec": _codec_family(audio.info) or _native_codec_from_extension(file_path),
+            "metadata_complete": bool(raw_title and raw_artist and raw_album),
             "is_local": True,
         }
     except Exception:
@@ -252,6 +290,7 @@ def _db_row_to_track(row: dict) -> dict:
         "genre": row.get("genre") or "",
         "quality": row.get("quality") or p.suffix[1:].upper(),
         "format": row.get("format") or p.suffix[1:].upper(),
+        "codec": row.get("codec"),
         "cover_url": _local_cover_url(row["path"], row.get("art_available")),
         "play_count": row.get("play_count") or 0,
         "is_local": True,
@@ -373,6 +412,35 @@ def _migrate_volume_prefixes(db: LibraryDB, scan_dirs: list[Path]) -> None:
         print(f"[library] Volume prefix migration complete — {count} paths updated")
 
 
+def _reconcile_library_rows(db: LibraryDB, *, rescan: bool) -> int:
+    """Refresh cached metadata facts one row at a time without waveform work."""
+    repaired = 0
+    for row in db.metadata_repair_worklist(rescan=rescan):
+        file_path = Path(row["path"])
+        if not file_path.is_file():
+            continue
+        meta = _read_metadata(file_path)
+        if not meta:
+            continue
+        db.record(
+            row["path"],
+            status="tagged" if meta["isrc"] else "needs_isrc",
+            isrc=meta["isrc"] or None,
+            artist=meta["artist"],
+            title=meta["name"],
+            album=meta["album"],
+            duration=meta["duration"],
+            genre=meta.get("genre"),
+            quality=meta["quality"],
+            fmt=meta["format"],
+            codec=meta.get("codec"),
+            metadata_complete=meta.get("metadata_complete"),
+        )
+        db.commit()
+        repaired += 1
+    return repaired
+
+
 def _background_scan(rescan: bool) -> None:
     """Walk all configured dirs, read tags for unknown files, prune deleted ones."""
     global _scan_running, _scan_progress
@@ -394,6 +462,15 @@ def _background_scan(rescan: bool) -> None:
         if scan_dirs:
             _migrate_volume_prefixes(db, scan_dirs)
 
+        removed = db.prune_excluded_rows()
+        if removed:
+            db.commit()
+            print(f"[library] Removed {removed} excluded cache rows")
+
+        repaired = _reconcile_library_rows(db, rescan=rescan)
+        if repaired:
+            print(f"[library] Repaired metadata for {repaired} cached rows")
+
         # If no scan directories are reachable, skip scan entirely to preserve
         # the cached library data.  Without this guard the prune logic would
         # delete every row because disk_paths would be empty.
@@ -404,7 +481,7 @@ def _background_scan(rescan: bool) -> None:
             db.close()
             return
 
-        known = set() if rescan else db.complete_paths()
+        known = db.known_paths()
 
         # --- Fast-path: skip walk if nothing changed on disk ---
         import json as _json
@@ -430,7 +507,6 @@ def _background_scan(rescan: bool) -> None:
         with _scan_lock:
             _scan_progress = {"scanned": 0, "total": 0, "done": False}
         disk_paths: set[str] = set()
-        batch = 0
 
         if scan_dirs:
             # Phase 1: Walk filesystem — fast, just collect paths
@@ -439,6 +515,8 @@ def _background_scan(rescan: bool) -> None:
                     if f.is_symlink():  # symlink → arbitrary target recorded as trusted path (DB poisoning)
                         continue
                     if f.suffix.lower() not in _AUDIO_EXTENSIONS:
+                        continue
+                    if _is_excluded_library_path(f):
                         continue
                     disk_paths.add(str(f))
                     _scan_progress["total"] = len(disk_paths)
@@ -472,16 +550,15 @@ def _background_scan(rescan: bool) -> None:
                         genre=meta.get("genre"),
                         quality=meta["quality"],
                         fmt=meta["format"],
+                        codec=meta.get("codec"),
+                        metadata_complete=meta.get("metadata_complete"),
                         waveform=waveform_json,
                         waveform_hires=hires_json,
                         art_available=art_available,
                     )
                 else:
                     db.record(path_str, status="unreadable", art_available=art_available)
-                batch += 1
-                if batch >= 50:
-                    db.commit()
-                    batch = 0
+                db.commit()
                 _scan_progress["scanned"] += 1
 
             # Prune deleted files — with safety threshold for volume remounts
@@ -495,7 +572,7 @@ def _background_scan(rescan: bool) -> None:
                 for p in stale:
                     db.remove(p)
 
-            if batch > 0 or stale:
+            if stale:
                 db.commit()
 
         with _scan_lock:
@@ -820,19 +897,8 @@ def library_search(
         }
 
     if type == "artists":
-        assert db._conn
-        like = f"%{q.strip()}%"
-        rows = db._conn.execute(
-            """SELECT s.artist, COUNT(*) as track_count, COUNT(DISTINCT album) as album_count,
-                      MIN(s.path) as cover_path,
-                      (SELECT s2.art_available FROM scanned s2
-                       WHERE s2.artist = s.artist AND s2.status != 'unreadable'
-                       ORDER BY s2.path ASC LIMIT 1) as cover_art_available
-               FROM scanned s
-               WHERE artist LIKE ? AND status != 'unreadable'
-               GROUP BY artist ORDER BY track_count DESC LIMIT ?""",
-            (like, limit),
-        ).fetchall()
+        rows, total = db.artists_page(limit=limit, offset=0, query=q.strip())
+        rows.sort(key=lambda row: (-row["track_count"], row["artist"].casefold()))
         return {
             "artists": [
                 {
@@ -844,7 +910,7 @@ def library_search(
                 }
                 for r in rows
             ],
-            "total": len(rows),
+            "total": total,
         }
 
     return {"error": "Unknown type", "total": 0}
@@ -909,6 +975,8 @@ def get_favorites():
             "isrc": f.get("isrc") or "",
             "cover_url": f.get("cover_url") or "",
             "quality": quality,
+            "format": f.get("scanned_format") or "",
+            "codec": f.get("scanned_codec"),
             "duration": duration,
             "favorited_at": f["favorited_at"],
             "is_local": f.get("path") is not None,

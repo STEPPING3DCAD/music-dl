@@ -36,7 +36,7 @@ class PlaybackMixin:
         safe_offset = max(0, int(offset))
         rows = self._conn.execute(
             """SELECT s.path, s.isrc, s.artist, s.title, s.album, s.duration,
-                      s.quality, s.format, s.genre, s.play_count, s.last_played,
+                      s.quality, s.format, s.codec, s.genre, s.play_count, s.last_played,
                       s.art_available,
                       latest.played_at
                FROM (

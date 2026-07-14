@@ -45,6 +45,305 @@ class TestLibraryTracks:
             assert resp.status_code == 200, f"Failed for sort={sort}"
 
 
+class TestLocalMetadataFacts:
+    class _Info:
+        length = 181.2
+        sample_rate = 44100
+        bits_per_sample = 16
+
+        def __init__(self, codec):
+            self.codec = codec
+
+    class _Audio(dict):
+        def __init__(self, codec, tags):
+            super().__init__({key: [value] for key, value in tags.items()})
+            self.info = TestLocalMetadataFacts._Info(codec)
+            self.tags = self
+
+    @pytest.mark.parametrize(
+        ("codec_description", "expected"),
+        [("FLAC", "flac"), ("mp4a.40.2", "aac")],
+    )
+    def test_read_metadata_uses_stream_codec_not_m4a_container(
+        self, tmp_path, monkeypatch, codec_description, expected
+    ):
+        import tidal_dl.gui.api.library as library_api
+
+        audio = self._Audio(
+            codec_description,
+            {"title": "Song", "artist": "Artist", "album": "Album", "isrc": "ABC"},
+        )
+        monkeypatch.setattr(library_api, "MutagenFile", lambda *args, **kwargs: audio)
+
+        metadata = library_api._read_metadata(tmp_path / "song.m4a")
+
+        assert metadata["format"] == "M4A"
+        assert metadata["codec"] == expected
+        assert metadata["metadata_complete"] is True
+
+    def test_read_metadata_keeps_fallbacks_but_marks_missing_raw_tags_incomplete(
+        self, tmp_path, monkeypatch
+    ):
+        import tidal_dl.gui.api.library as library_api
+
+        audio = self._Audio("FLAC", {})
+        monkeypatch.setattr(library_api, "MutagenFile", lambda *args, **kwargs: audio)
+
+        metadata = library_api._read_metadata(tmp_path / "003. Song.m4a")
+
+        assert metadata["name"] == "003. Song"
+        assert metadata["artist"] == "Unknown Artist"
+        assert metadata["album"] == "Unknown Album"
+        assert metadata["metadata_complete"] is False
+
+    def test_read_metadata_uses_definitive_native_extension_when_info_has_no_codec(
+        self, tmp_path, monkeypatch
+    ):
+        import tidal_dl.gui.api.library as library_api
+
+        audio = self._Audio(
+            None, {"title": "Song", "artist": "Artist", "album": "Album"}
+        )
+        monkeypatch.setattr(library_api, "MutagenFile", lambda *args, **kwargs: audio)
+
+        metadata = library_api._read_metadata(tmp_path / "song.flac")
+
+        assert metadata["codec"] == "flac"
+
+    def test_db_row_serializes_codec(self):
+        import tidal_dl.gui.api.library as library_api
+
+        track = library_api._db_row_to_track(
+            {
+                "path": "/music/song.m4a",
+                "title": "Song",
+                "artist": "Artist",
+                "album": "Album",
+                "codec": "flac",
+            }
+        )
+
+        assert track["codec"] == "flac"
+
+    def test_favorites_serialize_local_format_and_codec(self, tmp_path, monkeypatch):
+        import tidal_dl.gui.api.library as library_api
+
+        db = LibraryDB(tmp_path / "library.db")
+        db.open()
+        db.record(
+            "/music/song.m4a",
+            status="tagged",
+            artist="Artist",
+            title="Song",
+            album="Album",
+            fmt="M4A",
+            codec="flac",
+        )
+        db.add_favorite(
+            path="/music/song.m4a", artist="Artist", title="Song", album="Album"
+        )
+        db.commit()
+        monkeypatch.setattr(library_api, "_get_db", lambda: db)
+
+        favorite = library_api.get_favorites()["favorites"][0]
+
+        assert favorite["format"] == "M4A"
+        assert favorite["codec"] == "flac"
+        db.close()
+
+    def test_reconciliation_repairs_each_existing_row_without_erasing_cached_data(
+        self, tmp_path, monkeypatch
+    ):
+        import tidal_dl.gui.api.library as library_api
+
+        first = tmp_path / "a.flac"
+        second = tmp_path / "b.flac"
+        first.write_bytes(b"audio")
+        second.write_bytes(b"audio")
+        db = LibraryDB(tmp_path / "library.db")
+        db.open()
+        for path in (first, second):
+            db.record(
+                str(path),
+                status="tagged",
+                artist="",
+                title="",
+                album="",
+                duration=180,
+                waveform="[0.1]",
+                waveform_hires="[0.2]",
+                art_available=True,
+            )
+        db.increment_play(str(first))
+        db.commit()
+        job_id = db.create_download_job_if_not_active(kind="download", track_id=99)
+        db.commit()
+
+        calls = []
+
+        def metadata(path):
+            calls.append(path)
+            if path == second:
+                observer = LibraryDB(tmp_path / "library.db")
+                observer.open()
+                try:
+                    assert observer.get(str(first))["metadata_complete"] == 1
+                    claimed = observer.claim_next_download_job()
+                    assert claimed["id"] == job_id
+                    observer.commit()
+                finally:
+                    observer.close()
+            return {
+                "name": path.stem,
+                "artist": "Artist",
+                "album": "Album",
+                "duration": 180,
+                "isrc": "",
+                "genre": "Rock",
+                "quality": "44100Hz/16bit",
+                "format": "FLAC",
+                "codec": "flac",
+                "metadata_complete": True,
+            }
+
+        monkeypatch.setattr(library_api, "_read_metadata", metadata)
+
+        repaired = library_api._reconcile_library_rows(db, rescan=False)
+
+        assert repaired == 2
+        row = db.get(str(first))
+        assert row["artist"] == "Artist"
+        assert row["codec"] == "flac"
+        assert row["waveform"] == "[0.1]"
+        assert row["waveform_hires"] == "[0.2]"
+        assert row["art_available"] == 1
+        assert row["play_count"] == 1
+        db.close()
+
+    def test_reconciliation_runs_before_matching_fingerprint_fast_path(
+        self, tmp_path, monkeypatch
+    ):
+        import json
+        import os
+
+        import tidal_dl.gui.api.library as library_api
+
+        library_dir = tmp_path / "music"
+        library_dir.mkdir()
+        track = library_dir / "song.flac"
+        track.write_bytes(b"audio")
+
+        class FakeSettings:
+            data = SimpleNamespace(
+                download_base_path=str(library_dir), scan_paths=""
+            )
+
+        db = LibraryDB(tmp_path / "library.db")
+        db.open()
+        db.record(
+            str(track),
+            status="tagged",
+            artist="",
+            title="",
+            album="",
+            duration=180,
+        )
+        fingerprint = json.dumps(
+            {
+                "dirs": [str(library_dir)],
+                "mtimes": [os.stat(library_dir).st_mtime],
+                "known_count": 1,
+            },
+            sort_keys=True,
+        )
+        db.set_meta("scan_fingerprint", fingerprint)
+        db.commit()
+        db.close()
+
+        monkeypatch.setattr(library_api, "Settings", FakeSettings)
+        monkeypatch.setattr(library_api, "path_config_base", lambda: str(tmp_path))
+        monkeypatch.setattr(
+            library_api,
+            "_read_metadata",
+            lambda path: {
+                "name": "Song",
+                "artist": "Artist",
+                "album": "Album",
+                "duration": 180,
+                "isrc": "",
+                "genre": "",
+                "quality": "44100Hz/16bit",
+                "format": "FLAC",
+                "codec": "flac",
+                "metadata_complete": True,
+            },
+        )
+        monkeypatch.setattr(
+            "tidal_dl.helper.waveform.extract_both",
+            lambda path: (_ for _ in ()).throw(AssertionError("waveform regenerated")),
+        )
+
+        library_api._background_scan(rescan=False)
+
+        db = LibraryDB(tmp_path / "library.db")
+        db.open()
+        try:
+            row = db.get(str(track))
+        finally:
+            db.close()
+        assert row["artist"] == "Artist"
+        assert row["metadata_complete"] == 1
+
+    def test_new_file_scan_commits_before_inspecting_next_file(
+        self, tmp_path, monkeypatch
+    ):
+        import tidal_dl.gui.api.library as library_api
+
+        library_dir = tmp_path / "music"
+        library_dir.mkdir()
+        for name in ("a.flac", "b.flac"):
+            (library_dir / name).write_bytes(b"audio")
+
+        class FakeSettings:
+            data = SimpleNamespace(
+                download_base_path=str(library_dir), scan_paths=""
+            )
+
+        calls = 0
+
+        def metadata(path):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                observer = LibraryDB(tmp_path / "library.db")
+                observer.open()
+                try:
+                    assert len(observer.all_tracks()) == 1
+                finally:
+                    observer.close()
+            return {
+                "name": path.stem,
+                "artist": "Artist",
+                "album": "Album",
+                "duration": 180,
+                "isrc": "",
+                "genre": "",
+                "quality": "44100Hz/16bit",
+                "format": "FLAC",
+                "codec": "flac",
+                "metadata_complete": True,
+            }
+
+        monkeypatch.setattr(library_api, "Settings", FakeSettings)
+        monkeypatch.setattr(library_api, "path_config_base", lambda: str(tmp_path))
+        monkeypatch.setattr(library_api, "_read_metadata", metadata)
+        monkeypatch.setattr("tidal_dl.helper.waveform.extract_both", lambda path: None)
+
+        library_api._background_scan(rescan=False)
+
+        assert calls == 2
+
+
 class TestLocalArtworkAvailability:
     def test_cached_art_for_unapproved_path_is_denied(self, tmp_path, monkeypatch, client):
         import tidal_dl.gui.api.library as library_api

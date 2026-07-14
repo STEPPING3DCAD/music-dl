@@ -11,6 +11,10 @@ from fastapi import APIRouter, HTTPException, Request
 from tidal_dl.config import Tidal
 from tidal_dl.gui.api.search import _serialize_track
 from tidal_dl.helper.library_db import LibraryDB
+from tidal_dl.helper.library_db.utils import (
+    _canonical_track_preference,
+    _is_excluded_library_path,
+)
 from tidal_dl.helper.path import path_config_base
 
 router = APIRouter()
@@ -69,36 +73,49 @@ def _best_local_row(
         candidates = db.tracks_by_isrc(isrc)
 
     target_album = _normalize(track_data.get("album"))
+    key = _title_artist_key(track_data.get("name"), track_data.get("artist"))
+    metadata_candidates: list[dict] = []
+    if key is not None:
+        if fallback_index is not None:
+            metadata_candidates = list(fallback_index.get(key, []))
+        else:
+            metadata_candidates = [
+                row for row in all_tracks
+                if _title_artist_key(row.get("title"), row.get("artist")) == key
+            ]
+        if target_album:
+            metadata_candidates = [
+                row for row in metadata_candidates
+                if _normalize(row.get("album")) == target_album
+            ]
 
-    if not candidates:
-        key = _title_artist_key(track_data.get("name"), track_data.get("artist"))
-        if key is not None:
-            if fallback_index is not None:
-                candidates = list(fallback_index.get(key, []))
-            else:
-                candidates = [
-                    row for row in all_tracks
-                    if _title_artist_key(row.get("title"), row.get("artist")) == key
-                ]
-
-            if len(candidates) > 1 and target_album:
-                album_matches = [
-                    row for row in candidates
-                    if _normalize(row.get("album")) == target_album
-                ]
-                if album_matches:
-                    candidates = album_matches
-                else:
-                    return None
+    if not candidates and not metadata_candidates:
+        return None
+    candidates.extend(metadata_candidates)
+    candidates = list({row.get("path"): row for row in candidates}.values())
 
     if not candidates:
         return None
 
-    candidates.sort(key=lambda row: (
-        0 if _normalize(row.get("album")) == target_album else 1,
-        len(row.get("path") or ""),
-        row.get("path") or "",
-    ))
+    candidates = [row for row in candidates if not _is_excluded_library_path(row)]
+    if not candidates:
+        return None
+
+    target_duration = track_data.get("duration")
+    use_duration = target_duration is not None
+
+    def preference(row: dict) -> tuple:
+        album_rank = 0 if _normalize(row.get("album")) == target_album else 1
+        if use_duration:
+            try:
+                duration_rank = abs(float(row.get("duration") or 0) - float(target_duration))
+            except (TypeError, ValueError):
+                duration_rank = float("inf")
+        else:
+            duration_rank = 0
+        return (album_rank, duration_rank, *_canonical_track_preference(row))
+
+    candidates.sort(key=preference)
     return candidates[0]
 
 
@@ -127,6 +144,7 @@ def _serialize_playlist_tracks(session, playlist_id: str) -> list[dict]:
                     data["quality"] = local_row["quality"]
                 if local_row.get("format"):
                     data["format"] = local_row["format"]
+                data["codec"] = local_row.get("codec")
             serialized.append(data)
     finally:
         db.close()

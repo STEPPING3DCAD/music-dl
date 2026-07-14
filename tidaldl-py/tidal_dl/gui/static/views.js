@@ -108,6 +108,13 @@ if (navSyncBtn) {
 }
 
 // ---- HOME VIEW ----
+function _homeArtistSelection(data) {
+  return {
+    hero: data.top_artist || null,
+    secondary: (data.top_artists || []).slice(1, 3),
+  };
+}
+
 async function renderHome(container) {
   const wrap = h('div', { className: 'home-wrap home-loading' });
 
@@ -145,12 +152,13 @@ async function renderHome(container) {
   const totalPlays = data.total_plays || 0;
 
   // Count how many tiles will render to determine density
+  const homeArtists = _homeArtistSelection(data);
   let tileCount = 0;
-  if (data.top_artist && data.top_artist.play_count >= 5) tileCount++;
+  if (homeArtists.hero && homeArtists.hero.play_count >= 5) tileCount++;
   if (data.most_replayed && data.most_replayed.play_count >= 10) tileCount++;
   if (data.genre_breakdown && data.genre_breakdown.length > 0) tileCount++;
   if (data.weekly_activity && data.weekly_activity.some(v => v > 0)) tileCount++;
-  const extraArtistCount = (data.top_artists || []).slice(1, 3).filter(a => a.play_count >= 3).length;
+  const extraArtistCount = homeArtists.secondary.filter(a => a.play_count >= 3).length;
   tileCount += extraArtistCount;
   if (totalPlays >= 100 || data.track_count > 0) tileCount++;
   if (totalPlays >= 100 || data.album_count > 0) tileCount++;
@@ -289,8 +297,8 @@ function _renderHomeGrid(container, data, totalPlays) {
   function _t(tile, tier) { tile.dataset.tier = tier; return tile; }
 
   // === Core tiles (always visible) ===
-  // Prefer this_week artist data when available
-  const heroArtist = hasRecent && tw.top_artist ? tw.top_artist : data.top_artist;
+  const homeArtists = _homeArtistSelection(data);
+  const heroArtist = homeArtists.hero;
   if (heroArtist && heroArtist.play_count >= 5) {
     grid.appendChild(_artistTile(heroArtist, true));
   }
@@ -321,10 +329,7 @@ function _renderHomeGrid(container, data, totalPlays) {
   }
 
   // === Secondary tiles (tier 1 — hidden on compact) ===
-  const allTimeExtra = (data.top_artists || []).slice(1, 3);
-  const recentExtra = hasRecent ? (tw.top_artists || []).slice(1, 3) : [];
-  const extraArtists = recentExtra.length > 0 ? recentExtra : allTimeExtra;
-  for (const a of extraArtists) {
+  for (const a of homeArtists.secondary) {
     if (a.play_count >= 3) {
       grid.appendChild(_t(_artistTile(a, false), 1));
     }
@@ -1322,8 +1327,8 @@ function renderTrackRow(track, num, allTracks) {
   row.appendChild(albumCell);
 
   // Quality
-  const qTag = textEl('div', qualityLabel(track.quality, track.format), 'quality-tag ' + qualityClass(track.quality, track.format));
-  qTag.title = qualityTitle(track.quality, track.format);
+  const qTag = textEl('div', qualityLabel(track.quality, track.format, track.codec), 'quality-tag ' + qualityClass(track.quality, track.format, track.codec));
+  qTag.title = qualityTitle(track.quality, track.format, track.codec);
   row.appendChild(qTag);
 
   // Format
@@ -1408,7 +1413,7 @@ function renderTrackRow(track, num, allTracks) {
         ...(() => {
           if (!track.isrc) return [];
           const targetRank = { 'HI_RES': 3, 'HI_RES_LOSSLESS': 4 }[state.settings?.upgrade_target_quality] || 4;
-          if (qualityRank(track.quality, track.format) >= targetRank) return [];
+          if (qualityRank(track.quality, track.format, track.codec) >= targetRank) return [];
           return [{ label: 'Upgrade Quality', icon: 'download', action: () => upgradeTrack(track) }];
         })(),
         'sep',
@@ -1672,7 +1677,7 @@ async function renderLocalAlbumDetail(container, artistName, albumName) {
 
       // Upgrade check — show button if any tracks are below target quality
       const _targetRank = { 'HI_RES': 3, 'HI_RES_LOSSLESS': 4 }[state.settings?.upgrade_target_quality] || 4;
-      const belowTarget = tracks.filter(t => qualityRank(t.quality, t.format) < _targetRank);
+      const belowTarget = tracks.filter(t => qualityRank(t.quality, t.format, t.codec) < _targetRank);
       const withIsrc = belowTarget.filter(t => t.isrc);
       const noIsrc = belowTarget.filter(t => !t.isrc);
 
@@ -1694,7 +1699,7 @@ async function renderLocalAlbumDetail(container, artistName, albumName) {
                 const row = trackList.querySelector('[data-track-id="' + _trackKey(mt) + '"]');
                 if (!row) return;
                 const ex = row.querySelector('.upgrade-badge'); if (ex) ex.remove();
-                const localRank = qualityRank(mt.quality, mt.format);
+                const localRank = qualityRank(mt.quality, mt.format, mt.codec);
                 const probeRank = _qRank[r.max_quality] || 0;
                 if (r.tidal_track_id && probeRank > localRank) {
                   const b = h('span', { className: 'upgrade-badge' }); b.textContent = '\u2B06 ' + qualityLabel(r.max_quality);
@@ -1716,7 +1721,7 @@ async function renderLocalAlbumDetail(container, artistName, albumName) {
                 const row = trackList.querySelector('[data-track-id="' + _trackKey(mt) + '"]');
                 if (!row) return;
                 const ex = row.querySelector('.upgrade-badge'); if (ex) ex.remove();
-                const mtLocalRank = qualityRank(mt.quality, mt.format);
+                const mtLocalRank = qualityRank(mt.quality, mt.format, mt.codec);
                 const mtProbeRank = _qRank[r.max_quality] || 0;
                 if (r.tidal_track_id && mtProbeRank > mtLocalRank) {
                   const b = h('span', { className: 'upgrade-badge' }); b.textContent = '\u2B06 ' + qualityLabel(r.max_quality);

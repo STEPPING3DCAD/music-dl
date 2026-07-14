@@ -44,12 +44,32 @@ def _normalize_track_text(value: str | None) -> str:
     return (value or "").strip().casefold()
 
 
-def _local_quality_rank(quality: str | None, fmt: str | None) -> int:
-    if not quality:
-        return 0
+_EXCLUDED_LIBRARY_COMPONENTS = {
+    "#recycle",
+    ".trash",
+    ".trashes",
+    "undo-staging",
+}
 
-    if fmt and fmt.upper() in {"MP3", "AAC", "OGG", "M4A"}:
+
+def _is_excluded_library_path(row_or_path: dict | str | pathlib.Path) -> bool:
+    path = row_or_path.get("path", "") if isinstance(row_or_path, dict) else row_or_path
+    components = str(path).replace("\\", "/").split("/")
+    return any(part.casefold() in _EXCLUDED_LIBRARY_COMPONENTS for part in components)
+
+
+def _local_quality_rank(
+    quality: str | None,
+    fmt: str | None,
+    codec: str | None = None,
+) -> int:
+    codec_family = (codec or "").casefold()
+    if codec_family in {"aac", "mp3", "ogg", "opus", "vorbis"}:
         return 1
+    if not codec and fmt and fmt.upper() in {"MP3", "AAC", "OGG", "M4A"}:
+        return 1
+    if not quality:
+        return 2 if codec_family in {"flac", "alac", "pcm"} else 0
 
     direct = {
         "LOW": 0,
@@ -92,11 +112,90 @@ def _album_track_key(row: dict) -> tuple[str, str]:
 def _album_track_preference(row: dict) -> tuple[int, int, int, str]:
     path = row.get("path") or ""
     return (
-        -_local_quality_rank(row.get("quality"), row.get("format")),
+        -_local_quality_rank(
+            row.get("quality"), row.get("format"), row.get("codec")
+        ),
         _path_suffix_rank(path),
         len(path),
         path,
     )
+
+
+def _metadata_is_complete(row: dict) -> bool:
+    explicit = row.get("metadata_complete")
+    if explicit is not None:
+        return bool(explicit)
+    values = [
+        _normalize_track_text(row.get("title")),
+        _normalize_track_text(row.get("artist")),
+        _normalize_track_text(row.get("album")),
+    ]
+    return all(values) and values[1] != "unknown artist" and values[2] != "unknown album"
+
+
+def _metadata_track_identity(row: dict) -> tuple | None:
+    if not _metadata_is_complete(row):
+        return None
+    try:
+        duration = int(round(float(row.get("duration") or 0)))
+    except (TypeError, ValueError):
+        duration = 0
+    return (
+        "metadata",
+        _normalize_track_text(row.get("title")),
+        _normalize_track_text(row.get("artist")),
+        _normalize_track_text(row.get("album")),
+        duration,
+    )
+
+
+def _canonical_track_identity(row: dict) -> tuple:
+    isrc = _normalize_track_text(row.get("isrc"))
+    if isrc:
+        return ("isrc", isrc)
+    metadata_identity = _metadata_track_identity(row)
+    if metadata_identity:
+        return metadata_identity
+    return ("path", row.get("path") or "")
+
+
+def _canonical_track_preference(row: dict) -> tuple[int, int, int, int, int, str]:
+    path = row.get("path") or ""
+    return (
+        int(_is_excluded_library_path(row)),
+        int(not _metadata_is_complete(row)),
+        -_local_quality_rank(
+            row.get("quality"), row.get("format"), row.get("codec")
+        ),
+        _path_suffix_rank(path),
+        len(path),
+        path.casefold(),
+    )
+
+
+def _canonicalize_tracks(rows: list[dict]) -> list[dict]:
+    seen_isrcs: set[str] = set()
+    seen_metadata: set[tuple] = set()
+    seen_paths: set[str] = set()
+    result: list[dict] = []
+    for row in sorted(rows, key=_canonical_track_preference):
+        isrc = _normalize_track_text(row.get("isrc"))
+        metadata_identity = _metadata_track_identity(row)
+        path = row.get("path") or ""
+        duplicate = (
+            bool(isrc and isrc in seen_isrcs)
+            or bool(metadata_identity and metadata_identity in seen_metadata)
+            or bool(not isrc and not metadata_identity and path in seen_paths)
+        )
+        if not duplicate:
+            result.append(row)
+        if isrc:
+            seen_isrcs.add(isrc)
+        if metadata_identity:
+            seen_metadata.add(metadata_identity)
+        if not isrc and not metadata_identity:
+            seen_paths.add(path)
+    return result
 
 
 DOWNLOAD_JOB_FIELDS = {

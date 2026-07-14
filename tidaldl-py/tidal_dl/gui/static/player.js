@@ -56,6 +56,13 @@ function _currentTrackLocalPath(track) {
   return track.local_path || track.path || null;
 }
 
+function _localPlaybackUrl(track) {
+  const path = _currentTrackLocalPath(track);
+  let url = '/api/playback/local?path=' + encodeURIComponent(path);
+  if (track.codec) url += '&codec=' + encodeURIComponent(track.codec);
+  return url;
+}
+
 function _lyricsOpen() {
   return lyricsState.lyricsPanelState !== 'closed';
 }
@@ -706,24 +713,11 @@ function playTrack(track) {
   audio.muted = true;
 
   if (track.is_local && track.local_path) {
-    audio.src = '/api/playback/local?path=' + encodeURIComponent(track.local_path);
+    audio.src = _localPlaybackUrl(track);
   } else {
     audio.src = '/api/playback/stream/' + track.id;
   }
 
-  // Wait for enough data before playing — prevents buffer underrun artifacts
-  audio.addEventListener('canplay', function _onReady() {
-    // Guard: if another tab sent 'pause' while we were loading, honour it
-    if (!state.playing) { audio.muted = false; return; }
-    audio.play().then(() => {
-      audio.muted = false;
-      // Only record to recently played after audio actually starts
-      _recordRecentlyPlayed(track);
-    }).catch(() => {
-      audio.muted = false;
-      toast('Unable to play track', 'error');
-    });
-  }, { once: true });
   state.playing = true;
   updatePlayButton();
   updateNowPlaying(track);
@@ -734,6 +728,15 @@ function playTrack(track) {
   updatePlayerHeart();
   _saveQueue();
   audio.load();
+  audio.play().then(() => {
+    audio.muted = false;
+    _recordRecentlyPlayed(track);
+  }).catch(() => {
+    audio.muted = false;
+    state.playing = false;
+    updatePlayButton();
+    toast('Unable to play track', 'error');
+  });
 }
 
 function updateNowPlaying(track) {
@@ -786,9 +789,9 @@ function updateNowPlaying(track) {
     if (nowQuality) {
       const q = track.quality || track.format || '';
       if (q) {
-        nowQuality.textContent = qualityLabel(q);
+        nowQuality.textContent = qualityLabel(q, track.format, track.codec);
         nowQuality.title = qualityTitle(q);
-        nowQuality.className = 'quality-tag ' + qualityClass(q);
+        nowQuality.className = 'quality-tag ' + qualityClass(q, track.format, track.codec);
         nowQuality.style.display = '';
       } else {
         nowQuality.style.display = 'none';
@@ -2034,7 +2037,7 @@ function _preloadNext() {
   const next = state.queue[nextIdx];
   if (!next) return;
   const src = (next.is_local && next.local_path)
-    ? '/api/playback/local?path=' + encodeURIComponent(next.local_path)
+    ? _localPlaybackUrl(next)
     : '/api/playback/stream/' + next.id;
   if (_preloadedSrc === src) return;  // already preloaded
   _preloadedSrc = src;
@@ -2136,7 +2139,7 @@ function _restorePosition() {
     if (current && data.key === _trackKey(current) && _isResumePositionUsable(current, data.time)) {
       // Set source and seek to saved position without auto-playing
       const src = (current.is_local && current.local_path)
-        ? '/api/playback/local?path=' + encodeURIComponent(current.local_path)
+        ? _localPlaybackUrl(current)
         : '/api/playback/stream/' + current.id;
       audio.src = src;
       audio.addEventListener('loadedmetadata', function _onMeta() {

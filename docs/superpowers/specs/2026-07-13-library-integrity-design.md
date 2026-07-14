@@ -61,13 +61,13 @@ Codec determines the lossy/lossless family. Existing sample-rate and bit-depth q
 
 Keep the policy in the existing `library_db` package.
 
-Identity:
+Identity aliases:
 
-- Use ISRC when present.
-- Otherwise require complete metadata and equal normalized title, artist, album, and exact rounded duration.
-- Never group blank or placeholder-only rows by fallback identity.
+- Rows are duplicates when their nonblank ISRC matches or their complete normalized title, artist, album, and exact rounded duration match.
+- Exact complete metadata may therefore collapse copies with missing or conflicting ISRCs; this handles equivalent local encodes whose source tags disagree.
+- Never group blank or placeholder-only rows by metadata identity.
 
-Playlist fallback first matches normalized title, artist, and album, then prefers the candidate whose rounded duration is closest to the Tidal duration before applying canonical quality preference. This tolerance affects candidate choice, not stored duplicate identity, so grouping remains deterministic.
+Playlist selection considers the union of ISRC matches and exact normalized title, artist, and album matches, then prefers the candidate whose rounded duration is closest to the Tidal duration before applying canonical quality preference. This allows a lossless local copy to outrank a lossy copy carrying the Tidal ISRC.
 
 Preference order:
 

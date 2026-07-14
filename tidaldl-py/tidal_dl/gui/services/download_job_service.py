@@ -58,15 +58,17 @@ def _upgrade_dependencies() -> tuple[Any, Any, Any, Any, Any]:
 
 def scan_new_downloads(db, settings) -> None:
     from tidal_dl.gui.api.library import _AUDIO_EXTENSIONS, _read_metadata
+    from tidal_dl.helper.library_db.utils import _is_excluded_library_path
 
     dl_path = Path(settings.data.download_base_path).expanduser()
     if not dl_path.is_dir():
         return
 
     known = db.known_paths()
-    batch = 0
     for file_path in dl_path.rglob("*"):
         if file_path.suffix.lower() not in _AUDIO_EXTENSIONS:
+            continue
+        if _is_excluded_library_path(file_path):
             continue
         path_str = str(file_path)
         if path_str in known:
@@ -84,15 +86,11 @@ def scan_new_downloads(db, settings) -> None:
                 genre=meta.get("genre"),
                 quality=meta["quality"],
                 fmt=meta["format"],
+                codec=meta.get("codec"),
+                metadata_complete=meta.get("metadata_complete"),
             )
         else:
             db.record(path_str, status="unreadable")
-        batch += 1
-        if batch >= 50:
-            db.commit()
-            batch = 0
-
-    if batch > 0:
         db.commit()
 
     import tidal_dl.gui.api.library as lib_mod

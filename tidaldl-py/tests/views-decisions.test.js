@@ -6,6 +6,18 @@ const viewsSource = readFileSync(
   join(import.meta.dir, '../tidal_dl/gui/static/views.js'),
   'utf8',
 );
+const apiSource = readFileSync(
+  join(import.meta.dir, '../tidal_dl/gui/static/api.js'),
+  'utf8',
+);
+
+function loadQualityTier() {
+  const helperSource = apiSource.match(
+    /function _qualityTier\(q, fmt(?:, codec)?\) \{[\s\S]*?\n\}/,
+  );
+  if (!helperSource) throw new Error('quality tier helper not found');
+  return new Function(`${helperSource[0]}\nreturn _qualityTier;`)();
+}
 
 function loadArtistGroupingHelper() {
   const functionBody = viewsSource
@@ -17,6 +29,15 @@ function loadArtistGroupingHelper() {
   return new Function(
     `function _groupArtistTracks(tracks) {${functionBody}\nreturn _groupArtistTracks;`,
   )();
+}
+
+function loadHomeArtistSelection() {
+  const helperSource = viewsSource.match(
+    /function _homeArtistSelection\(data\) \{[\s\S]*?\n\}/,
+  );
+
+  if (!helperSource) throw new Error('home artist selection helper not found');
+  return new Function(`${helperSource[0]}\nreturn _homeArtistSelection;`)();
 }
 
 function loadTidalResetHelpers(deps = {}) {
@@ -51,6 +72,13 @@ return { _authStateCanReset, _resetTidalConnection, getLoginPoll: () => _loginPo
 }
 
 describe('library view decisions', () => {
+  test('uses stream codec instead of M4A container for quality tier', () => {
+    const qualityTier = loadQualityTier();
+
+    expect(qualityTier('44100Hz/16bit', 'M4A', 'flac').tier).toBe('Lossless');
+    expect(qualityTier('44100Hz/16bit', 'M4A', 'aac').tier).toBe('Lossy');
+  });
+
   test('keeps artists grouped when a later page crosses an artist boundary', () => {
     const groupArtistTracks = loadArtistGroupingHelper();
     const firstPage = [
@@ -70,6 +98,35 @@ describe('library view decisions', () => {
       'Agnes Fredenberg',
     ]);
     expect(groups[1].tracks).toHaveLength(2);
+  });
+});
+
+describe('home view decisions', () => {
+  test('keeps all-time principal artist and two secondary artist cards', () => {
+    const selectArtists = loadHomeArtistSelection();
+    const data = {
+      top_artist: { name: 'Principal', play_count: 100 },
+      top_artists: [
+        { name: 'Principal', play_count: 100 },
+        { name: 'Second', play_count: 50 },
+        { name: 'Third', play_count: 25 },
+      ],
+      this_week: {
+        top_artist: { name: 'Weekly', play_count: 8 },
+        top_artists: [
+          { name: 'Weekly', play_count: 8 },
+          { name: 'Weekly second', play_count: 2 },
+        ],
+      },
+    };
+
+    const selection = selectArtists(data);
+
+    expect(selection.hero.name).toBe('Principal');
+    expect(selection.secondary.map(artist => artist.name)).toEqual([
+      'Second',
+      'Third',
+    ]);
   });
 });
 

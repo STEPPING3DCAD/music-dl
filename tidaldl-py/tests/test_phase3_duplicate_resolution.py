@@ -352,6 +352,7 @@ class TestItemCopyAction:
         with (
             patch.object(dl, "_validate_and_prepare_media", return_value=track),
             patch.object(dl, "_prepare_file_paths_and_skip_logic") as mock_paths,
+            patch("tidal_dl.download.items.register_downloaded_track") as register_track,
         ):
             dst = tmp_path / "output" / "dest.flac"
             dst.parent.mkdir(parents=True, exist_ok=True)
@@ -368,6 +369,7 @@ class TestItemCopyAction:
         dest_flac = pathlib.Path(result_path)
         assert dest_flac.is_file()
         assert dest_flac.read_bytes() == b"audio data"
+        register_track.assert_called_once_with(dest_flac)
 
     def test_prepare_paths_skip_existing_uses_canonical_path(self, tmp_path):
         """skip_existing must check the canonical path before any _01 uniquify."""

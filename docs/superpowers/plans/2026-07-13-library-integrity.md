@@ -42,7 +42,7 @@
 - [ ] Add failing tests for excluded path components, ISRC identity, metadata fallback identity, placeholder isolation, codec-aware quality, suffix preference, and deterministic ties.
 - [ ] Run tests and confirm red state.
 - [ ] Add `_is_excluded_library_path(row_or_path)` using whole components: `#recycle`, `.Trash`, `.Trashes`, `undo-staging`.
-- [ ] Add deterministic identity helper: ISRC, else complete normalized title/artist/album/exact rounded duration, else unique path.
+- [ ] Add deterministic ISRC and complete-metadata aliases; canonicalization collapses rows when either alias matches and keeps incomplete rows unique by path.
 - [ ] Update quality rank to use codec family first and existing sample-rate/bit-depth rank second; retain current format fallback for null codec.
 - [ ] Add one canonical preference tuple and one canonicalize helper.
 - [ ] Run targeted tests until green.
@@ -73,7 +73,7 @@
 - [ ] Add failing tests for higher-quality preference, recycle exclusion, closest-duration fallback, and repeated Tidal entries remaining repeated.
 - [ ] Run tests and confirm current path-length ranking fails.
 - [ ] Replace playlist-specific sort with shared canonical preference.
-- [ ] For ISRC-less matches, constrain by normalized title/artist/album, rank duration distance, then canonical quality.
+- [ ] Combine ISRC and normalized title/artist/album matches, rank duration distance, then canonical quality.
 - [ ] Copy the selected local row's codec into the serialized playlist track.
 - [ ] Preserve serialized Tidal order and repetitions.
 - [ ] Run playlist tests until green.
@@ -123,5 +123,6 @@
 - [ ] Verify blank core metadata rows are zero and excluded scanned rows are zero.
 - [ ] Manually search `I Speak Jesus` and confirm one result.
 - [ ] Manually verify FLAC-in-M4A is Lossless and verified AAC remains Lossy.
+- [ ] Verify Home retains its all-time principal artist and two secondary artist cards.
 - [ ] Play local tracks during/after reconciliation and inspect server logs for lock errors.
 - [ ] Inspect git diff, commit implementation, push branch, and verify PR checks.

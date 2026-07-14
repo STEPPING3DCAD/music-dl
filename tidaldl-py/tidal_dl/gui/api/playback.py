@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import hashlib
+import subprocess
+import tempfile
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
 
 from tidal_dl.config import Settings, Tidal
+from tidal_dl.helper.path import path_config_base
+from tidal_dl.helper.waveform import _find_ffmpeg
 
 router = APIRouter()
 
@@ -21,8 +26,58 @@ def get_download_paths() -> list[str]:
     return paths
 
 
+def _browser_compatible_path(path: Path, codec: str | None) -> Path:
+    """Cache a seekable FLAC copy when browsers cannot decode lossless M4A."""
+    if path.suffix.lower() != ".m4a" or (codec or "").casefold() not in {"alac", "flac"}:
+        return path
+    ffmpeg = _find_ffmpeg()
+    if not ffmpeg:
+        return path
+
+    stat = path.stat()
+    key = hashlib.sha256(
+        f"{path.resolve()}\0{stat.st_mtime_ns}\0{stat.st_size}".encode()
+    ).hexdigest()
+    cache_dir = Path(path_config_base()) / "playback_cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cached = cache_dir / f"{key}.flac"
+    if cached.is_file() and cached.stat().st_size > 0:
+        return cached
+
+    temp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            dir=cache_dir, prefix=f"{key}-", suffix=".flac", delete=False
+        ) as temp:
+            temp_path = Path(temp.name)
+        result = subprocess.run(
+            [
+                ffmpeg,
+                "-v", "error",
+                "-i", str(path),
+                "-map", "0:a:0",
+                "-c:a", "flac",
+                "-y", str(temp_path),
+            ],
+            capture_output=True,
+            timeout=120,
+        )
+        if result.returncode == 0 and temp_path.stat().st_size > 0:
+            temp_path.replace(cached)
+            return cached
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    finally:
+        if temp_path and temp_path.exists():
+            temp_path.unlink()
+    return path
+
+
 @router.get("/local")
-def serve_local_file(path: str = Query(..., description="Absolute path to audio file")):
+def serve_local_file(
+    path: str = Query(..., description="Absolute path to audio file"),
+    codec: str | None = Query(None, description="Inspected local audio codec"),
+):
     """Serve a local audio file. Path must be within a configured download directory."""
     from tidal_dl.gui.api.library import _path_in_library, _trusted_library_path
     from tidal_dl.gui.security import resolve_local_audio_path
@@ -35,7 +90,7 @@ def serve_local_file(path: str = Query(..., description="Absolute path to audio 
     )
     if resolution.kind != "ok" or resolution.path is None:
         raise HTTPException(status_code=403, detail="Access denied")
-    validated_path = resolution.path
+    validated_path = _browser_compatible_path(resolution.path, codec)
 
     media_types = {
         ".flac": "audio/flac",

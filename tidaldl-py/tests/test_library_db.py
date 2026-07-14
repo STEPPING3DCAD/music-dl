@@ -2,6 +2,13 @@
 import sqlite3
 import pytest
 from tidal_dl.helper.library_db import LibraryDB
+from tidal_dl.helper.library_db.utils import (
+    _canonical_track_identity,
+    _canonical_track_preference,
+    _canonicalize_tracks,
+    _is_excluded_library_path,
+    _local_quality_rank,
+)
 
 
 @pytest.fixture
@@ -65,9 +72,51 @@ class TestPragmas:
         finally:
             migrated.close()
 
-        assert {"isrc", "artist", "title", "scanned_at", "art_available"} <= cols
+        assert {
+            "isrc",
+            "artist",
+            "title",
+            "scanned_at",
+            "art_available",
+            "codec",
+            "metadata_complete",
+        } <= cols
         assert row is not None
         assert row["status"] == "tagged"
+
+    def test_open_backfills_definitive_legacy_inspection_facts(self, tmp_path):
+        db_path = tmp_path / "test.db"
+        original = LibraryDB(db_path)
+        original.open()
+        original.record(
+            "/music/complete.flac",
+            status="tagged",
+            artist="Artist",
+            title="Song",
+            album="Album",
+        )
+        original.record(
+            "/music/ambiguous.m4a",
+            status="tagged",
+            artist="Artist",
+            title="Song",
+            album="Album",
+        )
+        original.commit()
+        original.close()
+
+        reopened = LibraryDB(db_path)
+        reopened.open()
+        try:
+            complete = reopened.get("/music/complete.flac")
+            ambiguous = reopened.get("/music/ambiguous.m4a")
+        finally:
+            reopened.close()
+
+        assert complete["metadata_complete"] == 1
+        assert complete["codec"] == "flac"
+        assert ambiguous["metadata_complete"] == 1
+        assert ambiguous["codec"] is None
 
 
 class TestCRUD:
@@ -100,6 +149,21 @@ class TestCRUD:
 
         assert db.get("/a.flac")["art_available"] == 1
 
+    def test_record_persists_inspection_facts_without_erasing_known_values(self, db):
+        db.record(
+            "/a.m4a",
+            status="tagged",
+            codec="flac",
+            metadata_complete=True,
+        )
+        db.commit()
+        db.record("/a.m4a", status="tagged")
+        db.commit()
+
+        row = db.get("/a.m4a")
+        assert row["codec"] == "flac"
+        assert row["metadata_complete"] == 1
+
     def test_remove(self, db):
         db.record("/a.flac", status="tagged")
         db.commit()
@@ -119,6 +183,231 @@ class TestCRUD:
         db.commit()
         assert db.known_paths() == {"/a.flac", "/b.flac"}
 
+    def test_complete_paths_excludes_blank_cached_metadata(self, db):
+        db.record(
+            "/complete.flac",
+            status="tagged",
+            artist="Artist",
+            title="Title",
+            album="Album",
+            duration=180,
+        )
+        db.record(
+            "/stale.flac",
+            status="tagged",
+            artist="",
+            title="",
+            album="",
+            duration=180,
+        )
+        db.commit()
+
+        assert db.complete_paths() == {"/complete.flac"}
+
+
+class TestCanonicalTracks:
+    def test_excluded_path_requires_whole_case_insensitive_component(self):
+        assert _is_excluded_library_path("/Music/#recycle/song.flac")
+        assert _is_excluded_library_path("/Music/.TRASHES/song.flac")
+        assert _is_excluded_library_path("/Music/undo-staging/song.flac")
+        assert not _is_excluded_library_path("/Music/#recycled/song.flac")
+        assert not _is_excluded_library_path("/Music/my.Trashes.album/song.flac")
+
+    def test_identity_prefers_isrc(self):
+        row = {"path": "/a.flac", "isrc": " US-ABC-12 ", "title": "One"}
+        assert _canonical_track_identity(row) == ("isrc", "us-abc-12")
+
+    def test_identity_falls_back_to_complete_metadata_and_exact_duration(self):
+        first = {
+            "path": "/a.flac",
+            "title": " Song ",
+            "artist": "ARTIST",
+            "album": "Album",
+            "duration": 180.4,
+            "metadata_complete": True,
+        }
+        second = dict(first, path="/b.flac", title="song", artist="artist")
+        assert _canonical_track_identity(first) == _canonical_track_identity(second)
+        assert _canonical_track_identity(first)[-1] == 180
+
+    def test_incomplete_or_placeholder_metadata_stays_unique_by_path(self):
+        incomplete = {
+            "path": "/a.flac",
+            "title": "Song",
+            "artist": "Artist",
+            "album": "Album",
+            "duration": 180,
+            "metadata_complete": False,
+        }
+        placeholder = {
+            "path": "/b.flac",
+            "title": "Song",
+            "artist": "Unknown Artist",
+            "album": "Unknown Album",
+            "duration": 180,
+        }
+        assert _canonical_track_identity(incomplete) == ("path", "/a.flac")
+        assert _canonical_track_identity(placeholder) == ("path", "/b.flac")
+
+    def test_codec_controls_quality_before_container(self):
+        assert _local_quality_rank("192000Hz/24bit", "M4A", "flac") == 4
+        assert _local_quality_rank("44100Hz/16bit", "M4A", "aac") == 1
+        assert _local_quality_rank("44100Hz/16bit", "M4A", None) == 1
+
+    def test_preference_favors_complete_quality_canonical_suffix_then_path(self):
+        base = {
+            "title": "Song",
+            "artist": "Artist",
+            "album": "Album",
+            "duration": 180,
+            "metadata_complete": True,
+            "quality": "44100Hz/16bit",
+            "format": "FLAC",
+            "codec": "flac",
+        }
+        rows = [
+            dict(base, path="/music/song_01.flac"),
+            dict(base, path="/music/song.flac"),
+            dict(base, path="/music/long/path/song.flac", quality="96000Hz/24bit"),
+        ]
+        assert min(rows, key=_canonical_track_preference)["path"] == (
+            "/music/long/path/song.flac"
+        )
+
+        tied = [dict(base, path="/b/song.flac"), dict(base, path="/a/song.flac")]
+        assert min(tied, key=_canonical_track_preference)["path"] == "/a/song.flac"
+
+    def test_canonicalize_keeps_one_best_row_per_identity(self):
+        rows = [
+            {
+                "path": "/lossy.m4a",
+                "isrc": "ABC",
+                "metadata_complete": True,
+                "quality": "44100Hz/16bit",
+                "format": "M4A",
+                "codec": "aac",
+            },
+            {
+                "path": "/lossless.m4a",
+                "isrc": "ABC",
+                "metadata_complete": True,
+                "quality": "44100Hz/16bit",
+                "format": "M4A",
+                "codec": "flac",
+            },
+        ]
+        assert [row["path"] for row in _canonicalize_tracks(rows)] == [
+            "/lossless.m4a"
+        ]
+
+    def test_canonicalize_joins_isrcless_copy_to_one_exact_isrc_match(self):
+        common = {
+            "title": "Será Llena la Tierra",
+            "artist": "Marco Barrientos",
+            "album": "Más de Ti",
+            "duration": 407,
+            "metadata_complete": True,
+            "format": "M4A",
+            "quality": "44100Hz/16bit",
+        }
+        rows = [
+            dict(common, path="/lossy.m4a", isrc="ABC", codec="aac"),
+            dict(common, path="/lossless.m4a", isrc=None, codec="flac"),
+        ]
+
+        canonical = _canonicalize_tracks(rows)
+
+        assert [row["path"] for row in canonical] == ["/lossless.m4a"]
+
+    def test_canonicalize_collapses_exact_metadata_even_when_isrcs_conflict(self):
+        common = {
+            "title": "Song",
+            "artist": "Artist",
+            "album": "Album",
+            "duration": 180,
+            "metadata_complete": True,
+        }
+        rows = [
+            dict(common, path="/a.flac", isrc="AAA"),
+            dict(common, path="/b.flac", isrc="BBB"),
+            dict(common, path="/unknown.flac", isrc=None),
+        ]
+
+        assert len(_canonicalize_tracks(rows)) == 1
+
+    def test_prune_excluded_rows_repoints_related_data_without_losing_history(self, db):
+        canonical = "/music/song.flac"
+        excluded = "/music/#recycle/song.flac"
+        unmatched = "/music/.Trash/orphan.flac"
+        common = {
+            "status": "tagged",
+            "artist": "Artist",
+            "title": "Song",
+            "album": "Album",
+            "duration": 180,
+            "isrc": "ABC",
+            "metadata_complete": True,
+        }
+        db.record(canonical, **common)
+        db.record(excluded, **common)
+        db.record(
+            unmatched,
+            status="tagged",
+            artist="Other",
+            title="Orphan",
+            album="Other",
+            duration=200,
+            metadata_complete=True,
+        )
+        db.add_favorite(path=canonical, artist="Artist", title="Song")
+        db.add_favorite(path=excluded, artist="Artist", title="Song")
+        db.add_favorite(path=unmatched, artist="Other", title="Orphan")
+        db.log_play_event(excluded, artist="Artist", played_at=1)
+        db.log_play_event(unmatched, artist="Other", played_at=2)
+        db.commit()
+
+        removed = db.prune_excluded_rows()
+        db.commit()
+
+        assert removed == 2
+        assert db.get(excluded) is None
+        assert db.get(unmatched) is None
+        favorite_rows = db._conn.execute(
+            "SELECT path, title FROM favorites ORDER BY id"
+        ).fetchall()
+        assert [(row["path"], row["title"]) for row in favorite_rows] == [
+            (canonical, "Song"),
+            (None, "Orphan"),
+        ]
+        event_paths = [
+            row["path"]
+            for row in db._conn.execute("SELECT path FROM play_events ORDER BY id")
+        ]
+        assert event_paths == [canonical, unmatched]
+
+    def test_repair_worklist_does_not_retry_inspected_incomplete_tags(self, db):
+        db.record(
+            "/music/untagged.flac",
+            status="needs_isrc",
+            artist="Unknown Artist",
+            title="untagged",
+            album="Unknown Album",
+            codec="flac",
+            metadata_complete=False,
+        )
+        db.record(
+            "/music/pending.flac",
+            status="needs_isrc",
+            artist="",
+            title="",
+            album="",
+        )
+        db.commit()
+
+        assert [row["path"] for row in db.metadata_repair_worklist()] == [
+            "/music/pending.flac"
+        ]
+
 
 class TestRecentPlays:
     def test_recent_plays_returns_latest_unique_scanned_tracks(self, db):
@@ -135,6 +424,21 @@ class TestRecentPlays:
         assert recent[0]["played_at"] == 300
         assert recent[0]["name"] == "Alpha"
         assert recent[0]["is_local"] is True
+
+    def test_recent_plays_include_codec(self, db):
+        db.record(
+            "/music/a.m4a",
+            status="tagged",
+            artist="A",
+            title="Alpha",
+            album="One",
+            codec="flac",
+            fmt="M4A",
+        )
+        db.log_play_event("/music/a.m4a", artist="A", played_at=100)
+        db.commit()
+
+        assert db.recent_plays()[0]["codec"] == "flac"
 
     def test_recent_plays_skips_events_without_scanned_track(self, db):
         db.record("/music/a.flac", status="tagged", artist="A", title="Alpha")
@@ -176,6 +480,95 @@ class TestPagination:
         self._seed(db)
         albums = db.all_albums()
         assert len(albums) == 2  # Album 0, Album 1
+
+    def test_tracks_page_canonicalizes_before_total_and_pagination(self, db):
+        common = {
+            "status": "tagged",
+            "artist": "Artist",
+            "album": "Album",
+            "metadata_complete": True,
+            "duration": 180,
+            "fmt": "M4A",
+        }
+        db.record(
+            "/music/lossy.m4a",
+            title="Alpha",
+            isrc="ABC",
+            quality="44100Hz/16bit",
+            codec="aac",
+            **common,
+        )
+        db.record(
+            "/music/lossless.m4a",
+            title="Alpha",
+            isrc="ABC",
+            quality="44100Hz/16bit",
+            codec="flac",
+            **common,
+        )
+        db.record(
+            "/music/beta.flac",
+            title="Beta",
+            isrc="DEF",
+            quality="44100Hz/16bit",
+            codec="flac",
+            **common,
+        )
+        db.record(
+            "/music/#recycle/beta.flac",
+            title="Beta",
+            isrc="DEF",
+            quality="96000Hz/24bit",
+            codec="flac",
+            **common,
+        )
+        db.commit()
+
+        first, total = db.tracks_page(sort="title", limit=1, offset=0)
+        second, second_total = db.tracks_page(sort="title", limit=1, offset=1)
+
+        assert total == second_total == 2
+        assert [first[0]["path"], second[0]["path"]] == [
+            "/music/lossless.m4a",
+            "/music/beta.flac",
+        ]
+
+    def test_artist_and_album_aggregates_use_only_canonical_active_rows(self, db):
+        common = {
+            "status": "tagged",
+            "artist": "Artist",
+            "title": "Song",
+            "album": "Album",
+            "duration": 180,
+            "isrc": "ABC",
+            "metadata_complete": True,
+            "quality": "44100Hz/16bit",
+            "codec": "flac",
+            "fmt": "FLAC",
+        }
+        db.record("/music/song.flac", **common)
+        db.record("/music/copy/song.flac", **common)
+        db.record(
+            "/music/#recycle/other.flac",
+            status="tagged",
+            artist="Deleted Artist",
+            title="Other",
+            album="Deleted Album",
+            duration=180,
+            metadata_complete=True,
+        )
+        db.commit()
+
+        artists, artist_total = db.artists_page(limit=50)
+        albums = db.all_albums()
+        artist_albums = db.albums_by_artist("Artist")
+
+        assert artist_total == 1
+        assert artists[0]["track_count"] == 1
+        assert artists[0]["album_count"] == 1
+        assert len(albums) == 1
+        assert albums[0]["track_count"] == 1
+        assert artist_albums[0]["track_count"] == 1
 
 
 class TestAlbumDedup:
@@ -556,7 +949,7 @@ class TestMigration:
                     "quality_probes", "library_meta", "download_history", "favorites"}
         assert expected.issubset(tables)
 
-    def test_v1_to_v5_migration(self, tmp_path):
+    def test_v1_to_v6_migration(self, tmp_path):
         """Create a v1-style DB, then open with LibraryDB to trigger migration."""
         db_path = tmp_path / "legacy.db"
         conn = sqlite3.connect(str(db_path))
@@ -579,7 +972,9 @@ class TestMigration:
         assert "waveform" in cols
         assert "waveform_hires" in cols
         assert "art_available" in cols
-        assert LibraryDB._SCHEMA_VERSION == 5
+        assert "codec" in cols
+        assert "metadata_complete" in cols
+        assert LibraryDB._SCHEMA_VERSION == 6
         row = db.get("/a.flac")
         assert row["artist"] == "X"
         assert row["art_available"] is None

@@ -25,7 +25,11 @@ Tidal sign-in and reconnect can be started directly from the GUI; terminal `musi
 
 The GUI keeps a static **Report bug** link in the app chrome and no-JavaScript fallback. It opens the GitHub bug report template directly without depending on local API calls.
 
-The Home view shows recent additions, recently played items, top artists, genre stats, repeat listening, and a Continue Listening card when playback has a saved queue position. Library artist navigation renders page-sized batches, and album navigation uses an in-memory album cache with batched card rendering to keep large collections responsive. Recently Played supports Today, This Week, and Older filters plus clear-old/history controls. The player persists queue, volume, shuffle, repeat, and Smart Shuffle preferences across reloads.
+The Home view keeps the all-time top artist as its principal card with the next two artists as secondary cards. It also shows recent additions, recently played items, genre stats, repeat listening, and a Continue Listening card when playback has a saved queue position. Library artist navigation renders page-sized batches, and album navigation uses an in-memory album cache with batched card rendering to keep large collections responsive. Recently Played supports Today, This Week, and Older filters plus clear-old/history controls. The player persists queue, volume, shuffle, repeat, and Smart Shuffle preferences across reloads.
+
+Sync Library repairs cached metadata and codec facts without regenerating waveforms. Library and search show one preferred active copy per song; recycle/trash/staging folders are excluded from the SQLite cache. Quality badges use the inspected audio codec, so lossless audio in an M4A container remains Lossless while AAC remains Lossy.
+
+Browser-incompatible lossless M4A files are converted once to a seekable FLAC playback cache. Source files are never modified.
 
 Continue Listening ignores finished tracks and near-end positions so completed songs do not reappear as one-second resume cards.
 

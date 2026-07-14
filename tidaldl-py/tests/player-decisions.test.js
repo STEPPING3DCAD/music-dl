@@ -53,8 +53,17 @@ function loadPlayTrack(audio, state) {
     'highlightPlayingTrack',
     'updatePlayerHeart',
     '_saveQueue',
+    '_localPlaybackUrl',
     `function playTrack(track) {${functionSource}\nreturn playTrack;`,
-  )(audio, state, noop, noop, noop, noop, noop, noop, noop, noop, noop, noop, noop);
+  )(
+    audio, state, noop, noop, noop, noop, noop, noop, noop, noop, noop, noop,
+    noop,
+    track => {
+      let url = '/api/playback/local?path=' + encodeURIComponent(track.local_path || track.path);
+      if (track.codec) url += '&codec=' + encodeURIComponent(track.codec);
+      return url;
+    },
+  );
 }
 
 function loadRepeatHandler(state) {
@@ -224,7 +233,7 @@ describe('web update decisions', () => {
 });
 
 describe('local playback decisions', () => {
-  test('loads a selected local source after installing the readiness listener', () => {
+  test('loads and immediately plays a selected local source', () => {
     const calls = [];
     const state = { playing: false };
     const audio = {
@@ -236,14 +245,27 @@ describe('local playback decisions', () => {
         expect(state.playing).toBe(true);
         calls.push('load');
       },
-      play: () => Promise.resolve(),
+      play: () => { calls.push('play'); return Promise.resolve(); },
     };
     const playTrack = loadPlayTrack(audio, state);
 
     playTrack({ is_local: true, local_path: '/music/local track.flac' });
 
     expect(audio.src).toBe('/api/playback/local?path=%2Fmusic%2Flocal%20track.flac');
-    expect(calls).toEqual(['pause', 'canplay', 'load']);
+    expect(calls).toEqual(['pause', 'load', 'play']);
+  });
+
+  test('passes inspected codec to local playback', () => {
+    const state = { playing: false };
+    const audio = {
+      src: '', muted: false, pause: () => {}, addEventListener: () => {},
+      load: () => {}, play: () => Promise.resolve(),
+    };
+    const playTrack = loadPlayTrack(audio, state);
+
+    playTrack({ is_local: true, local_path: '/music/lossless.m4a', codec: 'alac' });
+
+    expect(audio.src).toBe('/api/playback/local?path=%2Fmusic%2Flossless.m4a&codec=alac');
   });
 
   test('repeat one preserves the current queue and position', () => {
