@@ -1,12 +1,12 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "music-dl",
-  "version": "1.6.8",
+  "version": "1.6.9",
   "identifier": "com.alfdav.music-dl",
   "build": {
     "frontendDist": "./loading",
     "devUrl": "http://localhost:8765",
-    "beforeBuildCommand": "bash -lc 'set -euo pipefail; xattr -cr src-tauri/ 2>/dev/null || true; BINARIES_DIR=\"src-tauri/binaries\"; TARGET_TRIPLE=\"$(rustc --print host-tuple)\"; SIDECAR_NAME=\"music-dl-server-${TARGET_TRIPLE}\"; SPEC_FILE=\"build/pyinstaller/music-dl-server.spec\"; rm -rf \"${TMPDIR:-/tmp}\"/_MEI* 2>/dev/null || true; .venv/bin/pyinstaller --clean --distpath \"$BINARIES_DIR\" --workpath build/pyinstaller --noconfirm \"$SPEC_FILE\"; mv \"$BINARIES_DIR/music-dl-server\" \"$BINARIES_DIR/${SIDECAR_NAME}\"; echo \"[verify] Checking bundled assets...\"; .venv/bin/python -c \"from pathlib import Path; js=(Path(\\\"tidal_dl/gui/static/app.js\\\")).read_text(); assert \\\"mediaSession\\\" in js, \\\"STALE JS: mediaSession missing\\\"; assert \\\"_wfHires\\\" in js, \\\"STALE JS: waveform hires missing\\\"; assert \\\"Continue Listening\\\" in js, \\\"STALE JS: Continue Listening missing\\\"; assert \\\"Smart Shuffle\\\" in js, \\\"STALE JS: Smart Shuffle missing\\\"; assert \\\"_libraryAlbumCache\\\" in js, \\\"STALE JS: album cache missing\\\"; print(\\\"[verify] Static assets OK\\\")\"'"
+    "beforeBuildCommand": "bash -lc 'set -euo pipefail; xattr -cr src-tauri/ 2>/dev/null || true; BINARIES_DIR=\"src-tauri/binaries\"; TARGET_TRIPLE=\"$(rustc --print host-tuple)\"; SIDECAR_NAME=\"music-dl-server-${TARGET_TRIPLE}\"; SPEC_FILE=\"build/pyinstaller/music-dl-server.spec\"; rm -rf \"${TMPDIR:-/tmp}\"/_MEI* 2>/dev/null || true; .venv/bin/pyinstaller --clean --distpath \"$BINARIES_DIR\" --workpath build/pyinstaller --noconfirm \"$SPEC_FILE\"; mv \"$BINARIES_DIR/music-dl-server\" \"$BINARIES_DIR/${SIDECAR_NAME}\"; echo \"[verify] Checking bundled assets...\"; .venv/bin/python -c \"from pathlib import Path; static=Path(\\\"tidal_dl/gui/static\\\"); js=\\\"\\\\n\\\".join((static / name).read_text() for name in (\\\"api.js\\\", \\\"views.js\\\", \\\"player.js\\\")); assert \\\"mediaSession\\\" in js, \\\"STALE JS: mediaSession missing\\\"; assert \\\"_wfHires\\\" in js, \\\"STALE JS: waveform hires missing\\\"; assert \\\"Continue Listening\\\" in js, \\\"STALE JS: Continue Listening missing\\\"; assert \\\"Smart Shuffle\\\" in js, \\\"STALE JS: Smart Shuffle missing\\\"; assert \\\"_libraryAlbumCache\\\" in js, \\\"STALE JS: album cache missing\\\"; print(\\\"[verify] Static assets OK\\\")\"'"
   },
   "app": {
     "withGlobalTauri": true,
@@ -29,7 +29,9 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "externalBin": ["binaries/music-dl-server"],
+    "externalBin": [
+      "binaries/music-dl-server"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -59,7 +61,9 @@
   "plugins": {
     "deep-link": {
       "desktop": {
-        "schemes": ["music-dl"]
+        "schemes": [
+          "music-dl"
+        ]
       }
     },
     "updater": {

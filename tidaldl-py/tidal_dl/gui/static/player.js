@@ -733,6 +733,7 @@ function playTrack(track) {
   highlightPlayingTrack();
   updatePlayerHeart();
   _saveQueue();
+  audio.load();
 }
 
 function updateNowPlaying(track) {
@@ -862,7 +863,11 @@ function highlightPlayingTrack() {
 
 // Transport controls
 btnPlay.addEventListener('click', () => {
-  if (!audio.src || audio.src === location.href) return;
+  if (!audio.src || audio.src === location.href) {
+    const current = state.queue[state.queueIndex];
+    if (current) playTrack(current);
+    return;
+  }
   if (state.playing) {
     audio.pause();
     state.playing = false;
@@ -907,14 +912,6 @@ btnRepeat.addEventListener('click', () => {
   else state.repeat = 'off';
   btnRepeat.classList.toggle('active', state.repeat !== 'off');
   _updateRepeatIcon(btnRepeat);
-  // Repeat-one: collapse queue to just the current track
-  if (state.repeat === 'one' && state.queue.length > 0) {
-    const current = state.queue[state.queueIndex];
-    if (current) {
-      state.queue = [current];
-      state.queueIndex = 0;
-    }
-  }
   _saveQueue();
   _savePlayerPrefs();
 });
@@ -987,14 +984,19 @@ audio.addEventListener('error', () => {
   state.playing = false;
   updatePlayButton();
   setWaveformPlaying(false);
-  _consecutiveErrors++;
   const current = state.queue[state.queueIndex];
+  if (!current || !current.is_local) {
+    _consecutiveErrors = 0;
+    toast('Tidal stream unavailable \u2014 try again later', 'error');
+    return;
+  }
+  _consecutiveErrors++;
   const label = current ? (current.name || 'Track') : 'Track';
   if (_consecutiveErrors >= 3) {
     toast('Multiple tracks failed \u2014 check your Tidal session', 'error');
     return;
   }
-  const canAutoSkip = current && state.queueIndex < state.queue.length - 1;
+  const canAutoSkip = state.queueIndex < state.queue.length - 1;
   toast(label + ' unavailable', 'error');
   if (canAutoSkip) {
     setTimeout(() => { state.queueIndex++; playTrack(state.queue[state.queueIndex]); }, 800);
@@ -1271,9 +1273,20 @@ async function refreshStatusLights() {
 
 let _loginPoll = null;
 
+async function _refreshSearchAfterLogin() {
+  if (!state.searchResults?.tidalAuthRequired) return;
+
+  state.searchResults = null;
+  if (state.view !== 'search' || !state.searchQuery.trim()) return;
+
+  const resultsArea = document.querySelector('.results');
+  if (resultsArea) await doSearch(resultsArea);
+}
+
 async function _handleLoginSuccess() {
   refreshStatusLights();
   await _checkErrorBanners();
+  await _refreshSearchAfterLogin();
   const authSection = document.getElementById('settings-auth-status');
   if (authSection) await loadAuthStatus(authSection);
   toast('Connected to Tidal', 'success');
@@ -1418,8 +1431,8 @@ async function triggerLogin() {
           _loginPoll = null;
           _dismissDeviceCodeModal();
           const msg = status.status === 'timeout'
-            ? 'Tidal login timed out — tap the status light to try again'
-            : 'Tidal login failed — tap the status light to try again';
+            ? 'Tidal login timed out. Try Connect Tidal again.'
+            : 'Tidal login failed. Try Connect Tidal again.';
           toast(msg, 'error');
           refreshStatusLights();
         }
@@ -1427,13 +1440,13 @@ async function triggerLogin() {
         clearInterval(_loginPoll);
         _loginPoll = null;
         _dismissDeviceCodeModal();
-        toast('Connection lost during login — tap the status light to retry', 'error');
+        toast('Connection lost during login. Try Connect Tidal again.', 'error');
         refreshStatusLights();
       }
     }, 3000);
   } catch (err) {
     console.error('[music-dl] login failed:', err);
-    toast('Could not start Tidal login — check your connection', 'error');
+    toast('Could not start Tidal login. Try Connect Tidal again.', 'error');
     refreshStatusLights();
   }
 }
@@ -1480,6 +1493,7 @@ function renderQueue() {
       'aria-label': 'Remove from queue',
     });
     remove.textContent = '\u00d7';
+    remove.disabled = i === state.queueIndex;
     remove.addEventListener('click', (e) => {
       e.stopPropagation();
       const removedTrack = state.queue[i];
@@ -1692,6 +1706,10 @@ async function renderUpgradeScanner(container) {
   viewEl._viewCleanup = () => { if (eventSource) { eventSource.close(); eventSource = null; } };
 }
 
+function _upgradeQualityJump(result) {
+  return qualityTitle(result.current_quality) + ' \u2192 ' + qualityTitle(result.available_quality);
+}
+
 function _renderScanResults(container, results) {
   if (!results.length) {
     container.appendChild(textEl('div', 'All tracks are at their best available quality.', 'upgrade-empty'));
@@ -1701,7 +1719,7 @@ function _renderScanResults(container, results) {
   // Group by quality jump
   const groups = {};
   results.forEach(r => {
-    const key = qualityLabel(r.current_quality) + ' \u2192 ' + qualityLabel(r.available_quality);
+    const key = _upgradeQualityJump(r);
     if (!groups[key]) groups[key] = [];
     groups[key].push(r);
   });
@@ -1735,7 +1753,7 @@ function _renderScanResults(container, results) {
       const row = h('div', { className: 'upgrade-row' });
       row.appendChild(textEl('span', t.title || '', 'upgrade-row-title'));
       row.appendChild(textEl('span', t.artist || '', 'upgrade-row-artist'));
-      row.appendChild(textEl('span', qualityLabel(t.current_quality) + ' \u2192 ' + qualityLabel(t.available_quality), 'upgrade-row-quality'));
+      row.appendChild(textEl('span', _upgradeQualityJump(t), 'upgrade-row-quality'));
       const upBtn = h('button', { className: 'pill small' });
       upBtn.textContent = 'Upgrade';
       upBtn.addEventListener('click', async () => {
@@ -1764,16 +1782,19 @@ function _renderScanResults(container, results) {
 
 // ---- SETUP WIZARD ----
 
+function _setupMustBlock(setupData) {
+  return !setupData.scan_paths_configured;
+}
+
+function _authStateNeedsExpiredBanner(authState) {
+  return authState === 'expired';
+}
+
 async function _checkSetup() {
   try {
     const resp = await fetch('/api/setup/status');
     const data = await resp.json();
-    // Allow app access if at least one source is configured:
-    // - Tidal login for streaming, OR
-    // - Local scan paths for offline playback
-    // Only block with wizard if NOTHING is configured.
-    const hasAnySource = data.logged_in || data.scan_paths_configured;
-    if (!hasAnySource) {
+    if (_setupMustBlock(data)) {
       _renderWizard(data);
       return true;
     }
@@ -1797,13 +1818,8 @@ function _renderWizard(setupData) {
   const wizard = h('div', { className: 'setup-wizard' });
   document.body.appendChild(wizard);
 
-  if (!setupData.logged_in && !setupData.scan_paths_configured) {
-    _wizardStepLogin(wizard, setupData);
-  } else if (!setupData.scan_paths_configured) {
+  if (!setupData.scan_paths_configured) {
     _wizardStepPaths(wizard);
-  } else if (!setupData.logged_in) {
-    // Has local paths but no Tidal - show login with skip option
-    _wizardStepLogin(wizard, setupData);
   }
 }
 
@@ -1816,138 +1832,6 @@ function _teardownWizard() {
   if (playerEl) playerEl.style.display = '';
 }
 
-function _wizardStepLogin(wizard, setupData) {
-  while (wizard.firstChild) wizard.removeChild(wizard.firstChild);
-
-  // Check if we can at least access local music (offline mode)
-  const canPlayOffline = setupData.scan_paths_configured;
-
-  const card = h('div', { className: 'wizard-card' });
-
-  // Show offline-capable banner if applicable
-  if (canPlayOffline && !setupData.logged_in) {
-    const offlineBanner = h('div', { className: 'wizard-offline-banner' });
-    offlineBanner.innerHTML = '<strong>Offline mode available</strong><br>Your local music library is ready. Connect Tidal to stream online.';
-    card.appendChild(offlineBanner);
-  }
-
-  // Step indicator
-  card.appendChild(textEl('div', 'Connect Tidal for streaming (optional if you have local music)', 'wizard-step-label'));
-  card.appendChild(textEl('h2', 'Connect your Tidal account', 'wizard-title'));
-  card.appendChild(textEl('p', 'Sign in to stream and download from Tidal. You\'ll be given a code to enter on Tidal\'s website.', 'wizard-desc'));
-
-  const connectBtn = textEl('button', 'Connect to Tidal', 'wizard-btn');
-  const statusArea = h('div', { className: 'wizard-status' });
-
-  connectBtn.addEventListener('click', async () => {
-    connectBtn.disabled = true;
-    connectBtn.textContent = 'Starting...';
-    statusArea.textContent = '';
-
-    try {
-      const data = await api('/auth/login', { method: 'POST' });
-
-      if (data.status === 'already_logged_in') {
-        // Re-check setup and advance
-        const fresh = await fetch('/api/setup/status').then(r => r.json());
-        if (fresh.setup_complete) {
-          _teardownWizard();
-          _initApp();
-        } else {
-          _renderWizard(fresh);
-        }
-        return;
-      }
-
-      // Show device code
-      while (statusArea.firstChild) statusArea.removeChild(statusArea.firstChild);
-
-      const codeBox = h('div', { className: 'device-code' });
-      codeBox.appendChild(textEl('div', 'Go to the link below and enter this code:', 'device-code-label'));
-
-      const codeEl = h('div', { className: 'code' });
-      codeEl.textContent = data.user_code || '';
-      codeBox.appendChild(codeEl);
-
-      if (data.verification_uri) {
-        const linkEl = h('a', {
-          className: 'wizard-link',
-          href: data.verification_uri,
-          target: '_blank',
-          rel: 'noopener',
-        });
-        linkEl.textContent = data.verification_uri;
-        linkEl.addEventListener('click', e => { e.preventDefault(); _openExternal(data.verification_uri); });
-        codeBox.appendChild(linkEl);
-
-        // Also auto-open in browser
-        _openExternal(data.verification_uri);
-      }
-
-      statusArea.appendChild(codeBox);
-
-      const spinnerRow = h('div', { className: 'wizard-spinner-row' });
-      spinnerRow.appendChild(h('div', { className: 'spinner' }));
-      spinnerRow.appendChild(textEl('span', 'Waiting for you to confirm in browser...', 'wizard-waiting-text'));
-      statusArea.appendChild(spinnerRow);
-
-      connectBtn.textContent = 'Waiting...';
-
-      // Poll login status
-      const poll = setInterval(async () => {
-        try {
-          const status = await api('/auth/login/status');
-          if (status.status === 'success') {
-            clearInterval(poll);
-            // Re-check setup and advance
-            const fresh = await fetch('/api/setup/status').then(r => r.json());
-            if (fresh.setup_complete) {
-              _teardownWizard();
-              _initApp();
-            } else {
-              _renderWizard(fresh);
-            }
-          } else if (status.status === 'failed' || status.status === 'timeout') {
-            clearInterval(poll);
-            while (statusArea.firstChild) statusArea.removeChild(statusArea.firstChild);
-            const errMsg = status.status === 'timeout'
-              ? 'Login timed out. Please try again.'
-              : 'Login failed. Please try again.';
-            statusArea.appendChild(textEl('div', errMsg, 'wizard-error'));
-            connectBtn.disabled = false;
-            connectBtn.textContent = 'Retry';
-          }
-        } catch (_) {
-          clearInterval(poll);
-          statusArea.appendChild(textEl('div', 'Connection lost. Please try again.', 'wizard-error'));
-          connectBtn.disabled = false;
-          connectBtn.textContent = 'Retry';
-        }
-      }, 2000);
-
-    } catch (err) {
-      statusArea.appendChild(textEl('div', 'Failed to start login: ' + err.message, 'wizard-error'));
-      connectBtn.disabled = false;
-      connectBtn.textContent = 'Retry';
-    }
-  });
-
-  card.appendChild(connectBtn);
-  card.appendChild(statusArea);
-
-  // Add skip button for offline users
-  if (canPlayOffline) {
-    const skipBtn = textEl('button', 'Skip and use local library only', 'wizard-btn wizard-btn-secondary');
-    skipBtn.addEventListener('click', () => {
-      _teardownWizard();
-      _initApp();
-    });
-    card.appendChild(skipBtn);
-  }
-
-  wizard.appendChild(card);
-}
-
 function _wizardStepPaths(wizard) {
   while (wizard.firstChild) wizard.removeChild(wizard.firstChild);
 
@@ -1955,9 +1839,9 @@ function _wizardStepPaths(wizard) {
   const paths = [];
 
   // Step indicator
-  card.appendChild(textEl('div', 'Step 2 of 2', 'wizard-step-label'));
-  card.appendChild(textEl('h2', 'Where\'s your music?', 'wizard-title'));
-  card.appendChild(textEl('p', 'Tell us where to find your existing music files. You can add multiple folders.', 'wizard-desc'));
+  card.appendChild(textEl('div', 'Set up your local library', 'wizard-step-label'));
+  card.appendChild(textEl('h2', 'Select your music folders', 'wizard-title'));
+  card.appendChild(textEl('p', 'Choose folders containing music on this device. Tidal is optional. Connect it later for catalog search, streaming, and downloads.', 'wizard-desc'));
 
   // Path input row
   const inputRow = h('div', { className: 'path-input-row' });
@@ -2068,6 +1952,11 @@ function _wizardStepPaths(wizard) {
   });
 
   card.appendChild(continueBtn);
+
+  const connectTidalBtn = textEl('button', 'Connect Tidal', 'wizard-btn wizard-btn-secondary');
+  connectTidalBtn.addEventListener('click', () => triggerLogin());
+  card.appendChild(connectTidalBtn);
+
   card.appendChild(statusArea);
   wizard.appendChild(card);
 }
@@ -2081,7 +1970,7 @@ async function _checkErrorBanners() {
   // Check auth status
   try {
     const auth = await api('/auth/status');
-    if (!auth.logged_in) {
+    if (_authStateNeedsExpiredBanner(auth.auth_state)) {
       const banner = h('div', { className: 'error-banner' });
       banner.appendChild(textEl('span', 'Tidal session expired.'));
       const reloginBtn = textEl('button', 'Re-connect', 'banner-action');
@@ -2635,9 +2524,14 @@ function _renderWebUpdaterPanel(container) {
 }
 
 function _checkWebUpdate() {
-  api('/settings/update-check').then(data => {
-    if (!data.update_available) return;
+  return api('/settings/update-check').then(data => {
     _updater.webUpdate = data;
+    if (!data.update_available) {
+      if (_updater.settingsEl && !_isTauri()) {
+        _renderWebUpdaterPanel(_updater.settingsEl);
+      }
+      return;
+    }
 
     // Badge on Settings nav
     const settingsNav = document.querySelector('[data-view="settings"]');
@@ -2725,31 +2619,6 @@ function _renderWebUpdaterSettings(container) {
   container.prepend(card);
 }
 
-// ---- TOKEN KEEPALIVE ----
-// Pings /auth/keepalive every 10 min while the window is visible so the token
-// never expires silently during idle periods.  Stops when the tab is hidden
-// and fires immediately + restarts the interval when it becomes visible again.
-let _keepaliveTimer = null;
-const _KEEPALIVE_MS = 10 * 60 * 1000; // 10 minutes
-
-function _keepaliveTick() {
-  api('/auth/keepalive', { method: 'POST' }).catch(() => {});
-}
-
-function _startKeepalive() {
-  if (_keepaliveTimer) return;
-  _keepaliveTick(); // immediate tick on visibility restore
-  _keepaliveTimer = setInterval(_keepaliveTick, _KEEPALIVE_MS);
-}
-
-function _stopKeepalive() {
-  if (_keepaliveTimer) { clearInterval(_keepaliveTimer); _keepaliveTimer = null; }
-}
-
-document.addEventListener('visibilitychange', () => {
-  if (document.hidden) _stopKeepalive(); else _startKeepalive();
-});
-
 async function _initApp() {
   // Load settings into state for upgrade quality checks
   api('/settings').then(s => { state.settings = s; }).catch(() => {});
@@ -2759,7 +2628,6 @@ async function _initApp() {
   _restorePosition();
   initUpdater();
   _checkWebUpdate();
-  _startKeepalive();
   await _syncRecentFromServer();
   navigate(normalizeView(location.hash.slice(1) || 'home'));
 }

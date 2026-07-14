@@ -781,7 +781,12 @@ function renderSearch(container) {
   container.appendChild(resultsArea);
 
   if (state.searchResults && state.searchQuery) {
-    renderUnifiedSearchResults(resultsArea, state.searchResults.local, state.searchResults.tidal);
+    renderUnifiedSearchResults(
+      resultsArea,
+      state.searchResults.local,
+      state.searchResults.tidal,
+      state.searchResults.tidalAuthRequired
+    );
   } else {
     renderSearchEmpty(resultsArea);
   }
@@ -868,18 +873,34 @@ async function doSearch(resultsArea) {
     localData = await api('/library/search?q=' + encodeURIComponent(q) + '&type=' + state.searchType + '&limit=20');
   } catch (_) { /* local search optional */ }
 
-  // Tidal results (async, may fail if not logged in)
+  // Tidal results (async, may require a user-initiated login)
   let tidalData = null;
+  let tidalAuthRequired = false;
   try {
-    tidalData = await apiTidal('/search?q=' + encodeURIComponent(q) + '&type=' + state.searchType + '&limit=50');
-  } catch (_) { /* Tidal unavailable is OK */ }
+    tidalData = await api('/search?q=' + encodeURIComponent(q) + '&type=' + state.searchType + '&limit=50');
+  } catch (error) {
+    if (_isTidalAuthError(error)) {
+      tidalAuthRequired = true;
+    }
+  }
 
-  state.searchResults = { local: localData, tidal: tidalData };
-  renderUnifiedSearchResults(resultsArea, localData, tidalData);
+  state.searchResults = { local: localData, tidal: tidalData, tidalAuthRequired };
+  renderUnifiedSearchResults(resultsArea, localData, tidalData, tidalAuthRequired);
   refreshStatusLights();
 }
 
-function renderUnifiedSearchResults(container, localData, tidalData) {
+function renderTidalSearchAuthPanel(container) {
+  const panel = h('div', { className: 'search-tidal-auth-panel' });
+  panel.appendChild(textEl('div', 'Connect Tidal to search, stream, and download', 'search-tidal-auth-message'));
+
+  const connectButton = h('button', { className: 'search-tidal-auth-button', type: 'button' });
+  connectButton.textContent = 'Connect Tidal';
+  connectButton.addEventListener('click', () => triggerLogin());
+  panel.appendChild(connectButton);
+  container.appendChild(panel);
+}
+
+function renderUnifiedSearchResults(container, localData, tidalData, tidalAuthRequired) {
   while (container.firstChild) container.removeChild(container.firstChild);
 
   const type = state.searchType;
@@ -998,7 +1019,11 @@ function renderUnifiedSearchResults(container, localData, tidalData) {
     }
   }
 
-  if (localItems.length === 0 && tidalItems.length === 0) {
+  if (tidalAuthRequired) {
+    renderTidalSearchAuthPanel(container);
+  }
+
+  if (localItems.length === 0 && tidalItems.length === 0 && !tidalAuthRequired) {
     container.appendChild(textEl('div', 'No results found', 'search-empty-text'));
   }
 }
@@ -2151,6 +2176,7 @@ const LIBRARY_PAGE_SIZE = 50;
 const LIBRARY_ALBUM_BATCH_SIZE = 80;
 let libraryOffset = 0;
 let libraryTotal = 0;
+let libraryArtistTracks = [];
 let _libSearchTimer = null;
 let _libRequestId = 0;
 const _libraryAlbumCache = new Map();
@@ -2694,17 +2720,50 @@ async function loadLibraryAlbums(resultsArea, query) {
   }
 }
 
-async function loadLibraryArtistGrouped(resultsArea, query) {
+function _groupArtistTracks(tracks) {
+  const groups = [];
+  let currentArtist = null;
+  let currentGroup = null;
+
+  tracks.forEach(track => {
+    track.local_path = track.path;
+    const artist = track.artist || 'Unknown Artist';
+    if (artist !== currentArtist) {
+      currentArtist = artist;
+      currentGroup = { artist: artist, tracks: [] };
+      groups.push(currentGroup);
+    }
+    currentGroup.tracks.push(track);
+  });
+
+  groups.forEach(group => {
+    group.tracks.sort((a, b) => {
+      const albumCmp = (a.album || '').localeCompare(b.album || '');
+      if (albumCmp !== 0) return albumCmp;
+      return (a.track_number || 0) - (b.track_number || 0);
+    });
+  });
+
+  return groups;
+}
+
+async function loadLibraryArtistGrouped(resultsArea, query, append) {
   const reqId = ++_libRequestId;
-  while (resultsArea.firstChild) resultsArea.removeChild(resultsArea.firstChild);
-  resultsArea.appendChild(h('div', { className: 'skeleton-row' }));
+  if (!append) {
+    libraryOffset = 0;
+    libraryArtistTracks = [];
+    while (resultsArea.firstChild) resultsArea.removeChild(resultsArea.firstChild);
+    resultsArea.appendChild(h('div', { className: 'skeleton-row' }));
+  }
 
   try {
     // Keep first paint page-sized; rendering many track rows synchronously makes navigation feel stuck.
-    const data = await api('/library?sort=artist&limit=' + LIBRARY_PAGE_SIZE + '&offset=0' +
+    const data = await api('/library?sort=artist&limit=' + LIBRARY_PAGE_SIZE + '&offset=' + libraryOffset +
       (query ? '&q=' + encodeURIComponent(query) : ''));
     if (reqId !== _libRequestId) return;
-    const tracks = data.tracks || [];
+    const pageTracks = data.tracks || [];
+    libraryArtistTracks = append ? libraryArtistTracks.concat(pageTracks) : pageTracks;
+    const tracks = libraryArtistTracks;
 
     while (resultsArea.firstChild) resultsArea.removeChild(resultsArea.firstChild);
 
@@ -2724,29 +2783,7 @@ async function loadLibraryArtistGrouped(resultsArea, query) {
       return;
     }
 
-    // Group tracks by artist
-    const groups = [];
-    let currentArtist = null;
-    let currentGroup = null;
-    tracks.forEach(t => {
-      t.local_path = t.path;
-      const artist = t.artist || 'Unknown Artist';
-      if (artist !== currentArtist) {
-        currentArtist = artist;
-        currentGroup = { artist: artist, tracks: [] };
-        groups.push(currentGroup);
-      }
-      currentGroup.tracks.push(t);
-    });
-
-    // Sort tracks within each group by album, then track number
-    groups.forEach(g => {
-      g.tracks.sort((a, b) => {
-        const albumCmp = (a.album || '').localeCompare(b.album || '');
-        if (albumCmp !== 0) return albumCmp;
-        return (a.track_number || 0) - (b.track_number || 0);
-      });
-    });
+    const groups = _groupArtistTracks(tracks);
 
     // Update header with artist count
     const countEl = resultsArea.querySelector('.results-count');
@@ -2783,11 +2820,10 @@ async function loadLibraryArtistGrouped(resultsArea, query) {
         className: 'load-more pill active',
       });
       loadMore.textContent = 'Load more (' + ((data.total || 0) - tracks.length) + ' remaining)';
-      loadMore.addEventListener('click', async () => {
-        // Fall back to flat list for remaining tracks
+      loadMore.addEventListener('click', () => {
+        loadMore.disabled = true;
         libraryOffset = tracks.length;
-        loadMore.remove();
-        loadLibrary(resultsArea, true);
+        loadLibraryArtistGrouped(resultsArea, query, true);
       });
       resultsArea.appendChild(loadMore);
     }
@@ -3887,27 +3923,57 @@ function renderSettings(container) {
   }
 }
 
+function _authStateCanReset(authState) {
+  return ['connected', 'expired', 'unavailable'].includes(authState);
+}
+
+async function _resetTidalConnection(container) {
+  if (!window.confirm('Reset the saved Tidal connection? You will need to log in again.')) return false;
+
+  try {
+    await api('/auth/reset', { method: 'POST' });
+    if (_loginPoll) {
+      clearInterval(_loginPoll);
+      _loginPoll = null;
+    }
+    _dismissDeviceCodeModal();
+    await loadAuthStatus(container);
+    await refreshStatusLights();
+    toast('Tidal connection reset', 'success');
+    return true;
+  } catch (_) {
+    toast('Could not reset Tidal connection', 'error');
+    return false;
+  }
+}
+
 async function loadAuthStatus(container) {
   try {
     const data = await api('/auth/status');
     while (container.firstChild) container.removeChild(container.firstChild);
+    container.appendChild(textEl('div', 'Tidal Account', 'settings-section-header'));
+    const row = h('div', { className: 'connection', style: { padding: '0 0 16px', gap: '12px' } });
     if (data.logged_in) {
       const dot = h('span', { className: 'connection-dot' });
-      container.appendChild(h('div', { className: 'connection', style: { padding: '0 0 16px' } },
-        dot,
-        document.createTextNode('Connected' + (data.username ? ' as ' + data.username : ''))
-      ));
+      row.appendChild(dot);
+      row.appendChild(document.createTextNode('Connected' + (data.username ? ' as ' + data.username : '')));
     } else {
       const dot = h('span', { className: 'connection-dot disconnected' });
-      const row = h('div', { className: 'connection', style: { padding: '0 0 16px', gap: '12px' } },
-        dot,
-        document.createTextNode('Not logged in to Tidal')
-      );
+      const statusText = data.auth_state === 'expired'
+        ? 'Tidal connection expired'
+        : data.auth_state === 'unavailable' ? 'Tidal connection unavailable' : 'Not logged in to Tidal';
+      row.appendChild(dot);
+      row.appendChild(document.createTextNode(statusText));
       const loginBtn = textEl('button', 'Log in to Tidal', 'banner-action');
       loginBtn.addEventListener('click', () => { triggerLogin(); });
       row.appendChild(loginBtn);
-      container.appendChild(row);
     }
+    if (_authStateCanReset(data.auth_state)) {
+      const resetBtn = textEl('button', 'Reset Tidal connection', 'banner-action');
+      resetBtn.addEventListener('click', () => { _resetTidalConnection(container); });
+      row.appendChild(resetBtn);
+    }
+    container.appendChild(row);
   } catch (_) {
     container.appendChild(textEl('div', 'Could not check auth status', 'track-artist'));
   }
@@ -4188,4 +4254,3 @@ async function saveSetting(key, value) {
     toast('Failed to save: ' + err.message, 'error');
   }
 }
-

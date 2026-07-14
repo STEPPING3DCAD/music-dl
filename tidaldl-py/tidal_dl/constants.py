@@ -98,12 +98,6 @@ HIFI_UPTIME_TRACKER_URLS: list[str] = [
     "https://tidal-uptime.props-76styles.workers.dev/",
 ]
 
-HIFI_API_FALLBACK_INSTANCES: list[str] = [
-    "https://api.monochrome.tf",
-    "https://arran.monochrome.tf",
-    "https://triton.squid.wtf",
-]
-
 # Maps tidalapi.Quality enum → Hi-Fi API quality string parameter.
 HIFI_QUALITY_MAP: dict[str, str] = {
     quality_name(Quality.hi_res_lossless): "HI_RES_LOSSLESS",

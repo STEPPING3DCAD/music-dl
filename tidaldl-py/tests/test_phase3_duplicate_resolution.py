@@ -14,15 +14,10 @@ Covers:
 """
 
 import pathlib
-import shutil
-import types
-import unittest
 from concurrent.futures import Future
-from dataclasses import fields
 from threading import Event
 from unittest.mock import MagicMock, patch
 
-import pytest  # pyright: ignore[reportMissingImports]
 from tidalapi.media import Track, Video
 
 from tidal_dl.helper.checkpoint import STATUS_DOWNLOADED
@@ -184,8 +179,6 @@ def _make_download_obj(tmp_path, isrc_data: dict[str, str], duplicate_action: st
 
 class TestPreflightIsrcScan:
     def test_returns_empty_when_isrc_dedup_disabled(self, tmp_path):
-        from tidal_dl.download import Download
-
         dl = _make_download_obj(tmp_path, {})
         dl.settings.data.skip_duplicate_isrc = False
 
@@ -339,6 +332,7 @@ class TestItemCopyAction:
                 event_abort=abort,
                 event_run=run,
             )
+        dl._library_db = LibraryDB(tmp_path / "library.db")
         dl._library_db.open()
         return dl
 
