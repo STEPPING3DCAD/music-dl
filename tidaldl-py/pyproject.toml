@@ -38,7 +38,7 @@ tidal-dl = "tidal_dl.cli:main"
 repository = "https://github.com/alfdav/music-dl"
 
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=83.0.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
