@@ -800,24 +800,35 @@ mod tests {
         assert!(reusable_local_metadata(&browser_meta, true));
     }
 
-    #[test]
-    fn sidecar_metadata_requires_sidecar_mode_and_matching_pid() {
-        let meta = DaemonMetadata {
+    fn sample_sidecar_metadata(pid: u32, mode: &str) -> DaemonMetadata {
+        DaemonMetadata {
             app: APP_NAME.to_string(),
             status: READY_STATUS.to_string(),
-            pid: 123,
+            pid,
             base_url: "http://127.0.0.1:8766".to_string(),
             health_url: "http://127.0.0.1:8766/api/server/health".to_string(),
-            mode: "tauri-sidecar".to_string(),
-        };
+            mode: mode.to_string(),
+        }
+    }
 
+    #[test]
+    fn sidecar_metadata_rejects_wrong_mode() {
+        let meta = sample_sidecar_metadata(123, BROWSER_MODE);
+        assert!(!sidecar_metadata_matches(&meta, 123));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn sidecar_metadata_requires_matching_pid_on_unix() {
+        let meta = sample_sidecar_metadata(123, SIDECAR_MODE);
         assert!(sidecar_metadata_matches(&meta, 123));
         assert!(!sidecar_metadata_matches(&meta, 456));
+    }
 
-        let browser_meta = DaemonMetadata {
-            mode: BROWSER_MODE.to_string(),
-            ..meta
-        };
-        assert!(!sidecar_metadata_matches(&browser_meta, 123));
+    #[cfg(windows)]
+    #[test]
+    fn sidecar_metadata_accepts_pyinstaller_child_pid_on_windows() {
+        let meta = sample_sidecar_metadata(123, SIDECAR_MODE);
+        assert!(sidecar_metadata_matches(&meta, 456));
     }
 }

@@ -17,7 +17,7 @@
 - Modify and test: `tidaldl-py/src-tauri/src/lib.rs:803`
 - Modify: `.github/workflows/build-desktop.yml:52-61`
 
-- [ ] 1.1 Replace the existing sidecar metadata test with shared fixtures and platform-specific expectations:
+- [x] 1.1 Replace the existing sidecar metadata test with shared fixtures and platform-specific expectations:
 
 ```rust
 fn sample_sidecar_metadata(pid: u32, mode: &str) -> DaemonMetadata {
@@ -53,7 +53,7 @@ fn sidecar_metadata_accepts_pyinstaller_child_pid_on_windows() {
 }
 ```
 
-- [ ] 1.2 Add Rust tests to the existing desktop build matrix immediately after Rust setup:
+- [x] 1.2 Add Rust tests to the existing desktop build matrix immediately after Rust setup:
 
 ```yaml
 - name: Test Rust desktop shell
