@@ -53,7 +53,7 @@ fn sidecar_metadata_accepts_pyinstaller_child_pid_on_windows() {
 }
 ```
 
-- [x] 1.2 Add Rust tests to the existing desktop build matrix immediately after Rust setup:
+- [x] 1.2 Add Rust tests to the existing desktop build matrix after platform sidecar setup and before packaging:
 
 ```yaml
 - name: Test Rust desktop shell
@@ -71,6 +71,8 @@ rtk gh run list --workflow build-desktop.yml --branch codex/fix-windows-daemon-r
 ```
 
 Expected: Windows job reaches and fails `sidecar_metadata_accepts_pyinstaller_child_pid_on_windows`; macOS and Linux Rust tests pass. Preserve the returned `databaseId` and evidence URL in task notes.
+
+Harness correction: [run 30950767351](https://github.com/alfdav/music-dl/actions/runs/30950767351) and its [Windows job 92131978637](https://github.com/alfdav/music-dl/actions/runs/30950767351/job/92131978637) are not accepted as red proof. The test step ran before PyInstaller created `music-dl-server-x86_64-pc-windows-msvc.exe`, so Tauri's build script failed before executing tests. The test step was moved after platform sidecar setup; task 1.3 remains incomplete until the Windows assertion itself fails.
 
 - [ ] 1.4 After recording the Windows PID failure, add pure path-selection tests in the same Rust test module:
 
