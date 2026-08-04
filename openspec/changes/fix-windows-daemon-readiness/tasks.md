@@ -446,4 +446,22 @@ Leave legacy `tidal-dl.exe`, Hyper-V VMs, VM networking, VM storage, and all unr
 
 Cleanup proof: both issue-owned scheduled tasks and all three marker-owned test directories are absent; music-dl process and install counts are zero. Legacy `C:\Users\PLEX-MINI\AppData\Local\Programs\Python\Python311\Scripts\tidal-dl.exe` remains present. No Hyper-V command or VM resource was used.
 
-- [ ] 5.9 Record exact Windows red/green workflow URLs and packaged readiness evidence in task notes, then run final `rtk openspec validate fix-windows-daemon-readiness --strict`.
+- [ ] 5.9 Complete final evidence recording and validation after Windows descendant cleanup verification.
+
+## 6. Fix Windows Descendant Cleanup
+
+**Files:**
+- Modify and test: `tidaldl-py/src-tauri/src/lib.rs`
+- Test workflow: `.github/workflows/build-desktop.yml`
+
+- [ ] 6.1 Add a Windows-only unit test requiring recursive native kill arguments, commit and push the test without implementation, dispatch `build-desktop.yml`, and record the Windows compile failure as red proof.
+
+- [ ] 6.2 Add one shared owned-sidecar kill helper in `src-tauri/src/lib.rs`. On Windows, run `taskkill /PID <wrapper-pid> /T /F` and fall back to direct wrapper kill if the native command fails. On non-Windows, retain direct `CommandChild.kill()` behavior. Replace all eight direct lifecycle call sites with the helper.
+
+- [ ] 6.3 Run Rust formatting and tests, confirm no lifecycle call site directly invokes `child.kill()`, perform Ponytail review, commit, push, and require the cross-platform desktop workflow to pass.
+
+- [ ] 6.4 Download and hash the new Windows MSI, install it into the same marker-owned isolated PLEX-MINI test boundary, repeat readiness sampling, close the interactive Tauri window with the issue-owned Alt-F4 task, and verify the Tauri process, wrapper, and child daemon all exit without forced process cleanup. Uninstall the exact test package and remove only marker-owned paths and tasks. Do not reboot or access Hyper-V resources.
+
+## 7. Final Verification
+
+- [ ] 7.1 Record the Windows cleanup red/green workflow URLs and packaged readiness/shutdown evidence, run all relevant local tests and `rtk openspec validate fix-windows-daemon-readiness --strict`, and complete task 5.9.

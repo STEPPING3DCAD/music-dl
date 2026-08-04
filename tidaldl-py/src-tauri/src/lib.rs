@@ -869,6 +869,15 @@ mod tests {
         assert!(sidecar_metadata_matches(&meta, 456));
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn windows_sidecar_kill_targets_process_tree() {
+        assert_eq!(
+            windows_sidecar_kill_args(123),
+            vec!["/PID", "123", "/T", "/F"]
+        );
+    }
+
     #[test]
     fn daemon_home_prefers_home() {
         let path = resolve_daemon_home(

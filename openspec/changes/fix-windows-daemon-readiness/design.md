@@ -4,6 +4,8 @@ The Tauri shell launches the packaged `music-dl-server` sidecar and waits for `d
 
 The failure was reproduced on Windows 11 build 26200 with v1.6.8: the daemon published ready metadata and passed health checks within five seconds, while Tauri timed out and killed the wrapper at 30 seconds. The Python daemon also falls back to `HOMEDRIVE` plus `HOMEPATH` when `HOME` is absent, but the Rust metadata reader does not.
 
+Packaged verification of the readiness fix exposed the matching shutdown defect: closing Tauri terminated the PyInstaller wrapper but left its child daemon running. All eight lifecycle cleanup paths call `CommandChild.kill()` directly, so each can orphan the descendant on Windows.
+
 ## Goals / Non-Goals
 
 **Goals:**
@@ -12,6 +14,7 @@ The failure was reproduced on Windows 11 build 26200 with v1.6.8: the daemon pub
 - Keep existing app, mode, status, loopback URL, and live health validation.
 - Match Python's Windows home-directory fallback without moving existing config.
 - Preserve strict PID or ancestor matching on Unix.
+- Terminate the owned Windows wrapper and descendant daemon together on every lifecycle cleanup path.
 - Add the smallest regression coverage that protects both Windows failures.
 
 **Non-Goals:**
@@ -19,6 +22,7 @@ The failure was reproduced on Windows 11 build 26200 with v1.6.8: the daemon pub
 - Migrate config to `%APPDATA%` or change existing config layout.
 - Add a cross-process nonce protocol or a Windows process-inspection dependency.
 - Refactor daemon supervision or change startup timeouts.
+- Add a daemon shutdown protocol or persist the daemon child PID solely for cleanup.
 - Change Hyper-V, host networking, or unrelated Windows services during verification.
 
 ## Decisions
@@ -41,11 +45,18 @@ The existing `build-desktop.yml` matrix will run `cargo test` after platform sid
 
 The first green workflow attempt exposed pre-existing checks for deleted `static/app.js`. CI will run the existing split-bundle static-asset test on every platform, while the local Tauri build command will reuse its dependency-free `read_gui_js` helper. This removes duplicated platform checks and preserves local builds that install only the build extras.
 
+### Use native Windows tree termination through one shared helper
+
+Every owned-sidecar cleanup path will call one helper in `src-tauri/src/lib.rs`. On Windows the helper will run `taskkill /PID <wrapper-pid> /T /F`, which asks the operating system to terminate the wrapper and its descendants. If `taskkill` cannot start or reports failure, the helper will fall back to the existing direct wrapper kill and return that result. Non-Windows builds will retain the existing `CommandChild.kill()` behavior.
+
+Patching only the window-destroyed handler would leave readiness timeout, restart, and explicit stop paths broken. Storing the daemon child PID or adding a shutdown endpoint would expand state or protocol across files. One native command helper, reused by all eight callers, fixes the common root without a new module, dependency, or protocol.
+
 ## Risks / Trade-offs
 
 - [A second local sidecar becomes ready during the spawn window] → Existing pre-spawn reuse, `tauri-sidecar` mode, application identity, loopback URL validation, ready status, and live health checks constrain the accepted daemon.
 - [Windows environment lacks both `HOME` and drive/path variables] → Preserve the current explicit path error; do not guess a writable directory.
 - [Packaged behavior differs from Rust unit tests] → Run Rust tests in the existing Windows build job, then install that job's MSI and repeat the timed process/metadata capture on PLEX-MINI.
+- [`taskkill` is unavailable or fails] → Fall back to direct wrapper termination and report the existing kill result; packaged PLEX-MINI verification proves the normal Windows path removes both processes.
 
 ## Migration Plan
 

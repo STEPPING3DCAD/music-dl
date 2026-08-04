@@ -32,3 +32,18 @@ The desktop shell SHALL use `MUSIC_DL_CONFIG_DIR` when non-empty, otherwise use 
 #### Scenario: Explicit config directory is set
 - **WHEN** `MUSIC_DL_CONFIG_DIR` contains a non-empty path
 - **THEN** the shell reads `daemon.json` from that path regardless of home-directory variables
+
+### Requirement: Windows owned sidecar cleanup
+The Windows desktop shell SHALL terminate the spawned PyInstaller wrapper and all of its descendant daemon processes whenever an owned sidecar is stopped.
+
+#### Scenario: Main window is destroyed
+- **WHEN** the main Windows desktop window is destroyed while its owned sidecar wrapper and child daemon are running
+- **THEN** both the wrapper and child daemon exit
+
+#### Scenario: Lifecycle cleanup stops the sidecar
+- **WHEN** explicit stop, restart, readiness failure, or another lifecycle cleanup path stops the owned Windows sidecar
+- **THEN** no descendant process from that sidecar remains running
+
+#### Scenario: Non-Windows sidecar cleanup
+- **WHEN** a non-Windows lifecycle path stops its owned sidecar
+- **THEN** the existing direct child termination behavior remains unchanged
