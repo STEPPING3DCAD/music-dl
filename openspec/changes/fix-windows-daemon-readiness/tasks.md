@@ -454,9 +454,11 @@ Cleanup proof: both issue-owned scheduled tasks and all three marker-owned test 
 - Modify and test: `tidaldl-py/src-tauri/src/lib.rs`
 - Test workflow: `.github/workflows/build-desktop.yml`
 
-- [ ] 6.1 Add a Windows-only unit test requiring recursive native kill arguments, commit and push the test without implementation, dispatch `build-desktop.yml`, and record the Windows compile failure as red proof.
+- [x] 6.1 Add a Windows-only unit test requiring recursive native kill arguments, commit and push the test without implementation, dispatch `build-desktop.yml`, and record the Windows compile failure as red proof.
 
-- [ ] 6.2 Add one shared owned-sidecar kill helper in `src-tauri/src/lib.rs`. On Windows, run `taskkill /PID <wrapper-pid> /T /F` and fall back to direct wrapper kill if the native command fails. On non-Windows, retain direct `CommandChild.kill()` behavior. Replace all eight direct lifecycle call sites with the helper.
+Accepted red proof: [run 30956146444](https://github.com/alfdav/music-dl/actions/runs/30956146444), [Windows job 92149539287](https://github.com/alfdav/music-dl/actions/runs/30956146444/job/92149539287), commit `4f78291`. The packaged sidecar build passed, then Rust failed with `E0425` because `windows_sidecar_kill_args` did not exist. macOS and Linux Rust tests passed.
+
+- [x] 6.2 Add one shared owned-sidecar kill helper in `src-tauri/src/lib.rs`. On Windows, run `taskkill /PID <wrapper-pid> /T /F` and fall back to direct wrapper kill if the native command fails. On non-Windows, retain direct `CommandChild.kill()` behavior. Replace all eight direct lifecycle call sites with the helper.
 
 - [ ] 6.3 Run Rust formatting and tests, confirm no lifecycle call site directly invokes `child.kill()`, perform Ponytail review, commit, push, and require the cross-platform desktop workflow to pass.
 

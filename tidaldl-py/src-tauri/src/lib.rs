@@ -418,6 +418,30 @@ fn spawn_sidecar(app: &tauri::AppHandle) -> Result<CommandChild, String> {
     Ok(child)
 }
 
+#[cfg(windows)]
+fn windows_sidecar_kill_args(pid: u32) -> Vec<String> {
+    vec![
+        "/PID".to_string(),
+        pid.to_string(),
+        "/T".to_string(),
+        "/F".to_string(),
+    ]
+}
+
+fn kill_owned_sidecar(child: CommandChild) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        let status = std::process::Command::new("taskkill")
+            .args(windows_sidecar_kill_args(child.pid()))
+            .status();
+        if matches!(status, Ok(status) if status.success()) {
+            return Ok(());
+        }
+    }
+
+    child.kill().map_err(|error| error.to_string())
+}
+
 fn spawn_and_wait_for_sidecar(app: &tauri::AppHandle) -> Result<SidecarState, String> {
     let child = spawn_sidecar(app)?;
     let pid = child.pid();
@@ -425,7 +449,7 @@ fn spawn_and_wait_for_sidecar(app: &tauri::AppHandle) -> Result<SidecarState, St
     match wait_for_ready_metadata(Some(pid)) {
         Ok(meta) => state_from_owned_child(child, meta),
         Err(err) => {
-            let _ = child.kill();
+            let _ = kill_owned_sidecar(child);
             Err(err)
         }
     }
@@ -496,7 +520,7 @@ fn launch_initial_sidecar(handle: tauri::AppHandle) {
         if let Some(sidecar) = handle.try_state::<Sidecar>() {
             let mut guard = sidecar.0.lock().unwrap();
             if guard.child.is_some() || guard.health_url.is_some() {
-                let _ = child.kill();
+                let _ = kill_owned_sidecar(child);
                 return;
             }
 
@@ -507,7 +531,7 @@ fn launch_initial_sidecar(handle: tauri::AppHandle) {
                 owns_child: true,
             };
         } else {
-            let _ = child.kill();
+            let _ = kill_owned_sidecar(child);
             return;
         }
 
@@ -543,7 +567,7 @@ fn launch_initial_sidecar(handle: tauri::AppHandle) {
                     let current_pid = guard.child.as_ref().map(|child| child.pid());
                     if guard.owns_child && current_pid == Some(pid) {
                         if let Some(child) = guard.child.take() {
-                            let _ = child.kill();
+                            let _ = kill_owned_sidecar(child);
                         }
                         guard.base_url = None;
                         guard.health_url = None;
@@ -578,7 +602,7 @@ fn stop_sidecar(sidecar: tauri::State<'_, Sidecar>) -> Result<(), String> {
             guard.base_url = None;
             guard.health_url = None;
             guard.owns_child = false;
-            child.kill().map_err(|e| e.to_string())
+            kill_owned_sidecar(child)
         }
         _ => Err("Sidecar is not running".into()),
     }
@@ -604,7 +628,7 @@ fn start_sidecar(app: tauri::AppHandle, sidecar: tauri::State<'_, Sidecar>) -> R
     };
 
     if let Some(child) = child {
-        let _ = child.kill();
+        let _ = kill_owned_sidecar(child);
         thread::sleep(Duration::from_millis(500));
     }
 
@@ -634,7 +658,7 @@ fn restart_sidecar(
     };
 
     if let Some(child) = child {
-        let _ = child.kill();
+        let _ = kill_owned_sidecar(child);
     }
 
     // Brief pause so the port is freed before we respawn
@@ -730,7 +754,7 @@ pub fn run() {
                         }
 
                         if let Some(child) = guard.child.take() {
-                            let _ = child.kill();
+                            let _ = kill_owned_sidecar(child);
                         }
                     }
                 }
