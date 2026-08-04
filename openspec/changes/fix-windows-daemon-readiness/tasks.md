@@ -394,7 +394,7 @@ Expected by five seconds:
 
 Packaged readiness proof: every sample from 0 through 35 seconds retained Tauri PID `26240`, wrapper PID `25856`, and child PID `15224`. `daemon.json` and live health both reported v1.6.8 `status: ready`, `mode: tauri-sidecar`, and child PID `15224` throughout. No 30-second timeout occurred.
 
-- [ ] 5.6 Stop only `music-dl` test processes, verify both PyInstaller PIDs exit, then uninstall the fixed MSI:
+- [x] 5.6 Stop only `music-dl` test processes, verify both PyInstaller PIDs exit, then uninstall the fixed MSI:
 
 ```powershell
 $Desktop = Get-Process -Name 'music-dl' -ErrorAction Stop
@@ -414,7 +414,9 @@ if ($Installed) {
 }
 ```
 
-Blocked proof: SSH could not obtain the interactive window handle, so an issue-owned interactive task sent Alt-F4 to Tauri PID `26240`. Tauri and wrapper PID `25856` exited, but child PID `15224` remained alive. The verified orphan was force-stopped, evidence was copied, and fixed product `{2AD011F9-8D83-40A9-A29C-2E70D00968FB}` was uninstalled with exit 0 and `/norestart`. Task 5.6 remains incomplete pending a scope decision on Windows descendant cleanup.
+Initial blocked proof: SSH could not obtain the interactive window handle, so an issue-owned interactive task sent Alt-F4 to Tauri PID `26240`. Tauri and wrapper PID `25856` exited, but child PID `15224` remained alive. The verified orphan was force-stopped, evidence was copied, and fixed product `{2AD011F9-8D83-40A9-A29C-2E70D00968FB}` was uninstalled with exit 0 and `/norestart`. This proof motivated the descendant-cleanup work in section 6.
+
+Completion proof: the rebuilt package in task 6.4 closed through the same interactive Alt-F4 path. Tauri PID `26424`, wrapper PID `15224`, and child PID `25988` all exited without forced cleanup, then product `{FD173F34-EAAF-4471-BAE9-1645CF15B62A}` uninstalled with exit 0 and `/norestart`.
 
 - [x] 5.7 Copy evidence off PLEX-MINI before cleanup:
 
@@ -446,7 +448,7 @@ Leave legacy `tidal-dl.exe`, Hyper-V VMs, VM networking, VM storage, and all unr
 
 Cleanup proof: both issue-owned scheduled tasks and all three marker-owned test directories are absent; music-dl process and install counts are zero. Legacy `C:\Users\PLEX-MINI\AppData\Local\Programs\Python\Python311\Scripts\tidal-dl.exe` remains present. No Hyper-V command or VM resource was used.
 
-- [ ] 5.9 Complete final evidence recording and validation after Windows descendant cleanup verification.
+- [x] 5.9 Complete final evidence recording and validation after Windows descendant cleanup verification.
 
 ## 6. Fix Windows Descendant Cleanup
 
@@ -460,10 +462,18 @@ Accepted red proof: [run 30956146444](https://github.com/alfdav/music-dl/actions
 
 - [x] 6.2 Add one shared owned-sidecar kill helper in `src-tauri/src/lib.rs`. On Windows, run `taskkill /PID <wrapper-pid> /T /F` and fall back to direct wrapper kill if the native command fails. On non-Windows, retain direct `CommandChild.kill()` behavior. Replace all eight direct lifecycle call sites with the helper.
 
-- [ ] 6.3 Run Rust formatting and tests, confirm no lifecycle call site directly invokes `child.kill()`, perform Ponytail review, commit, push, and require the cross-platform desktop workflow to pass.
+- [x] 6.3 Run Rust formatting and tests, confirm no lifecycle call site directly invokes `child.kill()`, perform Ponytail review, commit, push, and require the cross-platform desktop workflow to pass.
 
-- [ ] 6.4 Download and hash the new Windows MSI, install it into the same marker-owned isolated PLEX-MINI test boundary, repeat readiness sampling, close the interactive Tauri window with the issue-owned Alt-F4 task, and verify the Tauri process, wrapper, and child daemon all exit without forced process cleanup. Uninstall the exact test package and remove only marker-owned paths and tasks. Do not reboot or access Hyper-V resources.
+Green CI proof: [run 30956549821](https://github.com/alfdav/music-dl/actions/runs/30956549821) at commit `ac0e58f`; [Windows job 92150866115](https://github.com/alfdav/music-dl/actions/runs/30956549821/job/92150866115), [Linux job 92150866050](https://github.com/alfdav/music-dl/actions/runs/30956549821/job/92150866050), and [macOS job 92150866003](https://github.com/alfdav/music-dl/actions/runs/30956549821/job/92150866003) all passed. Windows passed the new tree-kill test, the full Rust suite, static assets, sidecar smoke, MSI packaging, and artifact upload. The only remaining direct `child.kill()` is the helper's non-Windows/fallback implementation.
+
+- [x] 6.4 Download and hash the new Windows MSI, install it into the same marker-owned isolated PLEX-MINI test boundary, repeat readiness sampling, close the interactive Tauri window with the issue-owned Alt-F4 task, and verify the Tauri process, wrapper, and child daemon all exit without forced process cleanup. Uninstall the exact test package and remove only marker-owned paths and tasks. Do not reboot or access Hyper-V resources.
+
+Packaged cleanup proof: local and PLEX-MINI SHA-256 both equal `6d5b03027fe4b0c272330a0c7de8e0e41a882e03726d7c3c6d65a04fb1788d8a`. Readiness remained healthy through 35 seconds with Tauri PID `26424`, wrapper PID `15224`, child PID `25988`, and ready `tauri-sidecar` metadata plus live health. The issue-owned interactive close task confirmed the target window handle, sent Alt-F4, and recorded `REMAINING_COUNT=0`. Exact product `{FD173F34-EAAF-4471-BAE9-1645CF15B62A}` uninstalled with exit 0 and `/norestart`. Both issue tasks and the marker-owned test directory are absent; music-dl install and process counts are zero; legacy `tidal-dl.exe` remains. No reboot or Hyper-V command ran.
+
+Ignored local evidence: `output/issue-103/tree-kill-logs/readiness.log` SHA-256 `2cfa83aa4201ca056e4f6a66b7b9012dd0c70696b6608cc2bb5a17f6ad1cc116`; `shutdown.log` SHA-256 `06ea6bf66a240a2f6cde0bfd91a69881f965a63b903944468d2a08f038a9af38`; `close-action.log` SHA-256 `7306f99f8c706ad9d145290bc78946f8a27868e65df308ce531c165927ef205f`.
 
 ## 7. Final Verification
 
-- [ ] 7.1 Record the Windows cleanup red/green workflow URLs and packaged readiness/shutdown evidence, run all relevant local tests and `rtk openspec validate fix-windows-daemon-readiness --strict`, and complete task 5.9.
+- [x] 7.1 Record the Windows cleanup red/green workflow URLs and packaged readiness/shutdown evidence, run all relevant local tests and `rtk openspec validate fix-windows-daemon-readiness --strict`, and complete task 5.9.
+
+Final local proof: Rust 13/13 passed; packaging and static-asset tests 31/31 passed; release metadata agrees on 1.6.8; Rust formatting and diff checks passed; strict OpenSpec validation passed. Ponytail review found no new module, dependency, protocol, or duplicated lifecycle logic.
