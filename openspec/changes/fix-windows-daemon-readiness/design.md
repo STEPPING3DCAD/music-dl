@@ -39,6 +39,8 @@ Implementation and tests remain in `src-tauri/src/lib.rs`; no new module or depe
 
 The existing `build-desktop.yml` matrix will run `cargo test` after platform sidecar setup and before packaging. This supplies the Windows-only red/green proof without creating another workflow or installing a permanent development toolchain on PLEX-MINI.
 
+The first green workflow attempt exposed pre-existing checks for deleted `static/app.js`. CI will run the existing split-bundle static-asset test on every platform, while the local Tauri build command will reuse its dependency-free `read_gui_js` helper. This removes duplicated platform checks and preserves local builds that install only the build extras.
+
 ## Risks / Trade-offs
 
 - [A second local sidecar becomes ready during the spawn window] → Existing pre-spawn reuse, `tauri-sidecar` mode, application identity, loopback URL validation, ready status, and live health checks constrain the accepted daemon.

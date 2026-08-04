@@ -241,9 +241,11 @@ rtk openspec validate fix-windows-daemon-readiness --strict
 
 Expected: all checks pass and OpenSpec remains valid.
 
+- [x] 4.2a Repair the pre-existing split-GUI asset-check drift exposed by green [run 30951864618](https://github.com/alfdav/music-dl/actions/runs/30951864618): Windows Rust tests passed, but `Verify bundled assets (Windows)` failed because deleted `static/app.js` was still referenced. Reuse `tests/test_static_assets.py` in CI, reuse `tests.gui_js_source.read_gui_js` in the local Tauri build command, and correct the stale local-lyrics link.
+
 - [x] 4.3 Invoke `ponytail:ponytail-review` on the final diff. Remove any new module, dependency, speculative diagnostic layer, or duplicated path logic.
 
-- [ ] 4.4 Commit the implementation and documentation together:
+- [x] 4.4 Commit the implementation and documentation together:
 
 ```bash
 rtk git add tidaldl-py/src-tauri/src/lib.rs .github/ISSUE_TEMPLATE/bug-report.yml docs/bug-reporting.md openspec/changes/fix-windows-daemon-readiness/design.md openspec/changes/fix-windows-daemon-readiness/proposal.md openspec/changes/fix-windows-daemon-readiness/tasks.md

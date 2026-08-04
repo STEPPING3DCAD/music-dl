@@ -183,7 +183,7 @@ imports that would pull audio-path lookup into the trust boundary).
 ## Frontend
 
 The lyrics panel lives in
-[`tidal_dl/gui/static/app.js`](../tidal_dl/gui/static/app.js)
+[`tidal_dl/gui/static/player.js`](../tidal_dl/gui/static/player.js)
 (`lyricsState`, `openLyricsPanel`, `loadLyricsForCurrentTrack`,
 `renderLyricsPanel`, `_applyLyricsPayload`).
 
