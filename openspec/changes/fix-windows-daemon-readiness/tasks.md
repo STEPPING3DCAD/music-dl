@@ -60,7 +60,7 @@ fn sidecar_metadata_accepts_pyinstaller_child_pid_on_windows() {
   run: cargo test --manifest-path src-tauri/Cargo.toml --target ${{ matrix.target }}
 ```
 
-- [ ] 1.3 Commit and push only the sidecar test plus workflow step, dispatch `build-desktop.yml` for `codex/fix-windows-daemon-readiness`, and record the Windows job failure before adding the path test or implementation.
+- [x] 1.3 Commit and push only the sidecar test plus workflow step, dispatch `build-desktop.yml` for `codex/fix-windows-daemon-readiness`, and record the Windows job failure before adding the path test or implementation.
 
 ```bash
 rtk git add tidaldl-py/src-tauri/src/lib.rs .github/workflows/build-desktop.yml openspec/changes/fix-windows-daemon-readiness/tasks.md
@@ -74,7 +74,9 @@ Expected: Windows job reaches and fails `sidecar_metadata_accepts_pyinstaller_ch
 
 Harness correction: [run 30950767351](https://github.com/alfdav/music-dl/actions/runs/30950767351) and its [Windows job 92131978637](https://github.com/alfdav/music-dl/actions/runs/30950767351/job/92131978637) are not accepted as red proof. The test step ran before PyInstaller created `music-dl-server-x86_64-pc-windows-msvc.exe`, so Tauri's build script failed before executing tests. The test step was moved after platform sidecar setup; task 1.3 remains incomplete until the Windows assertion itself fails.
 
-- [ ] 1.4 After recording the Windows PID failure, add pure path-selection tests in the same Rust test module:
+Accepted red proof: [run 30951212136](https://github.com/alfdav/music-dl/actions/runs/30951212136), [Windows job 92133463673](https://github.com/alfdav/music-dl/actions/runs/30951212136/job/92133463673), commit `c462b10`. The sidecar build passed; Rust executed 11 tests, 10 passed, and only `sidecar_metadata_accepts_pyinstaller_child_pid_on_windows` failed because `sidecar_metadata_matches(&meta, 456)` returned false.
+
+- [x] 1.4 After recording the Windows PID failure, add pure path-selection tests in the same Rust test module:
 
 ```rust
 #[test]
@@ -102,7 +104,7 @@ fn daemon_home_uses_windows_parts_without_home() {
 }
 ```
 
-- [ ] 1.5 Run the focused Rust tests locally and verify the new path tests fail before implementation:
+- [x] 1.5 Run the focused Rust tests locally and verify the new path tests fail before implementation:
 
 ```bash
 rtk cargo test --manifest-path tidaldl-py/src-tauri/Cargo.toml daemon_home
@@ -110,13 +112,15 @@ rtk cargo test --manifest-path tidaldl-py/src-tauri/Cargo.toml daemon_home
 
 Expected: compilation fails because `resolve_daemon_home` does not exist. This is the independent red proof for path fallback.
 
+Observed: `cargo test` exited 101 with two `E0425` errors at the new tests because `resolve_daemon_home` did not exist. No production code had been added.
+
 ## 2. Implement Minimum Platform Fix
 
 **Files:**
 - Modify: `tidaldl-py/src-tauri/src/lib.rs:104-149`
 - Test: `tidaldl-py/src-tauri/src/lib.rs:706-822`
 
-- [ ] 2.1 Restrict Unix process inspection to non-Windows builds and branch sidecar identity by platform:
+- [x] 2.1 Restrict Unix process inspection to non-Windows builds and branch sidecar identity by platform:
 
 ```rust
 #[cfg(not(windows))]
@@ -147,7 +151,7 @@ fn sidecar_metadata_matches(meta: &DaemonMetadata, spawned_pid: u32) -> bool {
 }
 ```
 
-- [ ] 2.2 Add the pure home resolver immediately before `daemon_metadata_path`:
+- [x] 2.2 Add the pure home resolver immediately before `daemon_metadata_path`:
 
 ```rust
 fn resolve_daemon_home(
@@ -168,7 +172,7 @@ fn resolve_daemon_home(
 }
 ```
 
-- [ ] 2.3 Replace the direct `HOME` read in `daemon_metadata_path` while preserving the explicit config override:
+- [x] 2.3 Replace the direct `HOME` read in `daemon_metadata_path` while preserving the explicit config override:
 
 ```rust
 #[cfg(windows)]
@@ -183,7 +187,7 @@ let home = resolve_daemon_home(std::env::var("HOME").ok(), home_drive, home_path
 Ok(home.join(".config").join(APP_NAME).join("daemon.json"))
 ```
 
-- [ ] 2.4 Run the focused tests and verify they pass:
+- [x] 2.4 Run the focused tests and verify they pass:
 
 ```bash
 rtk cargo test --manifest-path tidaldl-py/src-tauri/Cargo.toml daemon_home
@@ -196,17 +200,18 @@ Expected: all selected tests pass on macOS; Windows test compiles and passes in 
 
 **Files:**
 - Modify: `.github/ISSUE_TEMPLATE/bug-report.yml:117`
+- Modify: `docs/bug-reporting.md:43`
 
-- [ ] 3.1 Replace the incorrect Windows config location:
+- [x] 3.1 Replace the incorrect Windows config location:
 
 ```yaml
 - Windows: `%USERPROFILE%\.config\music-dl\`
 ```
 
-- [ ] 3.2 Verify no tracked documentation still claims the runtime uses `%APPDATA%\music-dl`:
+- [x] 3.2 Verify no tracked documentation still claims the runtime uses `%APPDATA%\music-dl`:
 
 ```bash
-rtk rg -n '%APPDATA%.*music-dl|AppData.*music-dl' --glob '*.md' --glob '*.yml' --glob '*.yaml'
+rtk rg -n --hidden -F '%APPDATA%\music-dl' --glob '*.md' --glob '*.yml' --glob '*.yaml' --glob '!openspec/**'
 ```
 
 Expected: no stale runtime-path claim.
@@ -216,7 +221,7 @@ Expected: no stale runtime-path claim.
 **Files:**
 - Update task checkboxes: `openspec/changes/fix-windows-daemon-readiness/tasks.md`
 
-- [ ] 4.1 Run the complete Rust suite:
+- [x] 4.1 Run the complete Rust suite:
 
 ```bash
 rtk cargo test --manifest-path tidaldl-py/src-tauri/Cargo.toml
@@ -224,7 +229,7 @@ rtk cargo test --manifest-path tidaldl-py/src-tauri/Cargo.toml
 
 Expected: all Rust tests pass.
 
-- [ ] 4.2 Run repository checks relevant to the changed documentation and release metadata:
+- [x] 4.2 Run repository checks relevant to the changed documentation and release metadata:
 
 ```bash
 cd tidaldl-py
@@ -236,12 +241,12 @@ rtk openspec validate fix-windows-daemon-readiness --strict
 
 Expected: all checks pass and OpenSpec remains valid.
 
-- [ ] 4.3 Invoke `ponytail:ponytail-review` on the final diff. Remove any new module, dependency, speculative diagnostic layer, or duplicated path logic.
+- [x] 4.3 Invoke `ponytail:ponytail-review` on the final diff. Remove any new module, dependency, speculative diagnostic layer, or duplicated path logic.
 
 - [ ] 4.4 Commit the implementation and documentation together:
 
 ```bash
-rtk git add tidaldl-py/src-tauri/src/lib.rs .github/ISSUE_TEMPLATE/bug-report.yml openspec/changes/fix-windows-daemon-readiness/tasks.md
+rtk git add tidaldl-py/src-tauri/src/lib.rs .github/ISSUE_TEMPLATE/bug-report.yml docs/bug-reporting.md openspec/changes/fix-windows-daemon-readiness/design.md openspec/changes/fix-windows-daemon-readiness/proposal.md openspec/changes/fix-windows-daemon-readiness/tasks.md
 rtk git commit -m "fix(desktop): accept Windows sidecar child" -m "Refs #103"
 ```
 

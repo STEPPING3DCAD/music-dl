@@ -101,6 +101,7 @@ fn reusable_local_metadata(meta: &DaemonMetadata, health_ready: bool) -> bool {
         && reusable_metadata(meta, health_ready)
 }
 
+#[cfg(not(windows))]
 fn process_parent_pid(pid: u32) -> Option<u32> {
     let output = std::process::Command::new("ps")
         .args(["-o", "ppid=", "-p", &pid.to_string()])
@@ -113,6 +114,7 @@ fn process_parent_pid(pid: u32) -> Option<u32> {
     String::from_utf8_lossy(&output.stdout).trim().parse().ok()
 }
 
+#[cfg(not(windows))]
 fn process_has_ancestor(mut pid: u32, ancestor: u32) -> bool {
     for _ in 0..16 {
         let Some(parent) = process_parent_pid(pid) else {
@@ -130,8 +132,38 @@ fn process_has_ancestor(mut pid: u32, ancestor: u32) -> bool {
     false
 }
 
-fn sidecar_metadata_matches(meta: &DaemonMetadata, pid: u32) -> bool {
-    meta.mode == SIDECAR_MODE && (meta.pid == pid || process_has_ancestor(meta.pid, pid))
+fn sidecar_metadata_matches(meta: &DaemonMetadata, spawned_pid: u32) -> bool {
+    if meta.mode != SIDECAR_MODE {
+        return false;
+    }
+
+    #[cfg(windows)]
+    {
+        let _ = spawned_pid;
+        true
+    }
+
+    #[cfg(not(windows))]
+    {
+        meta.pid == spawned_pid || process_has_ancestor(meta.pid, spawned_pid)
+    }
+}
+
+fn resolve_daemon_home(
+    home: Option<String>,
+    home_drive: Option<String>,
+    home_path: Option<String>,
+) -> Result<PathBuf, String> {
+    if let Some(home) = home.filter(|value| !value.trim().is_empty()) {
+        return Ok(PathBuf::from(home));
+    }
+
+    match (home_drive, home_path) {
+        (Some(drive), Some(path)) if !drive.trim().is_empty() && !path.trim().is_empty() => {
+            Ok(PathBuf::from(format!("{drive}{path}")))
+        }
+        _ => Err("HOME is not set".to_string()),
+    }
 }
 
 fn daemon_metadata_path() -> Result<PathBuf, String> {
@@ -141,11 +173,16 @@ fn daemon_metadata_path() -> Result<PathBuf, String> {
         }
     }
 
-    let home = std::env::var("HOME").map_err(|_| "HOME is not set".to_string())?;
-    Ok(PathBuf::from(home)
-        .join(".config")
-        .join(APP_NAME)
-        .join("daemon.json"))
+    #[cfg(windows)]
+    let (home_drive, home_path) = (
+        std::env::var("HOMEDRIVE").ok(),
+        std::env::var("HOMEPATH").ok(),
+    );
+    #[cfg(not(windows))]
+    let (home_drive, home_path) = (None, None);
+
+    let home = resolve_daemon_home(std::env::var("HOME").ok(), home_drive, home_path)?;
+    Ok(home.join(".config").join(APP_NAME).join("daemon.json"))
 }
 
 fn read_daemon_metadata() -> Option<DaemonMetadata> {
@@ -830,5 +867,29 @@ mod tests {
     fn sidecar_metadata_accepts_pyinstaller_child_pid_on_windows() {
         let meta = sample_sidecar_metadata(123, SIDECAR_MODE);
         assert!(sidecar_metadata_matches(&meta, 456));
+    }
+
+    #[test]
+    fn daemon_home_prefers_home() {
+        let path = resolve_daemon_home(
+            Some("C:\\primary".to_string()),
+            Some("D:".to_string()),
+            Some("\\fallback".to_string()),
+        )
+        .unwrap();
+
+        assert_eq!(path, PathBuf::from("C:\\primary"));
+    }
+
+    #[test]
+    fn daemon_home_uses_windows_parts_without_home() {
+        let path = resolve_daemon_home(
+            None,
+            Some("C:".to_string()),
+            Some("\\Users\\tester".to_string()),
+        )
+        .unwrap();
+
+        assert_eq!(path, PathBuf::from("C:\\Users\\tester"));
     }
 }

@@ -37,7 +37,7 @@ Rust will retain `MUSIC_DL_CONFIG_DIR` as the highest-precedence override and `H
 
 Implementation and tests remain in `src-tauri/src/lib.rs`; no new module or dependency is justified. The bug-report template will name `%USERPROFILE%\.config\music-dl` so support instructions match runtime behavior.
 
-The existing `build-desktop.yml` matrix will run `cargo test` after Rust setup and before packaging. This supplies the Windows-only red/green proof without creating another workflow or installing a permanent development toolchain on PLEX-MINI.
+The existing `build-desktop.yml` matrix will run `cargo test` after platform sidecar setup and before packaging. This supplies the Windows-only red/green proof without creating another workflow or installing a permanent development toolchain on PLEX-MINI.
 
 ## Risks / Trade-offs
 

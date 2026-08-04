@@ -40,7 +40,7 @@ directory and report which files exist. Do not paste file contents unless asked.
 Config directories:
 
 - macOS/Linux: `~/.config/music-dl/`
-- Windows: `%APPDATA%\music-dl\`
+- Windows: `%USERPROFILE%\.config\music-dl\`
 - Legacy installs may also have `~/.config/tidal-dl/`
 
 Useful files to list:
