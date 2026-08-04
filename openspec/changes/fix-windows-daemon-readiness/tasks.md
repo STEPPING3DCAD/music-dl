@@ -261,7 +261,7 @@ rtk git commit -m "fix(desktop): accept Windows sidecar child" -m "Refs #103"
 
 Recorded pre-test state on 2026-08-03: no desktop package, `%USERPROFILE%\.config\music-dl`, or `%TEMP%\music-dl-issue-103` existed. The controlled v1.6.8 reproduction created only that package and those two paths. Cleanup below requires version, expected-file, and ownership-marker checks before removal.
 
-- [ ] 5.1 Push the implementation commit and rerun the existing workflow for the branch:
+- [x] 5.1 Push the implementation commit and rerun the existing workflow for the branch:
 
 ```bash
 rtk git push origin codex/fix-windows-daemon-readiness
@@ -271,7 +271,9 @@ rtk gh run list --workflow build-desktop.yml --branch codex/fix-windows-daemon-r
 
 Use the returned `databaseId` with `rtk gh run watch <databaseId> --exit-status`. Expected: Windows Rust tests pass and the Windows packaging job succeeds.
 
-- [ ] 5.2 Download only the Windows artifact into ignored `output/` and compute its SHA-256:
+Green CI proof: [run 30952482383](https://github.com/alfdav/music-dl/actions/runs/30952482383) at commit `37e6bf9`; [Windows job 92137700304](https://github.com/alfdav/music-dl/actions/runs/30952482383/job/92137700304), Linux, and macOS all completed successfully. The Windows job passed Rust tests, split-bundle static tests, sidecar smoke, MSI build, and artifact upload.
+
+- [x] 5.2 Download only the Windows artifact into ignored `output/` and compute its SHA-256:
 
 ```bash
 rtk gh run download <databaseId> -n music-dl-windows-x86_64 -D output/issue-103/windows
@@ -295,7 +297,9 @@ rtk proxy scp output/issue-103/windows/*.msi plex-mini:'C:/Users/PLEX-MINI/AppDa
 
 Record the local SHA-256. After `scp`, run `Get-FileHash -Algorithm SHA256` against the transferred MSI and require the same value before installation.
 
-- [ ] 5.3 Before replacement, verify the two baseline paths contain only controlled-test files, then mark them as owned:
+Artifact proof: local and PLEX-MINI SHA-256 both equal `8dd92b80e70ce11046d14f0e0ba315bead1527cb235065d884df7d42726f8374` for `music-dl_1.6.8_x64_en-US.msi`.
+
+- [x] 5.3 Before replacement, verify the two baseline paths contain only controlled-test files, then mark them as owned:
 
 ```powershell
 $BaselineDir = Join-Path $env:TEMP 'music-dl-issue-103'
@@ -304,7 +308,9 @@ $AllowedTemp = @('music-dl_1.6.8_x64_en-US.msi','install.log','app.stdout.log','
 $AllowedConfig = @('daemon.json','library.db','library.db-shm','library.db-wal','token.json')
 $UnexpectedTemp = Get-ChildItem -LiteralPath $BaselineDir -File | Where-Object Name -notin $AllowedTemp
 $UnexpectedConfig = Get-ChildItem -LiteralPath $BaselineConfig -File | Where-Object Name -notin $AllowedConfig
-if ($UnexpectedTemp -or $UnexpectedConfig) { throw 'Unexpected data found in recorded test paths; refusing cleanup ownership' }
+$UnexpectedTempDirs = Get-ChildItem -LiteralPath $BaselineDir -Directory
+$UnexpectedConfigDirs = Get-ChildItem -LiteralPath $BaselineConfig -Directory
+if ($UnexpectedTemp -or $UnexpectedConfig -or $UnexpectedTempDirs -or $UnexpectedConfigDirs) { throw 'Unexpected data found in recorded test paths; refusing cleanup ownership' }
 Set-Content -LiteralPath (Join-Path $BaselineDir '.issue-103-owned') -Value 'created-by-issue-103'
 Set-Content -LiteralPath (Join-Path $BaselineConfig '.issue-103-owned') -Value 'created-by-issue-103'
 ```
@@ -328,7 +334,9 @@ $Exit = (Start-Process msiexec.exe -ArgumentList @('/i', $Msi.FullName, '/qn', '
 if ($Exit -ne 0) { throw "Fixed MSI install failed: $Exit" }
 ```
 
-- [ ] 5.4 Create an isolated launcher and run it in the already-active `plex-mini` console session without touching Hyper-V:
+Replacement proof: the exact recorded v1.6.8 package `{D3563F5F-6B86-4DBC-85B0-93FE220CFC4E}` was removed and the hashed fixed MSI installed as v1.6.8 product `{2AD011F9-8D83-40A9-A29C-2E70D00968FB}`. Both MSI operations returned 0 with `/norestart`; no reboot was requested.
+
+- [x] 5.4 Create an isolated launcher and run it in the already-active `plex-mini` console session without touching Hyper-V:
 
 ```powershell
 $TestDir = Join-Path $env:TEMP 'music-dl-issue-103-fixed'
@@ -347,7 +355,7 @@ schtasks.exe /Run /TN $TaskName
 if ($LASTEXITCODE -ne 0) { throw 'Scheduled-task launch failed' }
 ```
 
-- [ ] 5.5 Over SSH, run this exact PowerShell through `-EncodedCommand` to sample `music-dl.exe`, both PyInstaller PIDs, isolated `daemon.json`, and `/api/server/health` every five seconds through 35 seconds:
+- [x] 5.5 Over SSH, run this exact PowerShell through `-EncodedCommand` to sample `music-dl.exe`, both PyInstaller PIDs, isolated `daemon.json`, and `/api/server/health` every five seconds through 35 seconds:
 
 ```powershell
 $ErrorActionPreference = 'Stop'
@@ -384,6 +392,8 @@ Expected by five seconds:
 - Tauri remains attached to the application instead of entering its timeout path.
 - At 35 seconds the desktop app and daemon remain healthy.
 
+Packaged readiness proof: every sample from 0 through 35 seconds retained Tauri PID `26240`, wrapper PID `25856`, and child PID `15224`. `daemon.json` and live health both reported v1.6.8 `status: ready`, `mode: tauri-sidecar`, and child PID `15224` throughout. No 30-second timeout occurred.
+
 - [ ] 5.6 Stop only `music-dl` test processes, verify both PyInstaller PIDs exit, then uninstall the fixed MSI:
 
 ```powershell
@@ -404,14 +414,18 @@ if ($Installed) {
 }
 ```
 
-- [ ] 5.7 Copy evidence off PLEX-MINI before cleanup:
+Blocked proof: SSH could not obtain the interactive window handle, so an issue-owned interactive task sent Alt-F4 to Tauri PID `26240`. Tauri and wrapper PID `25856` exited, but child PID `15224` remained alive. The verified orphan was force-stopped, evidence was copied, and fixed product `{2AD011F9-8D83-40A9-A29C-2E70D00968FB}` was uninstalled with exit 0 and `/norestart`. Task 5.6 remains incomplete pending a scope decision on Windows descendant cleanup.
+
+- [x] 5.7 Copy evidence off PLEX-MINI before cleanup:
 
 ```bash
 rtk proxy scp plex-mini:'C:/Users/PLEX-MINI/AppData/Local/Temp/music-dl-issue-103-fixed/readiness.log' output/issue-103/readiness.log
 rtk proxy scp plex-mini:'C:/Users/PLEX-MINI/AppData/Local/Temp/music-dl-issue-103-fixed/*.log' output/issue-103/windows-logs/
 ```
 
-- [ ] 5.8 Delete the exact scheduled task and only directories carrying the issue-owned marker:
+Evidence copied locally before cleanup. SHA-256: readiness `31eaf3cd3a2e6330ca15d40d19bb9c2dbe7ab912cdf27aa5d55f6e331d643c54`; shutdown `c44a2f9718885739ed4ee32a687098f28ff15f806fa87b62ba27d808e124b15b`.
+
+- [x] 5.8 Delete the exact scheduled task and only directories carrying the issue-owned marker:
 
 ```powershell
 $TaskName = 'music-dl-issue-103-fixed'
@@ -429,5 +443,7 @@ foreach ($Path in @($FixedDir, $BaselineDir, $BaselineConfig)) {
 ```
 
 Leave legacy `tidal-dl.exe`, Hyper-V VMs, VM networking, VM storage, and all unrelated host paths untouched.
+
+Cleanup proof: both issue-owned scheduled tasks and all three marker-owned test directories are absent; music-dl process and install counts are zero. Legacy `C:\Users\PLEX-MINI\AppData\Local\Programs\Python\Python311\Scripts\tidal-dl.exe` remains present. No Hyper-V command or VM resource was used.
 
 - [ ] 5.9 Record exact Windows red/green workflow URLs and packaged readiness evidence in task notes, then run final `rtk openspec validate fix-windows-daemon-readiness --strict`.
