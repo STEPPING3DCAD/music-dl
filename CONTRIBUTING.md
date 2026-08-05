@@ -49,7 +49,7 @@ merge decision yet.
 - **bun** over npm — always
 - **No build step** — `app.js`, `style.css`, and `index.html` are served directly
 - **No Web Audio API** — the `<audio>` element plays files from source, untouched. Quality is non-negotiable.
-- **CSS variables** for theming — keep [DESIGN.md](DESIGN.md), [design-system.md](tidaldl-py/docs/design-system.md), and `style.css` aligned
+- **CSS variables** for theming — keep the tracked [design system](tidaldl-py/docs/design-system.md) and `style.css` aligned
 
 ### Packaging
 

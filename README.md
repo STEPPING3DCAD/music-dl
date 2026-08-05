@@ -314,8 +314,7 @@ CLI, GUI, and the optional bot share the same backend core. CLI and GUI use the 
 For deep dives, see:
 
 - **[Backend Reference](tidaldl-py/docs/backend-guide.md)** — API routes, DB schema, download pipeline, middleware, security model
-- **[DESIGN.md](DESIGN.md)** — agent-readable design tokens and visual identity contract
-- **[Design System](tidaldl-py/docs/design-system.md)** — detailed UI component patterns, layout, and animation rules
+- **[Design System](tidaldl-py/docs/design-system.md)** — design tokens, visual identity, component patterns, layout, and animation rules
 - **[Docker Guide](docker/README.md)** — detailed Docker usage, mounts, CLI commands, headless/cron
 
 ## Environment Variables
@@ -349,7 +348,7 @@ Run the Python test suite:
 PYTHONNOUSERSITE=1 uv run --extra test python -m pytest
 ```
 
-Run the local pull request QA checks from the repository root:
+Run the fast QA unit/contract, Ruff, and bot checks from the repository root:
 
 ```bash
 uv run --project tidaldl-py --extra test python -m pytest \
@@ -360,17 +359,14 @@ uv run --project tidaldl-py ruff check --no-fix --select E9,F63,F7,F82 \
 cd apps/discord-bot && bun test && bun run typecheck
 ```
 
-The optional `qa-live` job is internal-only, approval-protected, and read-only.
-It never runs on fork pull requests. Live-service latency is diagnostic and is
-not part of the scored deterministic performance check.
+CI also runs broader smoke, security, build, installer, performance,
+supply-chain, and affected-build checks.
 
-Run the Discord bot checks:
-
-```shell
-cd apps/discord-bot
-bun test
-bun run typecheck
-```
+The workflow reserves the optional `qa-live` job for internal, same-repository,
+read-only runs. It MUST NOT be used until rollout Step 8.2 creates and
+configures the `qa-live` environment, required reviewer, and environment-scoped
+secrets. Fork pull requests never run it. Live-service latency is diagnostic
+and is not part of the scored deterministic performance check.
 
 Run the release smoke coverage from the repository root:
 
