@@ -316,15 +316,15 @@ git commit -m "feat(search): add album filter controls"
 - Modify: `tidaldl-py/tidal_dl/gui/static/views.js:1072-1110`
 - Modify: `tidaldl-py/tidal_dl/gui/static/style.css:389-418,1752-1772`
 
-- [ ] **Step 1: Extend static test for badge and style contracts**
+- [x] **Step 1: Extend static test for badge and style contracts**
 
 Assert GUI source contains MAX, LOSSLESS, HIGH, LOW, UNKNOWN, ATMOS, and E badge paths plus CSS contains `.album-search-filters`, `.album-search-badges`, `.album-search-badge`, and a visible `:focus-visible` rule.
 
-- [ ] **Step 2: Run the focused static test and verify RED**
+- [x] **Step 2: Run the focused static test and verify RED**
 
 Use the exact pytest command from Task 3 Step 2. Expected: missing badge/style markers.
 
-- [ ] **Step 3: Render independent badges on TIDAL album cards**
+- [x] **Step 3: Render independent badges on TIDAL album cards**
 
 Only in the Albums branch, map resolution values with:
 
@@ -340,7 +340,7 @@ const qualityLabel = {
 
 Append the resolution badge to an absolutely positioned badge container inside the artwork. Append ATMOS when `item.atmos === true` and E only when `item.explicit === true`. Do not add badges to artist, playlist, or local-library album cards.
 
-- [ ] **Step 4: Add the minimum CSS**
+- [x] **Step 4: Add the minimum CSS**
 
 Use existing colors, radii, mono typography, and `.pill` behavior. Add only:
 
@@ -353,11 +353,13 @@ Use existing colors, radii, mono typography, and `.pill` behavior. Add only:
 
 Do not create a new visual region, popover, framework, or animation.
 
-- [ ] **Step 5: Run focused tests and inspect same-flow screenshot**
+- [x] **Step 5: Run focused tests and inspect same-flow screenshot**
 
 Run Bun and focused static tests. Start the GUI with an isolated test config, search Albums, capture the Search view at the same desktop width as the existing `docs/screenshots/search.png`, and compare controls, wrapping, counts, badges, focus, and empty state. Store evidence under ignored `output/issue-105/`; do not replace committed marketing screenshots unless the UI is release-ready and the user asks.
 
-- [ ] **Step 6: Commit UI styling and badges**
+Evidence: isolated 1440 px and 768 px Search screenshots verify hidden-state behavior, wrapping, no horizontal overflow, Clear, and restored focus. The isolated config has no TIDAL auth; positive live badge rendering remains an explicit Task 6 PLEX-MINI smoke requirement.
+
+- [x] **Step 6: Commit UI styling and badges**
 
 ```shell
 git add tidaldl-py/tests/test_static_assets.py tidaldl-py/tidal_dl/gui/static/views.js tidaldl-py/tidal_dl/gui/static/style.css
