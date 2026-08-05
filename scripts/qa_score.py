@@ -154,6 +154,8 @@ def _evaluate(payload: dict[str, object]) -> tuple[Evaluation, dict[str, object]
     longest_duration = max(durations.values(), default=0.0)
     duration_points = 5 if longest_duration <= 480 else 0
     score += duration_points
+    categories["Performance"]["possible"] += 5
+    categories["Performance"]["earned"] += duration_points
     if longest_duration > 600:
         blockers.append("duration")
 

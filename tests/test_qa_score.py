@@ -37,6 +37,7 @@ def test_all_checks_score_100_and_pass():
     assert result.score == 100
     assert result.blockers == ()
     assert result.exit_code == 0
+    assert "Performance: 15/15" in result.markdown
 
 
 def test_hard_blocker_overrides_97_point_score():
@@ -112,6 +113,13 @@ def test_shared_duration_boundaries(seconds, score, blocked):
     result = evaluate(payload)
     assert result.score == score
     assert ("duration" in result.blockers) is blocked
+
+
+def test_slow_duration_loses_performance_category_points():
+    payload = passing_payload()
+    payload["durations_seconds"] = {"python": 481}
+    result = evaluate(payload)
+    assert "Performance: 10/15" in result.markdown
 
 
 def test_trusted_requested_live_failure_blocks():
