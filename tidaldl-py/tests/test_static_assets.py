@@ -129,10 +129,21 @@ class TestAppJsFeatureMarkers:
         source = js.split("function renderUnifiedSearchResults(")[1].split(
             "function renderSearchResults("
         )[0]
+        results_source = js.split("function renderSearchResults(")[1].split(
+            "function _trackKey("
+        )[0]
+        filtered_condition = "state.searchType === 'albums' && data.unfiltered_total > 0"
         assert source.count("'Tidal Albums'") == 1
         assert "renderSearchResults(tidalWrap, tidalResponse, false)" in source
         assert "unfiltered_total: originalTidalItems.length" in source
         assert "originalTidalItems.length === 0" in source
+        assert filtered_condition in results_source
+        filtered_branch = results_source.split(filtered_condition)[1].split(
+            "textEl('div', 'Nothing here', 'empty-state-title')"
+        )[0]
+        assert "No albums match these filters" in filtered_branch
+        assert "Use Clear filters above to see every album." in filtered_branch
+        assert "return;" in filtered_branch
 
     def test_search_cache_matches_query_and_type_and_drops_stale_results(self):
         js = read_gui_js()
