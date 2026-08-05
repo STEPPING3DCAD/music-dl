@@ -107,22 +107,52 @@ class TestAppJsFeatureMarkers:
         source = js.split("function _renderAlbumFilterControls(")[1].split(
             "function renderSearch(container) {"
         )[0]
+        cached_source = js.split("function _rerenderCachedSearch(")[1].split(
+            "function _renderAlbumFilterControls("
+        )[0]
         assert "albumQualityFilter: 'all'" in js
         assert "albumRatingFilter: 'all'" in js
         assert "aria-pressed" in source
+        assert "data-filter-key" in source
+        assert "data-filter-value" in source
+        assert ".focus()" in source
         assert "Clear filters" in source
         assert "_rerenderCachedSearch(resultsArea)" in source
         assert "doSearch(" not in source
-        assert "Tidal Albums" in js
+        assert "doSearch(" not in cached_source
+        assert "api(" not in cached_source
         assert "querySelector('.album-search-filters')" in js
         assert "No albums match these filters" in js
 
-    def test_filtered_album_empty_suppresses_generic_empty(self):
+    def test_album_results_have_one_header_and_filtered_empty_path(self):
         js = read_gui_js()
         source = js.split("function renderUnifiedSearchResults(")[1].split(
             "function renderSearchResults("
         )[0]
+        assert source.count("'Tidal Albums'") == 1
+        assert "renderSearchResults(tidalWrap, tidalResponse, false)" in source
+        assert "unfiltered_total: originalTidalItems.length" in source
         assert "originalTidalItems.length === 0" in source
+
+    def test_search_cache_matches_query_and_type_and_drops_stale_results(self):
+        js = read_gui_js()
+        search_source = js.split("async function doSearch(resultsArea) {")[1].split(
+            "function renderTidalSearchAuthPanel("
+        )[0]
+        cached_source = js.split("function _rerenderCachedSearch(")[1].split(
+            "function _renderAlbumFilterControls("
+        )[0]
+        view_source = js.split("function renderSearch(container) {")[1].split(
+            "function _greeting() {"
+        )[0]
+        assert "const query = state.searchQuery.trim();" in search_source
+        assert "const type = state.searchType;" in search_source
+        assert "state.searchQuery.trim() !== query || state.searchType !== type" in search_source
+        assert "state.searchResults = { query, type, local: localData, tidal: tidalData, tidalAuthRequired };" in search_source
+        assert "state.searchResults.query === state.searchQuery.trim()" in cached_source
+        assert "state.searchResults.type === state.searchType" in cached_source
+        assert "state.searchResults.query === state.searchQuery.trim()" in view_source
+        assert "state.searchResults.type === state.searchType" in view_source
 
     def test_has_queue_context_actions(self):
         js = read_gui_js()

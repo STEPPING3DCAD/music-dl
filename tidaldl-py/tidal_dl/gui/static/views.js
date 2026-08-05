@@ -731,10 +731,10 @@ function _filterTidalAlbums(items, qualityFilter, ratingFilter) {
 }
 
 function _rerenderCachedSearch(resultsArea) {
-  if (!state.searchResults || !state.searchQuery) {
-    renderSearchEmpty(resultsArea);
-    return;
-  }
+  const cacheMatches = state.searchResults
+    && state.searchResults.query === state.searchQuery.trim()
+    && state.searchResults.type === state.searchType;
+  if (!cacheMatches) return;
   renderUnifiedSearchResults(
     resultsArea,
     state.searchResults.local,
@@ -743,7 +743,7 @@ function _rerenderCachedSearch(resultsArea) {
   );
 }
 
-function _renderAlbumFilterControls(container, resultsArea) {
+function _renderAlbumFilterControls(container, resultsArea, focusTarget = null) {
   while (container.firstChild) container.removeChild(container.firstChild);
   container.hidden = state.searchType !== 'albums';
 
@@ -760,10 +760,12 @@ function _renderAlbumFilterControls(container, resultsArea) {
         className: 'pill' + (selected ? ' active selected' : ''),
         type: 'button',
         'aria-pressed': selected ? 'true' : 'false',
+        'data-filter-key': stateKey,
+        'data-filter-value': value,
       }, text);
       button.addEventListener('click', () => {
         state[stateKey] = value;
-        _renderAlbumFilterControls(container, resultsArea);
+        _renderAlbumFilterControls(container, resultsArea, { key: stateKey, value });
         _rerenderCachedSearch(resultsArea);
       });
       group.appendChild(button);
@@ -776,10 +778,17 @@ function _renderAlbumFilterControls(container, resultsArea) {
     clearButton.addEventListener('click', () => {
       state.albumQualityFilter = 'all';
       state.albumRatingFilter = 'all';
-      _renderAlbumFilterControls(container, resultsArea);
+      _renderAlbumFilterControls(container, resultsArea, { key: 'albumQualityFilter', value: 'all' });
       _rerenderCachedSearch(resultsArea);
     });
     container.appendChild(clearButton);
+  }
+
+  if (focusTarget) {
+    const replacement = container.querySelector(
+      '[data-filter-key="' + focusTarget.key + '"][data-filter-value="' + focusTarget.value + '"]'
+    );
+    if (replacement) replacement.focus();
   }
 }
 
@@ -851,7 +860,10 @@ function renderSearch(container) {
 
   container.appendChild(resultsArea);
 
-  if (state.searchResults && state.searchQuery) {
+  const cacheMatches = state.searchResults
+    && state.searchResults.query === state.searchQuery.trim()
+    && state.searchResults.type === state.searchType;
+  if (cacheMatches) {
     renderUnifiedSearchResults(
       resultsArea,
       state.searchResults.local,
@@ -928,34 +940,37 @@ function renderSearchSkeleton(container) {
 }
 
 async function doSearch(resultsArea) {
-  const q = state.searchQuery.trim();
-  if (!q) {
+  const query = state.searchQuery.trim();
+  const type = state.searchType;
+  if (!query) {
     state.searchResults = null;
     renderSearchEmpty(resultsArea);
     return;
   }
 
-  _saveRecentSearch(q, state.searchType);
+  _saveRecentSearch(query, type);
   renderSearchSkeleton(resultsArea);
 
   // Local results first (instant from SQLite)
   let localData = null;
   try {
-    localData = await api('/library/search?q=' + encodeURIComponent(q) + '&type=' + state.searchType + '&limit=20');
+    localData = await api('/library/search?q=' + encodeURIComponent(query) + '&type=' + type + '&limit=20');
   } catch (_) { /* local search optional */ }
 
   // Tidal results (async, may require a user-initiated login)
   let tidalData = null;
   let tidalAuthRequired = false;
   try {
-    tidalData = await api('/search?q=' + encodeURIComponent(q) + '&type=' + state.searchType + '&limit=50');
+    tidalData = await api('/search?q=' + encodeURIComponent(query) + '&type=' + type + '&limit=50');
   } catch (error) {
     if (_isTidalAuthError(error)) {
       tidalAuthRequired = true;
     }
   }
 
-  state.searchResults = { local: localData, tidal: tidalData, tidalAuthRequired };
+  if (state.searchQuery.trim() !== query || state.searchType !== type) return;
+
+  state.searchResults = { query, type, local: localData, tidal: tidalData, tidalAuthRequired };
   renderUnifiedSearchResults(resultsArea, localData, tidalData, tidalAuthRequired);
   refreshStatusLights();
 }
