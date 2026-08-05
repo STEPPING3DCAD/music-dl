@@ -357,7 +357,7 @@ Do not create a new visual region, popover, framework, or animation.
 
 Run Bun and focused static tests. Start the GUI with an isolated test config, search Albums, capture the Search view at the same desktop width as the existing `docs/screenshots/search.png`, and compare controls, wrapping, counts, badges, focus, and empty state. Store evidence under ignored `output/issue-105/`; do not replace committed marketing screenshots unless the UI is release-ready and the user asks.
 
-Evidence: isolated 1440 px and 768 px Search screenshots verify hidden-state behavior, wrapping, no horizontal overflow, Clear, and restored focus. The isolated config has no TIDAL auth; positive live badge rendering remains an explicit Task 6 PLEX-MINI smoke requirement.
+Evidence: isolated live-GUI QA at 1440 px and 768 px verifies hidden-state behavior, wrapping, Clear, and restored focus. DOM bounds and equal body/viewport scroll widths prove no horizontal overflow; the 1440 screenshot preview has a 2x crop artifact and is not used for that claim. The isolated config has no TIDAL auth; positive live badge rendering remains an explicit Task 6 PLEX-MINI smoke requirement.
 
 - [x] **Step 6: Commit UI styling and badges**
 
