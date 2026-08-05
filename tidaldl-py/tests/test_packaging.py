@@ -22,7 +22,8 @@ def test_tauri_build_checks_qol_static_markers():
 
     assert '"withGlobalTauri": true' in config
     assert "tidal_dl/gui/static/app.js" not in build_command
-    assert '\\"api.js\\", \\"views.js\\", \\"player.js\\"' in build_command
+    assert "from tests.gui_js_source import read_gui_js" in build_command
+    assert "js=read_gui_js()" in build_command
     assert "Continue Listening" in build_command
     assert "Smart Shuffle" in build_command
     assert "_libraryAlbumCache" in build_command
