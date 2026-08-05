@@ -20,6 +20,13 @@ uv tool install --from git+https://github.com/alfdav/music-dl.git#subdirectory=t
 
 ---
 
+## v1.7.1 (2026-08-05)
+- Fixed local Search and Favorites playback so downloaded tracks use their local files instead of requiring a working Tidal session.
+- Added clear local/Tidal source labels and made saved-but-unverified Tidal credentials display neutrally until remote playback is confirmed.
+- Fixed Recently Played grouping when the server returns timestamps in seconds.
+- Loaded visible artist album artwork immediately while keeping later rows lazy.
+- Stopped packaged desktop sidecar descendants when music-dl quits or updates, and isolated tests from the real user library.
+
 ## v1.7.0 (2026-08-05)
 - Added quality and content filters for the current cached page of Tidal album results, with independent Max, Atmos, and Explicit badges.
 

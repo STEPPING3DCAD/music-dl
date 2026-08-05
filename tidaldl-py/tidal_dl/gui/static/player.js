@@ -22,6 +22,40 @@ const nowArt = document.getElementById('now-art');
 const volSlider = document.getElementById('vol-slider');
 const volFill = document.getElementById('vol-fill');
 const waveform = document.getElementById('waveform');
+const _REMOTE_PLAYBACK_UNAVAILABLE_KEY = 'remotePlaybackUnavailable';
+
+function _remotePlaybackUnavailable() {
+  try {
+    return sessionStorage.getItem(_REMOTE_PLAYBACK_UNAVAILABLE_KEY) === 'true';
+  } catch (_) {
+    return false;
+  }
+}
+
+function _setRemotePlaybackUnavailable(unavailable) {
+  try {
+    if (unavailable) sessionStorage.setItem(_REMOTE_PLAYBACK_UNAVAILABLE_KEY, 'true');
+    else sessionStorage.removeItem(_REMOTE_PLAYBACK_UNAVAILABLE_KEY);
+  } catch (_) {}
+}
+
+function _tidalStatusPresentation(data) {
+  if (data.auth_state === 'expired') return { label: 'connection expired', dot: 'disconnected' };
+  if (data.auth_state === 'unavailable') return { label: 'connection unavailable', dot: 'disconnected' };
+  if (data.auth_state === 'not_configured') return { label: 'log in', dot: 'disconnected' };
+  if (_remotePlaybackUnavailable() && (data.auth_state === 'credentials_ready' || data.logged_in)) {
+    return { label: 'playback unavailable', dot: 'disconnected' };
+  }
+  if (data.auth_state === 'credentials_ready') return { label: 'credentials saved', dot: 'neutral' };
+  if (data.logged_in) return { label: data.username || 'connected', dot: '' };
+  return { label: 'log in', dot: 'disconnected' };
+}
+
+function _refreshTidalStatus() {
+  refreshStatusLights();
+  const authSection = document.getElementById('settings-auth-status');
+  if (authSection) loadAuthStatus(authSection);
+}
 
 // Idle player title → feeling lucky
 nowTitle.addEventListener('click', () => {
@@ -541,10 +575,16 @@ async function _syncRecentFromServer() {
     const data = await api('/home/recent?limit=' + MAX_RECENT);
     const serverTracks = Array.isArray(data.tracks) ? data.tracks : [];
     if (serverTracks.length === 0) return;
+    const normalizedServerTracks = serverTracks.map(track => {
+      const playedAt = Number(track?.played_at);
+      return playedAt > 0 && playedAt < 10_000_000_000
+        ? { ...track, played_at: playedAt * 1000 }
+        : track;
+    });
 
     const merged = [];
     const seen = new Set();
-    serverTracks.concat(recentlyPlayed)
+    normalizedServerTracks.concat(recentlyPlayed)
       .filter(t => t && _trackKey(t))
       .sort((a, b) => (b.played_at || 0) - (a.played_at || 0))
       .forEach(track => {
@@ -697,6 +737,11 @@ function _recordRecentlyPlayed(track) {
 
 function playTrack(track) {
   if (!track) return;
+  const localPath = _currentTrackLocalPath(track);
+  if (track.is_local && !localPath) {
+    toast('Local file unavailable', 'error');
+    return;
+  }
 
   // Play count: fires after 30s of actual playback (or on ended for short tracks)
   _resetPlayCount(track);
@@ -705,8 +750,8 @@ function playTrack(track) {
   audio.pause();
   audio.muted = true;
 
-  if (track.is_local && track.local_path) {
-    audio.src = '/api/playback/local?path=' + encodeURIComponent(track.local_path);
+  if (track.is_local) {
+    audio.src = '/api/playback/local?path=' + encodeURIComponent(localPath);
   } else {
     audio.src = '/api/playback/stream/' + track.id;
   }
@@ -986,6 +1031,10 @@ audio.addEventListener('error', () => {
   setWaveformPlaying(false);
   const current = state.queue[state.queueIndex];
   if (!current || !current.is_local) {
+    if (current) {
+      _setRemotePlaybackUnavailable(true);
+      _refreshTidalStatus();
+    }
     _consecutiveErrors = 0;
     toast('Tidal stream unavailable \u2014 try again later', 'error');
     return;
@@ -993,7 +1042,7 @@ audio.addEventListener('error', () => {
   _consecutiveErrors++;
   const label = current ? (current.name || 'Track') : 'Track';
   if (_consecutiveErrors >= 3) {
-    toast('Multiple tracks failed \u2014 check your Tidal session', 'error');
+    toast('Multiple local files failed \u2014 check file access', 'error');
     return;
   }
   const canAutoSkip = state.queueIndex < state.queue.length - 1;
@@ -1004,6 +1053,11 @@ audio.addEventListener('error', () => {
 });
 
 audio.addEventListener('play', () => {
+  const current = state.queue[state.queueIndex];
+  if (current && !current.is_local) {
+    _setRemotePlaybackUnavailable(false);
+    _refreshTidalStatus();
+  }
   _consecutiveErrors = 0;
   state.playing = true;
   updatePlayButton();
@@ -1240,14 +1294,15 @@ async function refreshStatusLights() {
     try {
       const data = await api('/auth/status');
       while (tidalEl.firstChild) tidalEl.removeChild(tidalEl.firstChild);
-      const dot = h('span', { className: 'connection-dot' + (data.logged_in ? '' : ' disconnected') });
+      const presentation = _tidalStatusPresentation(data);
+      const dot = h('span', { className: 'connection-dot' + (presentation.dot ? ' ' + presentation.dot : '') });
       tidalEl.appendChild(dot);
       if (data.logged_in) {
-        tidalEl.appendChild(document.createTextNode('tidal \u00b7 ' + (data.username || 'connected')));
+        tidalEl.appendChild(document.createTextNode('tidal \u00b7 ' + presentation.label));
         tidalEl.style.cursor = '';
         tidalEl.onclick = null;
       } else {
-        tidalEl.appendChild(document.createTextNode('tidal \u00b7 log in'));
+        tidalEl.appendChild(document.createTextNode('tidal \u00b7 ' + presentation.label));
         tidalEl.style.cursor = 'pointer';
         tidalEl.onclick = triggerLogin;
       }
@@ -1284,6 +1339,7 @@ async function _refreshSearchAfterLogin() {
 }
 
 async function _handleLoginSuccess() {
+  _setRemotePlaybackUnavailable(false);
   refreshStatusLights();
   await _checkErrorBanners();
   await _refreshSearchAfterLogin();
@@ -2033,8 +2089,9 @@ function _preloadNext() {
   const nextIdx = (state.queueIndex + 1) % state.queue.length;
   const next = state.queue[nextIdx];
   if (!next) return;
-  const src = (next.is_local && next.local_path)
-    ? '/api/playback/local?path=' + encodeURIComponent(next.local_path)
+  const localPath = _currentTrackLocalPath(next);
+  const src = (next.is_local && localPath)
+    ? '/api/playback/local?path=' + encodeURIComponent(localPath)
     : '/api/playback/stream/' + next.id;
   if (_preloadedSrc === src) return;  // already preloaded
   _preloadedSrc = src;
@@ -2135,8 +2192,9 @@ function _restorePosition() {
     const current = state.queue[state.queueIndex];
     if (current && data.key === _trackKey(current) && _isResumePositionUsable(current, data.time)) {
       // Set source and seek to saved position without auto-playing
-      const src = (current.is_local && current.local_path)
-        ? '/api/playback/local?path=' + encodeURIComponent(current.local_path)
+      const localPath = _currentTrackLocalPath(current);
+      const src = (current.is_local && localPath)
+        ? '/api/playback/local?path=' + encodeURIComponent(localPath)
         : '/api/playback/stream/' + current.id;
       audio.src = src;
       audio.addEventListener('loadedmetadata', function _onMeta() {

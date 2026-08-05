@@ -19,7 +19,8 @@ def test_tidal_auth_errors_offer_explicit_catalog_login():
 def test_settings_auth_status_offers_gui_login_button():
     source = read_gui_js()
 
-    assert "'Not logged in to Tidal'" in source
+    assert "if (data.auth_state === 'not_configured') return { label: 'log in', dot: 'disconnected' };" in source
+    assert "const presentation = _tidalStatusPresentation(data);" in source
     assert "textEl('button', 'Log in to Tidal', 'banner-action')" in source
     assert "loginBtn.addEventListener('click', () => { triggerLogin(); });" in source
     assert "textEl('button', 'Reset Tidal connection', 'banner-action')" in source

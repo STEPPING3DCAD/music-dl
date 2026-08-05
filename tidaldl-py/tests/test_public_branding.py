@@ -12,6 +12,7 @@ PYPROJECT_PATH = PROJECT_ROOT / "pyproject.toml"
 def test_public_branding_matches_music_dl(monkeypatch):
     monkeypatch.setenv("HOME", "/tmp/test-home")
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.delenv("MUSIC_DL_CONFIG_DIR", raising=False)
 
     with PYPROJECT_PATH.open("rb") as f:
         project = tomllib.load(f)["project"]
@@ -29,6 +30,7 @@ def test_distribution_name_matches_public_package():
 def test_path_config_base_migrates_legacy_tidal_dl_dir(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.delenv("MUSIC_DL_CONFIG_DIR", raising=False)
 
     legacy_dir = tmp_path / ".config" / "tidal-dl"
     legacy_dir.mkdir(parents=True)
@@ -45,6 +47,7 @@ def test_path_config_base_migrates_legacy_tidal_dl_dir(monkeypatch, tmp_path):
 def test_path_config_base_ignores_legacy_migration_failure(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.delenv("MUSIC_DL_CONFIG_DIR", raising=False)
 
     legacy_dir = tmp_path / ".config" / "tidal-dl"
     legacy_dir.mkdir(parents=True)

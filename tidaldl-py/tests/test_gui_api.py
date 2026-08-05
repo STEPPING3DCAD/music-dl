@@ -70,13 +70,13 @@ def test_app_factory_returns_fastapi_instance():
     assert "csrf-token" in resp.text
 
 
-def test_auth_state_reports_connected_session():
+def test_auth_state_reports_saved_unexpired_credentials():
     client = _make_auth_client(_FakeTidal(logged_in=True, access_token="token", username="Ada"))
 
     resp = client.get("/api/auth/status", headers=_HOST_HEADER)
 
     assert resp.status_code == 200
-    assert resp.json() == {"logged_in": True, "username": "Ada", "auth_state": "connected"}
+    assert resp.json() == {"logged_in": True, "username": "Ada", "auth_state": "credentials_ready"}
 
 
 def test_auth_state_reports_not_configured_without_persisted_token():

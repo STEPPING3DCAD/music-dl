@@ -368,6 +368,29 @@ class TestRecentAlbums:
 
 
 class TestLibraryFavorites:
+    def test_local_favorite_exposes_local_path_alias(self, monkeypatch):
+        from tidal_dl.gui.api import library as library_api
+
+        favorite = {
+            "id": 1,
+            "path": "/music/favorite.flac",
+            "tidal_id": 7,
+            "artist": "Artist",
+            "title": "Favorite",
+            "album": "Album",
+            "isrc": "ISRC123",
+            "cover_url": "",
+            "scanned_quality": "FLAC",
+            "scanned_duration": 180,
+            "scanned_art_available": 0,
+            "favorited_at": 1,
+        }
+        monkeypatch.setattr(library_api, "_get_db", lambda: SimpleNamespace(all_favorites=lambda: [favorite]))
+
+        payload = library_api.get_favorites()
+
+        assert payload["favorites"][0]["local_path"] == "/music/favorite.flac"
+
     def test_returns_200(self, client):
         resp = client.get("/api/library/favorites", headers=client._host_header)
         assert resp.status_code == 200

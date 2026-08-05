@@ -900,6 +900,7 @@ class TestCLI:
             [sys.executable, "-m", "tidal_dl.cli", "--version"],
             capture_output=True,
             text=True,
+            cwd=pathlib.Path(__file__).resolve().parents[1],
         )
         assert result.returncode == 0
         assert version_app() in result.stdout
@@ -909,6 +910,7 @@ class TestCLI:
             [sys.executable, "-m", "tidal_dl.cli", "--help"],
             capture_output=True,
             text=True,
+            cwd=pathlib.Path(__file__).resolve().parents[1],
         )
         assert result.returncode == 0
         assert "dl" in result.stdout.lower()

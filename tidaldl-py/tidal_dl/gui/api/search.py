@@ -1,6 +1,7 @@
 """GET /api/search — Tidal search with ISRC cross-reference."""
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Query
@@ -35,7 +36,17 @@ def _serialize_track(track: Any, isrc_index: Any = None) -> dict:
             pass
 
     isrc = getattr(track, "isrc", "") or ""
-    is_local = _get_library_db().has_live_isrc(isrc) if isrc else False
+    local_path = None
+    local_row = None
+    if isrc:
+        db = _get_library_db()
+        local_row = next(
+            (row for row in db.tracks_by_isrc(isrc) if Path(row.get("path") or "").is_file()),
+            None,
+        )
+        if local_row:
+            local_path = local_row["path"]
+    is_local = bool(local_path)
 
     tags = getattr(track, "media_metadata_tags", None) or []
     if "HIRES_LOSSLESS" in tags:
@@ -47,7 +58,7 @@ def _serialize_track(track: Any, isrc_index: Any = None) -> dict:
     else:
         quality = getattr(track, "audio_quality", "") or ""
 
-    return {
+    result = {
         "id": track.id,
         "name": track.full_name or track.name,
         "artist": artist_name,
@@ -59,6 +70,14 @@ def _serialize_track(track: Any, isrc_index: Any = None) -> dict:
         "isrc": isrc,
         "is_local": is_local,
     }
+    if local_row:
+        result.update({
+            "local_path": local_path,
+            "path": local_path,
+            "quality": local_row.get("quality") or quality,
+            "format": local_row.get("format") or "",
+        })
+    return result
 
 
 @router.get("/search")

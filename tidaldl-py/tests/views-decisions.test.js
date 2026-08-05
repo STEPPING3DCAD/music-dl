@@ -34,6 +34,7 @@ function loadTidalResetHelpers(deps = {}) {
     'loadAuthStatus',
     'refreshStatusLights',
     'toast',
+    '_setRemotePlaybackUnavailable',
     'initialPoll',
     `let _loginPoll = initialPoll;
 ${helperSource[0]}
@@ -46,6 +47,7 @@ return { _authStateCanReset, _resetTidalConnection, getLoginPoll: () => _loginPo
     deps.loadAuthStatus || (async () => {}),
     deps.refreshStatusLights || (async () => {}),
     deps.toast || (() => {}),
+    deps.clearRemote || (() => {}),
     deps.initialPoll === undefined ? 42 : deps.initialPoll,
   );
 }
@@ -56,6 +58,55 @@ function loadAlbumFilterHelper() {
   );
   if (!helperSource) throw new Error('album filter helper not found');
   return new Function(`${helperSource[0]}\nreturn _filterTidalAlbums;`)();
+}
+
+function loadRecentViewHelpers(recentlyPlayed, now) {
+  const functionBody = viewsSource
+    .split('function _recentFilterKey(playedAt) {')[1]
+    ?.split('\nfunction renderRecentlyPlayed')[0];
+
+  if (!functionBody) throw new Error('recent view helpers not found');
+
+  return new Function(
+    'recentlyPlayed',
+    'Date',
+    '_saveRecent',
+    'navigate',
+    'localStorage',
+    `function _recentFilterKey(playedAt) {${functionBody}\nreturn { _recentFilterKey, _recentFilterCounts, _clearRecentOlderThan30Days };`,
+  )(
+    recentlyPlayed,
+    { now: () => now },
+    () => {},
+    () => {},
+    { getItem: () => null, setItem: () => {} },
+  );
+}
+
+function loadRecentSync(recentlyPlayed, api) {
+  const playerSource = readFileSync(join(import.meta.dir, '../tidal_dl/gui/static/player.js'), 'utf8');
+  const functionBody = playerSource
+    .split('async function _syncRecentFromServer() {')[1]
+    ?.split('\nfunction updatePlayerHeart()')[0];
+
+  if (!functionBody) throw new Error('recent sync helper not found');
+
+  return new Function(
+    'api',
+    'recentlyPlayed',
+    'MAX_RECENT',
+    '_trackKey',
+    '_saveRecent',
+    'console',
+    `async function _syncRecentFromServer() {${functionBody}\nreturn _syncRecentFromServer;`,
+  )(
+    api,
+    recentlyPlayed,
+    50,
+    track => track.id || track.path || track.local_path || '',
+    () => {},
+    { warn: () => {} },
+  );
 }
 
 describe('library view decisions', () => {
@@ -86,6 +137,7 @@ describe('Tidal connection reset decisions', () => {
     const { _authStateCanReset } = loadTidalResetHelpers();
 
     expect(_authStateCanReset('connected')).toBe(true);
+    expect(_authStateCanReset('credentials_ready')).toBe(true);
     expect(_authStateCanReset('expired')).toBe(true);
     expect(_authStateCanReset('unavailable')).toBe(true);
     expect(_authStateCanReset('not_configured')).toBe(false);
@@ -115,6 +167,7 @@ describe('Tidal connection reset decisions', () => {
       loadAuthStatus: async value => calls.push(['loadAuthStatus', value]),
       refreshStatusLights: async () => calls.push(['refreshStatusLights']),
       toast: (message, kind) => calls.push(['toast', message, kind]),
+      clearRemote: value => calls.push(['clearRemote', value]),
     });
 
     const result = await helpers._resetTidalConnection(container);
@@ -125,6 +178,7 @@ describe('Tidal connection reset decisions', () => {
     ]);
     expect(calls).toContainEqual(['clearInterval', 42]);
     expect(calls).toContainEqual(['dismiss']);
+    expect(calls).toContainEqual(['clearRemote', false]);
     expect(calls).toContainEqual(['loadAuthStatus', container]);
     expect(calls).toContainEqual(['refreshStatusLights']);
     expect(calls).toContainEqual(['toast', 'Tidal connection reset', 'success']);
@@ -147,6 +201,65 @@ describe('Tidal connection reset decisions', () => {
     expect(container.marker).toBe('connected');
     expect(calls).toEqual([['toast', 'Could not reset Tidal connection', 'error']]);
     expect(helpers.getLoginPoll()).toBe(42);
+  });
+});
+
+describe('track source decisions', () => {
+  test('shows local or Tidal source while leaving unknown remote format blank', () => {
+    expect(viewsSource).toContain("track.is_local ? 'local' : 'tidal'");
+    expect(viewsSource).toContain("className: 'source-tag ' + (track.is_local ? 'local-tag' : 'tidal-tag')");
+    expect(viewsSource).toContain("if (track.format) return track.format.toUpperCase();\n  return '';");
+  });
+});
+
+describe('recent history view decisions', () => {
+  test('classifies a normalized current server play as Today', async () => {
+    const now = 1_700_000_000_000;
+    const recentlyPlayed = [];
+    const syncRecentFromServer = loadRecentSync(recentlyPlayed, async () => ({
+      tracks: [{ id: 'today', played_at: Math.floor(now / 1000) }],
+    }));
+    const views = loadRecentViewHelpers(recentlyPlayed, now);
+
+    await syncRecentFromServer();
+
+    expect(views._recentFilterKey(recentlyPlayed[0].played_at)).toBe('today');
+    expect(views._recentFilterCounts()).toEqual({ all: 1, today: 1, week: 0, older: 0 });
+  });
+
+  test('classifies normalized weekly and older server plays', async () => {
+    const now = 1_700_000_000_000;
+    const recentlyPlayed = [];
+    const syncRecentFromServer = loadRecentSync(recentlyPlayed, async () => ({
+      tracks: [
+        { id: 'week', played_at: Math.floor((now - 2 * 24 * 60 * 60 * 1000) / 1000) },
+        { id: 'older', played_at: Math.floor((now - 31 * 24 * 60 * 60 * 1000) / 1000) },
+      ],
+    }));
+    const views = loadRecentViewHelpers(recentlyPlayed, now);
+
+    await syncRecentFromServer();
+
+    expect(views._recentFilterCounts()).toEqual({ all: 2, today: 0, week: 1, older: 1 });
+  });
+
+  test('clears only server entries older than 30 days after normalization', async () => {
+    const now = 1_700_000_000_000;
+    const recentlyPlayed = [];
+    const syncRecentFromServer = loadRecentSync(recentlyPlayed, async () => ({
+      tracks: [
+        { id: 'recent', played_at: Math.floor((now - 2 * 24 * 60 * 60 * 1000) / 1000) },
+        { id: 'old', played_at: Math.floor((now - 31 * 24 * 60 * 60 * 1000) / 1000) },
+      ],
+    }));
+    const views = loadRecentViewHelpers(recentlyPlayed, now);
+
+    await syncRecentFromServer();
+    views._clearRecentOlderThan30Days();
+
+    expect(recentlyPlayed).toEqual([
+      { id: 'recent', played_at: now - 2 * 24 * 60 * 60 * 1000 },
+    ]);
   });
 });
 

@@ -1,8 +1,25 @@
 """Shared pytest fixtures."""
 
+import os
+import re
+import tempfile
+
 import pytest
 
+
+_session_config_dir = tempfile.TemporaryDirectory(prefix="music-dl-pytest-")
+os.environ["MUSIC_DL_CONFIG_DIR"] = _session_config_dir.name
+
 from tidal_dl.config import reset_singletons
+
+
+@pytest.fixture(autouse=True)
+def isolate_test_config(tmp_path, monkeypatch):
+    """Keep each test's configuration and singletons in its own temp directory."""
+    monkeypatch.setenv("MUSIC_DL_CONFIG_DIR", str(tmp_path))
+    reset_singletons()
+    yield
+    reset_singletons()
 
 
 @pytest.fixture(autouse=False)
@@ -12,8 +29,6 @@ def clear_singletons():
     yield
     reset_singletons()
 
-
-import re
 
 @pytest.fixture
 def client(tmp_path):

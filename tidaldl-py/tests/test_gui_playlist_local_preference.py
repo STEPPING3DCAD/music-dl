@@ -28,6 +28,10 @@ class _FakePlaylistDB:
     def has_live_isrc(self, isrc):
         return bool(self.tracks_by_isrc(isrc))
 
+    def primary_path_for_isrc(self, isrc):
+        rows = self.tracks_by_isrc(isrc)
+        return rows[0]["path"] if rows else None
+
     def all_tracks(self):
         if self._all_rows is not None:
             return list(self._all_rows)
@@ -43,6 +47,72 @@ class _FakePlaylistDB:
 def _patch_playlist_library_db(monkeypatch, playlists_api, fake_db):
     monkeypatch.setattr(playlists_api, "_get_playlist_db", lambda: fake_db)
     monkeypatch.setattr("tidal_dl.gui.api.search._get_library_db", lambda: fake_db)
+
+
+def test_tidal_search_serializes_live_local_isrc_metadata(monkeypatch, clear_singletons, tmp_path):
+    from tidal_dl.gui.api import search as search_api
+
+    local_path = tmp_path / "local.flac"
+    local_path.touch()
+    local_row = {
+        "path": str(local_path),
+        "quality": "44100Hz/24bit",
+        "format": "FLAC",
+    }
+    monkeypatch.setattr(search_api, "_get_library_db", lambda: _FakePlaylistDB({"ISRC123": [local_row]}))
+
+    result = search_api._serialize_track(_fake_track())
+
+    assert result["is_local"] is True
+    assert result["local_path"] == str(local_path)
+    assert result["path"] == str(local_path)
+    assert result["quality"] == "44100Hz/24bit"
+    assert result["format"] == "FLAC"
+
+
+def test_tidal_search_stays_remote_without_live_local_isrc(monkeypatch, clear_singletons):
+    from tidal_dl.gui.api import search as search_api
+
+    monkeypatch.setattr(search_api, "_get_library_db", lambda: _FakePlaylistDB({}))
+
+    result = search_api._serialize_track(_fake_track(isrc="ISRC999"))
+
+    assert result["is_local"] is False
+    assert "local_path" not in result
+    assert "path" not in result
+    assert "format" not in result
+
+
+def test_tidal_search_reads_isrc_rows_once_to_find_a_live_local_file(monkeypatch, clear_singletons, tmp_path):
+    from tidal_dl.gui.api import search as search_api
+
+    live_path = tmp_path / "local.flac"
+    live_path.touch()
+    rows = [{"path": str(live_path), "quality": "LOSSLESS", "format": "FLAC"}]
+
+    class CountingDB:
+        def __init__(self):
+            self.calls = []
+
+        def has_live_isrc(self, isrc):
+            self.calls.append("has_live_isrc")
+            return True
+
+        def primary_path_for_isrc(self, isrc):
+            self.calls.append("primary_path_for_isrc")
+            return rows[0]["path"]
+
+        def tracks_by_isrc(self, isrc):
+            self.calls.append("tracks_by_isrc")
+            return rows
+
+    db = CountingDB()
+    monkeypatch.setattr(search_api, "_get_library_db", lambda: db)
+
+    result = search_api._serialize_track(_fake_track())
+
+    assert result["local_path"] == str(live_path)
+    assert db.calls == ["tracks_by_isrc"]
 
 
 def test_playlist_tracks_include_local_path_when_isrc_matches(monkeypatch, clear_singletons):

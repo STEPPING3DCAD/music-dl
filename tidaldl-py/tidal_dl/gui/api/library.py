@@ -902,6 +902,7 @@ def get_favorites():
         entry = {
             "id": f["id"],
             "path": f.get("path"),
+            "local_path": f.get("path"),
             "tidal_id": f.get("tidal_id"),
             "artist": f.get("artist") or "Unknown Artist",
             "name": f.get("title") or "Unknown",
@@ -911,7 +912,7 @@ def get_favorites():
             "quality": quality,
             "duration": duration,
             "favorited_at": f["favorited_at"],
-            "is_local": f.get("path") is not None,
+            "is_local": bool(f.get("path")),
         }
         if entry["path"]:
             entry["cover_url"] = _local_cover_url(entry["path"], f.get("scanned_art_available"))
