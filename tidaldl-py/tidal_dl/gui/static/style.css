@@ -2482,7 +2482,7 @@ body {
 .album-search-badge {
   padding: 3px 6px;
   border-radius: var(--radius-xs);
-  background: rgba(15, 14, 13, 0.82);
+  background: var(--glass);
   color: var(--text);
   font-family: var(--mono);
   font-size: 9px;

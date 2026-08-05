@@ -157,6 +157,8 @@ class TestAppJsFeatureMarkers:
         assert "display: none" in hidden_rule
         assert ".album-search-badges" in css
         assert ".album-search-badge" in css
+        badge_rule = css.split(".album-search-badge {")[1].split("}")[0]
+        assert "background: var(--glass)" in badge_rule
         assert ".album-search-filters .pill:focus-visible" in css
         assert "outline:" in css.split(
             ".album-search-filters .pill:focus-visible"
