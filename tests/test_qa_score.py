@@ -26,7 +26,14 @@ def passing_payload(**overrides):
     checks = {**PASSING_CHECKS, **overrides}
     return {
         "checks": checks,
-        "durations_seconds": {"python": 60, "bot": 20, "contracts": 30},
+        "durations_seconds": {
+            "python": 60,
+            "bot": 20,
+            "contracts": 30,
+            "performance": 40,
+            "supply_chain": 10,
+            "affected_build": 20,
+        },
         "live": {"requested": False, "trusted": False, "status": "not_requested"},
         "enforce": True,
     }
@@ -109,7 +116,7 @@ def test_unexpected_not_applicable_blocks():
 )
 def test_shared_duration_boundaries(seconds, score, blocked):
     payload = passing_payload()
-    payload["durations_seconds"] = {"python": seconds}
+    payload["durations_seconds"]["python"] = seconds
     result = evaluate(payload)
     assert result.score == score
     assert ("duration" in result.blockers) is blocked
@@ -117,9 +124,25 @@ def test_shared_duration_boundaries(seconds, score, blocked):
 
 def test_slow_duration_loses_performance_category_points():
     payload = passing_payload()
-    payload["durations_seconds"] = {"python": 481}
+    payload["durations_seconds"]["python"] = 481
     result = evaluate(payload)
     assert "Performance: 10/15" in result.markdown
+
+
+def test_no_durations_loses_points_and_blocks():
+    payload = passing_payload()
+    payload["durations_seconds"] = {}
+    result = evaluate(payload)
+    assert result.score == 95
+    assert "duration" in result.blockers
+
+
+def test_one_missing_duration_loses_points_and_blocks():
+    payload = passing_payload()
+    del payload["durations_seconds"]["supply_chain"]
+    result = evaluate(payload)
+    assert result.score == 95
+    assert "duration" in result.blockers
 
 
 def test_trusted_requested_live_failure_blocks():
@@ -166,10 +189,17 @@ def test_metrics_appear_in_json_and_markdown_without_changing_score(tmp_path):
     args = []
     for name in RULE_NAMES:
         args.extend(("--result", f"{name}=pass"))
+    for name in (
+        "python",
+        "bot",
+        "contracts",
+        "performance",
+        "supply_chain",
+        "affected_build",
+    ):
+        args.extend(("--duration", f"{name}=60"))
     args.extend(
         (
-            "--duration",
-            "python=60",
             "--metric",
             "pagination_p95_ms=7.855",
             "--metric",
@@ -203,7 +233,11 @@ def test_metrics_appear_in_json_and_markdown_without_changing_score(tmp_path):
         ["--result", "unknown=pass"],
         ["--result", "ruff=unexpected"],
         ["--duration", "python=not-a-number"],
+        ["--duration", "unknown=1"],
         ["--metric", "unknown=1"],
+        ["--result", "typescript=regression"],
+        ["--result", "dependency_review=regression"],
+        ["--result", "python_smoke=slow"],
     ],
 )
 def test_cli_rejects_invalid_input(args, capsys, tmp_path):
@@ -216,7 +250,16 @@ def test_github_states_are_normalized(tmp_path):
     args = []
     for name in RULE_NAMES:
         args.extend(("--result", f"{name}=success"))
-    args.extend(("--duration", "python=1", "--output", str(output), "--enforce"))
+    for name in (
+        "python",
+        "bot",
+        "contracts",
+        "performance",
+        "supply_chain",
+        "affected_build",
+    ):
+        args.extend(("--duration", f"{name}=1"))
+    args.extend(("--output", str(output), "--enforce"))
     assert main(args) == 0
     assert json.loads(output.read_text())["checks"]["ruff"] == "pass"
 
@@ -224,3 +267,17 @@ def test_github_states_are_normalized(tmp_path):
 def test_cancelled_required_result_is_missing_and_blocks():
     result = evaluate(passing_payload(typescript="cancelled"))
     assert "typescript" in result.blockers
+
+
+@pytest.mark.parametrize(
+    ("name", "status"),
+    [
+        ("typescript", "regression"),
+        ("dependency_review", "regression"),
+        ("python_smoke", "slow"),
+    ],
+)
+def test_semantically_invalid_check_status_blocks(name, status):
+    result = evaluate(passing_payload(**{name: status}))
+    assert name in result.blockers
+    assert result.exit_code == 1

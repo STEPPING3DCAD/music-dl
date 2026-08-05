@@ -36,6 +36,18 @@ _STATUS_ALIASES = {
 _CHECK_STATUSES = {"pass", "fail", "regression", "slow", "missing", "not_applicable"}
 _LIVE_STATUSES = {"pass", "fail", "missing", "not_requested", "not_applicable"}
 _METRIC_NAMES = {"pagination_p95_ms", "search_p95_ms", "artists_p95_ms"}
+_DURATION_NAMES = {
+    "python",
+    "bot",
+    "contracts",
+    "performance",
+    "supply_chain",
+    "affected_build",
+}
+_CHECK_STATUS_EXTRAS = {
+    "library_performance": {"regression"},
+    "affected_build": {"not_applicable"},
+}
 
 
 @dataclass(frozen=True)
@@ -136,7 +148,10 @@ def _evaluate(payload: dict[str, object]) -> tuple[Evaluation, dict[str, object]
         totals["possible"] += points
         status = _normalize_status(raw_checks.get(name, "missing"), _CHECK_STATUSES)
         checks[name] = status
-        if status == "not_applicable" and name != "affected_build":
+        valid_statuses = {"pass", "fail", "missing"} | _CHECK_STATUS_EXTRAS.get(
+            name, set()
+        )
+        if status not in valid_statuses:
             blockers.append(name)
         elif status in {"pass", "not_applicable"}:
             score += points
@@ -151,12 +166,16 @@ def _evaluate(payload: dict[str, object]) -> tuple[Evaluation, dict[str, object]
         str(name): _number(seconds, f"duration for {name}")
         for name, seconds in raw_durations.items()
     }
+    unknown_durations = set(durations) - _DURATION_NAMES
+    if unknown_durations:
+        raise ValueError(f"unknown duration: {min(unknown_durations)}")
+    missing_durations = _DURATION_NAMES - set(durations)
     longest_duration = max(durations.values(), default=0.0)
-    duration_points = 5 if longest_duration <= 480 else 0
+    duration_points = 5 if not missing_durations and longest_duration <= 480 else 0
     score += duration_points
     categories["Performance"]["possible"] += 5
     categories["Performance"]["earned"] += duration_points
-    if longest_duration > 600:
+    if missing_durations or longest_duration > 600:
         blockers.append("duration")
 
     raw_live = payload.get("live", {})
@@ -260,8 +279,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         unknown_checks = set(checks) - set(RULES)
         if unknown_checks:
             raise ValueError(f"unknown result: {min(unknown_checks)}")
+        for name, value in checks.items():
+            status = _normalize_status(value, _CHECK_STATUSES)
+            valid_statuses = {"pass", "fail", "missing"} | _CHECK_STATUS_EXTRAS.get(
+                name, set()
+            )
+            if status not in valid_statuses:
+                raise ValueError(f"invalid status for {name}: {value}")
 
         duration_values = _pairs(args.duration, "duration")
+        unknown_durations = set(duration_values) - _DURATION_NAMES
+        if unknown_durations:
+            raise ValueError(f"unknown duration: {min(unknown_durations)}")
         durations = {
             name: _number(value, f"duration for {name}")
             for name, value in duration_values.items()
