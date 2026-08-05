@@ -7,7 +7,7 @@ import json
 import os
 import sys
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -20,6 +20,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tidaldl-py"))
 from tidal_dl.config import Tidal
 
 DISCORD_ME_URL = "https://discord.com/api/v10/users/@me"
+
+
+class _TimeoutHTTPAdapter(requests.adapters.HTTPAdapter):
+    timeout_seconds = 10
+
+    def send(self, request: Any, **kwargs: Any) -> Any:
+        if kwargs.get("timeout") is None:
+            kwargs["timeout"] = self.timeout_seconds
+        return super().send(request, **kwargs)
 
 
 @dataclass(frozen=True)
@@ -38,10 +47,28 @@ def _result(service: str, status: str, started: float, detail: str) -> ServiceRe
 
 def check_tidal(tidal_factory: Callable[[], object] = Tidal) -> ServiceResult:
     started = time.perf_counter()
+    if tidal_factory is Tidal:
+        runner_temp = os.environ.get("RUNNER_TEMP")
+        config_dir = os.environ.get("MUSIC_DL_CONFIG_DIR")
+        if not runner_temp or not config_dir:
+            return _result(
+                "tidal", "fail", started, "ephemeral credential directory required"
+            )
+        try:
+            config_is_ephemeral = (
+                Path(config_dir).resolve().is_relative_to(Path(runner_temp).resolve())
+            )
+        except (OSError, RuntimeError):
+            config_is_ephemeral = False
+        if not config_is_ephemeral:
+            return _result(
+                "tidal", "fail", started, "ephemeral credential directory required"
+            )
     try:
         tidal: Any = tidal_factory()
-        tidal.login_token(quiet=True)
         session = tidal.session
+        session.request_session.mount("https://", _TimeoutHTTPAdapter())
+        tidal.login_token(quiet=True)
         if not session.check_login():
             return _result("tidal", "fail", started, "login failed")
         search_result = session.search("Daft Punk", models=[Track], limit=1)
@@ -68,6 +95,7 @@ def check_discord(
             DISCORD_ME_URL,
             headers={"Authorization": f"Bot {token}"},
             timeout=10,
+            allow_redirects=False,
         )
     except requests.Timeout:
         return _result("discord", "fail", started, "request timed out")
@@ -75,6 +103,13 @@ def check_discord(
         return _result("discord", "fail", started, "request failed")
     if response.status_code != 200:
         return _result("discord", "fail", started, f"HTTP {response.status_code}")
+    try:
+        identity = response.json()
+    except Exception:  # noqa: BLE001 - response parser errors are not safe to expose
+        return _result("discord", "fail", started, "invalid identity response")
+    identity_id = identity.get("id") if isinstance(identity, Mapping) else None
+    if not isinstance(identity_id, str) or not identity_id.strip():
+        return _result("discord", "fail", started, "invalid identity response")
     return _result("discord", "pass", started, "authenticated request succeeded")
 
 

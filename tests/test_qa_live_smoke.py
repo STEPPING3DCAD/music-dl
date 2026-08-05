@@ -1,6 +1,9 @@
 import ast
 import inspect
 import json
+import os
+import subprocess
+import sys
 import textwrap
 from dataclasses import asdict
 from pathlib import Path
@@ -10,11 +13,22 @@ import requests
 from scripts import qa_live_smoke
 from scripts.qa_live_smoke import ServiceResult, Track, check_discord, check_tidal
 
+CHECK_TIDAL_COMMAND = (
+    "from dataclasses import asdict; import json; "
+    "from scripts.qa_live_smoke import check_tidal; "
+    "print(json.dumps(asdict(check_tidal())))"
+)
+
 
 class FakeResponse:
-    def __init__(self, status_code: int, body: str = "") -> None:
+    def __init__(self, status_code: int, payload: object = None) -> None:
         self.status_code = status_code
-        self.text = body
+        self.payload = {"id": "123"} if payload is None else payload
+
+    def json(self) -> object:
+        if isinstance(self.payload, BaseException):
+            raise self.payload
+        return self.payload
 
 
 class FakeSession:
@@ -23,6 +37,7 @@ class FakeSession:
         self.search_result = (
             {"tracks": [object()]} if search_result is None else search_result
         )
+        self.request_session = requests.Session()
         self.calls: list[tuple[str, object]] = []
 
     def check_login(self) -> bool:
@@ -38,8 +53,12 @@ class FakeTidal:
     def __init__(self, session: FakeSession) -> None:
         self.session = session
         self.calls: list[tuple[str, object]] = []
+        self.adapter_at_login: requests.adapters.HTTPAdapter | None = None
 
     def login_token(self, *, quiet: bool) -> bool:
+        self.adapter_at_login = self.session.request_session.get_adapter(
+            "https://tidal.com"
+        )
         self.calls.append(("login_token", quiet))
         return True
 
@@ -56,6 +75,117 @@ def test_tidal_check_restores_token_checks_login_and_searches_once() -> None:
         ("check_login", None),
         ("search", ("Daft Punk", [Track], 1)),
     ]
+    adapter = session.request_session.get_adapter("https://tidal.com")
+    assert isinstance(adapter, qa_live_smoke._TimeoutHTTPAdapter)
+    assert tidal.adapter_at_login is adapter
+    assert adapter.timeout_seconds == 10
+
+
+def test_default_tidal_requires_ephemeral_config_before_constructor(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    env = os.environ.copy()
+    env.pop("RUNNER_TEMP", None)
+    env.pop("MUSIC_DL_CONFIG_DIR", None)
+    env["HOME"] = str(home)
+    env.pop("XDG_CONFIG_HOME", None)
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            CHECK_TIDAL_COMMAND,
+        ],
+        cwd=Path(__file__).parents[1],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0
+    assert json.loads(completed.stdout)["detail"] == (
+        "ephemeral credential directory required"
+    )
+    assert list(home.iterdir()) == []
+
+
+def test_default_tidal_writes_only_inside_runner_temp_without_network(
+    tmp_path: Path,
+) -> None:
+    runner = tmp_path / "runner"
+    config = runner / "music-dl"
+    outside = tmp_path / "outside"
+    config.mkdir(parents=True)
+    outside.mkdir()
+    sentinel = outside / "sentinel"
+    sentinel.write_text("unchanged")
+    before = {
+        path.relative_to(outside): path.stat().st_mtime_ns
+        for path in outside.rglob("*")
+    }
+    env = os.environ.copy()
+    env["RUNNER_TEMP"] = str(runner)
+    env["MUSIC_DL_CONFIG_DIR"] = str(config)
+    env["HOME"] = str(outside)
+    env["XDG_CONFIG_HOME"] = str(outside)
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            CHECK_TIDAL_COMMAND,
+        ],
+        cwd=Path(__file__).parents[1],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+
+    after = {
+        path.relative_to(outside): path.stat().st_mtime_ns
+        for path in outside.rglob("*")
+    }
+    assert completed.returncode == 0
+    assert json.loads(completed.stdout)["detail"] == "login failed"
+    assert before == after
+    assert (config / "token.json").is_file()
+    assert all(path.is_relative_to(runner) for path in config.rglob("*"))
+
+
+def test_default_tidal_rejects_resolved_config_escape(tmp_path: Path) -> None:
+    runner = tmp_path / "runner"
+    outside = tmp_path / "outside"
+    runner.mkdir()
+    outside.mkdir()
+    config_link = runner / "config"
+    config_link.symlink_to(outside, target_is_directory=True)
+    env = os.environ.copy()
+    env["RUNNER_TEMP"] = str(runner)
+    env["MUSIC_DL_CONFIG_DIR"] = str(config_link)
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            CHECK_TIDAL_COMMAND,
+        ],
+        cwd=Path(__file__).parents[1],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0
+    assert json.loads(completed.stdout)["detail"] == (
+        "ephemeral credential directory required"
+    )
+    assert list(outside.iterdir()) == []
 
 
 def test_tidal_failed_login_and_empty_search_are_concise() -> None:
@@ -91,7 +221,7 @@ def test_discord_check_is_read_only_and_secret_safe() -> None:
 
     def fake_get(url: str, **kwargs: object) -> FakeResponse:
         calls.append((url, kwargs))
-        return FakeResponse(200, '{"id":"123","username":"music-dl"}')
+        return FakeResponse(200, {"id": "123", "username": "music-dl"})
 
     result = check_discord(token, get=fake_get)
 
@@ -99,7 +229,11 @@ def test_discord_check_is_read_only_and_secret_safe() -> None:
     assert calls == [
         (
             "https://discord.com/api/v10/users/@me",
-            {"headers": {"Authorization": f"Bot {token}"}, "timeout": 10},
+            {
+                "headers": {"Authorization": f"Bot {token}"},
+                "timeout": 10,
+                "allow_redirects": False,
+            },
         )
     ]
     serialized = json.dumps(asdict(result))
@@ -125,6 +259,30 @@ def test_discord_missing_token_timeout_and_non_200_are_concise() -> None:
     assert "secret response body" not in json.dumps(
         [asdict(missing), asdict(timed_out), asdict(rejected)]
     )
+
+
+def test_discord_redirect_and_invalid_200_payloads_fail_closed() -> None:
+    redirected = check_discord("token", get=lambda *args, **kwargs: FakeResponse(302))
+    malformed = check_discord(
+        "token",
+        get=lambda *args, **kwargs: FakeResponse(
+            200, ValueError("secret malformed HTML body")
+        ),
+    )
+    html = check_discord(
+        "token", get=lambda *args, **kwargs: FakeResponse(200, "<html>")
+    )
+    missing_id = check_discord(
+        "token", get=lambda *args, **kwargs: FakeResponse(200, {})
+    )
+    empty_id = check_discord(
+        "token", get=lambda *args, **kwargs: FakeResponse(200, {"id": ""})
+    )
+
+    assert (redirected.status, redirected.detail) == ("fail", "HTTP 302")
+    for result in (malformed, html, missing_id, empty_id):
+        assert (result.status, result.detail) == ("fail", "invalid identity response")
+    assert "secret malformed HTML body" not in json.dumps(asdict(malformed))
 
 
 def test_module_exposes_no_mutating_http_helpers() -> None:
