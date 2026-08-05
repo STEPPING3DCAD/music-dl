@@ -374,20 +374,27 @@ git commit -m "feat(search): label album editions"
 - Modify: `tidaldl-py/updatelog.md:21-23`
 - Modify: `openspec/changes/add-album-search-filters/tasks.md`
 
-- [ ] **Step 1: Update user-facing documentation before commit**
+- [x] **Step 1: Update user-facing documentation before commit**
 
 - Expand the root README TIDAL search bullet to mention album quality/content filters and badges.
 - Add the same concise behavior to the package README.
 - Add `## Unreleased` above v1.6.9 with one bullet for album filters and independent Max/Atmos/Explicit badges.
 
-- [ ] **Step 2: Run isolated relevant and full checks**
+- [x] **Step 2: Run isolated relevant and full checks**
 
 From `tidaldl-py/`:
 
 ```shell
 music_dl_test_config=$(mktemp -d)
 MUSIC_DL_CONFIG_DIR="$music_dl_test_config" PYTHONNOUSERSITE=1 \
-  uv run --extra test python -m pytest -q
+  uv run --extra test python -m pytest -q \
+  --deselect tests/test_public_branding.py::test_public_branding_matches_music_dl \
+  --deselect tests/test_public_branding.py::test_path_config_base_migrates_legacy_tidal_dl_dir \
+  --deselect tests/test_public_branding.py::test_path_config_base_ignores_legacy_migration_failure
+PYTHONNOUSERSITE=1 uv run --extra test python -m pytest -q \
+  tests/test_public_branding.py::test_public_branding_matches_music_dl \
+  tests/test_public_branding.py::test_path_config_base_migrates_legacy_tidal_dl_dir \
+  tests/test_public_branding.py::test_path_config_base_ignores_legacy_migration_failure
 bun test
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
@@ -396,7 +403,6 @@ From repository root:
 
 ```shell
 PYTHONNOUSERSITE=1 uv run --project tidaldl-py --extra test python -m pytest -q \
-  tests/test_documentation.py \
   tidaldl-py/tests/test_packaging.py \
   tests/test_release_version.py
 uv run --project tidaldl-py python scripts/release_version.py check
@@ -406,15 +412,17 @@ git diff --check
 
 Expected: all checks pass, version remains 1.6.9 on the feature branch, and no Discord bot process or lockfile mutation remains.
 
-- [ ] **Step 3: Run Ponytail review**
+Evidence: the isolated-config suite passed 646 tests with 1 skip and the 3 HOME-sensitive path tests deselected; those 3 pure tests passed separately, covering all 650 collected tests exactly once. The earlier `tests/test_documentation.py` plan path is absent from both this branch and `origin/master`.
+
+- [x] **Step 3: Run Ponytail review**
 
 Confirm no new module/dependency/query parameter/persistence, no track serializer changes, and no duplicate filter implementation. Remove any speculative code or styles not exercised by approved requirements.
 
-- [ ] **Step 4: Mark OpenSpec implementation tasks complete and validate again**
+- [x] **Step 4: Mark OpenSpec implementation tasks complete and validate again**
 
 Check completed boxes only after their evidence exists, then rerun strict validation and `git diff --check`.
 
-- [ ] **Step 5: Commit documentation and completion evidence**
+- [x] **Step 5: Commit documentation and completion evidence**
 
 ```shell
 git add README.md tidaldl-py/README.md tidaldl-py/updatelog.md \
