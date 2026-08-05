@@ -159,6 +159,7 @@ describe('Tidal album filter decisions', () => {
       { id: 3, quality: 'LOSSLESS', explicit: false },
       { id: 4, quality: 'HIGH', explicit: true },
       { id: 5, quality: 'UNKNOWN', explicit: null, atmos: true },
+      { id: 6, quality: 'MAX', explicit: false },
     ];
 
     expect(filterTidalAlbums(albums, 'all', 'all')).toEqual(albums);

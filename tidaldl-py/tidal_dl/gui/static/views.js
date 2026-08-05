@@ -719,8 +719,9 @@ function _renderRecentSearches(recentEl, input, resultsArea) {
 function _filterTidalAlbums(items, qualityFilter, ratingFilter) {
   return (items || []).filter(item => {
     const qualityMatches = qualityFilter === 'all'
-      || (qualityFilter === 'max' && ['HI_RES_LOSSLESS', 'HI_RES'].includes(item.quality))
-      || item.quality === qualityFilter.toUpperCase();
+      || (qualityFilter === 'max'
+        ? ['HI_RES_LOSSLESS', 'HI_RES'].includes(item.quality)
+        : item.quality === qualityFilter.toUpperCase());
     const ratingMatches = ratingFilter === 'all'
       || (ratingFilter === 'explicit' ? item.explicit === true : item.explicit === false);
     return qualityMatches && ratingMatches;
