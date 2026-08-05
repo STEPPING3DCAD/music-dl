@@ -124,6 +124,41 @@ class TestAppJsFeatureMarkers:
         assert "querySelector('.album-search-filters')" in js
         assert "No albums match these filters" in js
 
+    def test_tidal_album_results_have_metadata_badges_and_responsive_styles(self):
+        js = read_gui_js()
+        css = (STATIC_DIR / "style.css").read_text()
+        results_source = js.split("function renderSearchResults(")[1].split(
+            "function _trackKey("
+        )[0]
+        artwork_source = results_source.split(
+            "const artDiv = h('div', { className: 'album-card-art' });"
+        )[1].split("const meta = h('div', { className: 'album-card-meta' });")[0]
+
+        assert "if (state.searchType === 'albums') {" in artwork_source
+        badge_source = artwork_source.split("if (state.searchType === 'albums') {")[1]
+        for quality, label in [
+            ("HI_RES_LOSSLESS", "MAX"),
+            ("HI_RES", "MAX"),
+            ("LOSSLESS", "LOSSLESS"),
+            ("HIGH", "HIGH"),
+            ("LOW", "LOW"),
+        ]:
+            assert f"{quality}: '{label}'" in badge_source
+        assert "[item.quality] || 'UNKNOWN'" in badge_source
+        assert "textEl('span', qualityLabel, 'album-search-badge')" in badge_source
+        assert "item.atmos === true" in badge_source
+        assert "textEl('span', 'ATMOS', 'album-search-badge')" in badge_source
+        assert "item.explicit === true" in badge_source
+        assert "textEl('span', 'E', 'album-search-badge')" in badge_source
+        assert "artDiv.appendChild(badges)" in badge_source
+        assert ".album-search-filters" in css
+        assert ".album-search-badges" in css
+        assert ".album-search-badge" in css
+        assert ".album-search-filters .pill:focus-visible" in css
+        assert "outline:" in css.split(
+            ".album-search-filters .pill:focus-visible"
+        )[1].split("}")[0]
+
     def test_album_results_have_one_header_and_filtered_empty_path(self):
         js = read_gui_js()
         source = js.split("function renderUnifiedSearchResults(")[1].split(

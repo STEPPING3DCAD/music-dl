@@ -1201,6 +1201,24 @@ function renderSearchResults(container, data, showHeader = true) {
       } else {
         artDiv.appendChild(h('div', { className: 'art-gradient', style: { background: artGradient(item.id) } }));
       }
+      if (state.searchType === 'albums') {
+        const qualityLabel = {
+          HI_RES_LOSSLESS: 'MAX',
+          HI_RES: 'MAX',
+          LOSSLESS: 'LOSSLESS',
+          HIGH: 'HIGH',
+          LOW: 'LOW',
+        }[item.quality] || 'UNKNOWN';
+        const badges = h('div', { className: 'album-search-badges' });
+        badges.appendChild(textEl('span', qualityLabel, 'album-search-badge'));
+        if (item.atmos === true) {
+          badges.appendChild(textEl('span', 'ATMOS', 'album-search-badge'));
+        }
+        if (item.explicit === true) {
+          badges.appendChild(textEl('span', 'E', 'album-search-badge'));
+        }
+        artDiv.appendChild(badges);
+      }
       const meta = h('div', { className: 'album-card-meta' });
       meta.appendChild(textEl('div', item.name || '', 'album-card-title'));
       if (state.searchType === 'albums' && item.artist) {
