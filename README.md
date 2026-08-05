@@ -349,6 +349,21 @@ Run the Python test suite:
 PYTHONNOUSERSITE=1 uv run --extra test python -m pytest
 ```
 
+Run the local pull request QA checks from the repository root:
+
+```bash
+uv run --project tidaldl-py --extra test python -m pytest \
+  tests/test_qa_score.py tests/test_qa_performance.py \
+  tests/test_qa_live_smoke.py tests/test_qa_workflow.py -q
+uv run --project tidaldl-py ruff check --no-fix --select E9,F63,F7,F82 \
+  tidaldl-py/tidal_dl tidaldl-py/tests scripts tests
+cd apps/discord-bot && bun test && bun run typecheck
+```
+
+The optional `qa-live` job is internal-only, approval-protected, and read-only.
+It never runs on fork pull requests. Live-service latency is diagnostic and is
+not part of the scored deterministic performance check.
+
 Run the Discord bot checks:
 
 ```shell

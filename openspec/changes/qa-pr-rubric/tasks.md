@@ -34,7 +34,7 @@
 - Modify: `tidaldl-py/pyproject.toml`
 - Modify: `tidaldl-py/uv.lock`
 
-- [ ] 1.1 Run the existing failing typecheck.
+- [x] 1.1 Run the existing failing typecheck.
 
 Run:
 
@@ -44,7 +44,7 @@ cd apps/discord-bot && bun run typecheck
 
 Expected: FAIL at `addPlaylistNameOption` because `ReturnType<SlashCommandBuilder["addSubcommand"]>` resolves to the parent builder rather than `SlashCommandSubcommandBuilder`.
 
-- [ ] 1.2 Replace the incorrect derived type with Discord's exported subcommand-builder type.
+- [x] 1.2 Replace the incorrect derived type with Discord's exported subcommand-builder type.
 
 Minimal change:
 
@@ -67,7 +67,7 @@ function addPlaylistNameOption(builder: SlashCommandSubcommandBuilder): void {
 }
 ```
 
-- [ ] 1.3 Verify typecheck and existing bot behavior.
+- [x] 1.3 Verify typecheck and existing bot behavior.
 
 Run:
 
@@ -77,7 +77,7 @@ cd apps/discord-bot && bun run typecheck && bun test
 
 Expected: typecheck exit 0; all existing Bun tests pass.
 
-- [ ] 1.4 Pin Ruff through uv; never use bare pip.
+- [x] 1.4 Pin Ruff through uv; never use bare pip.
 
 Run:
 
@@ -87,7 +87,7 @@ uv add --project tidaldl-py --dev 'ruff==0.16.1'
 
 Expected: `tidaldl-py/pyproject.toml` and `tidaldl-py/uv.lock` change; no runtime dependency changes.
 
-- [ ] 1.5 Verify a green legacy-safe floor without modifying source.
+- [x] 1.5 Verify a green legacy-safe floor without modifying source.
 
 Run:
 
@@ -98,7 +98,7 @@ uv run --project tidaldl-py ruff check --no-fix --select E9,F63,F7,F82 \
 
 Expected: `All checks passed!` Existing broader Ruff debt remains visible but is not mass-fixed. PR workflow later runs configured Ruff against added/modified Python files only.
 
-- [ ] 1.6 Commit baseline repair.
+- [x] 1.6 Commit baseline repair.
 
 ```bash
 git add apps/discord-bot/src/commands.ts tidaldl-py/pyproject.toml tidaldl-py/uv.lock
@@ -134,7 +134,7 @@ RULES = {
 
 `pass` and explicitly allowed `not_applicable` earn full points. `regression`, `slow`, and `fail` earn zero. Any missing required result blocks. `affected_build` is the only scored check allowed to be `not_applicable`. Duration is computed from job seconds: all jobs `<=480` earn 5; any job `481..600` earns zero without its own blocker; any job `>600` blocks. A `library_performance=regression` loses 10 without blocking; `fail` means absolute ceiling breach and blocks.
 
-- [ ] 2.1 Write `tests/test_qa_score.py` with a complete passing payload helper.
+- [x] 2.1 Write `tests/test_qa_score.py` with a complete passing payload helper.
 
 ```python
 PASSING_CHECKS = {name: "pass" for name in RULE_NAMES}
@@ -174,7 +174,7 @@ Also cover: score 79 blocks; Ruff failure deducts 10 without hard blocker; high-
 
 Add one metric test proving supplied `pagination_p95_ms`, `search_p95_ms`, and `artists_p95_ms` values appear in JSON and Markdown without affecting score arithmetic.
 
-- [ ] 2.2 Run scorer tests to verify red state.
+- [x] 2.2 Run scorer tests to verify red state.
 
 Run:
 
@@ -184,7 +184,7 @@ uv run --project tidaldl-py --extra test python -m pytest tests/test_qa_score.py
 
 Expected: FAIL because `scripts.qa_score` does not exist.
 
-- [ ] 2.3 Implement the smallest score API in `scripts/qa_score.py`.
+- [x] 2.3 Implement the smallest score API in `scripts/qa_score.py`.
 
 Required public surface:
 
@@ -226,7 +226,7 @@ Implementation rules:
 - Preserve only allow-listed numeric metrics (`pagination_p95_ms`, `search_p95_ms`, `artists_p95_ms`) for calibration evidence.
 - In advisory mode, preserve `would_block=true` but return exit 0.
 
-- [ ] 2.4 Run focused tests and CLI self-check.
+- [x] 2.4 Run focused tests and CLI self-check.
 
 ```bash
 uv run --project tidaldl-py --extra test python -m pytest tests/test_qa_score.py -q
@@ -235,7 +235,7 @@ uv run --project tidaldl-py python scripts/qa_score.py --help
 
 Expected: scorer tests pass; help exits 0.
 
-- [ ] 2.5 Commit score engine.
+- [x] 2.5 Commit score engine.
 
 ```bash
 git add scripts/qa_score.py tests/test_qa_score.py
@@ -250,7 +250,7 @@ git commit -m "feat: add pull request QA scorer"
 - Create: `scripts/qa_performance.py`
 - Later create after calibration: `scripts/qa_performance_baseline.json`
 
-- [ ] 3.1 Write pure classification tests before any real timing test.
+- [x] 3.1 Write pure classification tests before any real timing test.
 
 ```python
 def test_absolute_ceiling_blocks():
@@ -278,7 +278,7 @@ def test_material_relative_regression_requires_percent_and_delta():
 
 Also test p95 indexing for 25 sorted samples, a >25% change with <=2 ms delta does not regress, and output contains no fixture paths.
 
-- [ ] 3.2 Run performance tests to verify red state.
+- [x] 3.2 Run performance tests to verify red state.
 
 ```bash
 uv run --project tidaldl-py --extra test python -m pytest tests/test_qa_performance.py -q
@@ -286,7 +286,7 @@ uv run --project tidaldl-py --extra test python -m pytest tests/test_qa_performa
 
 Expected: FAIL because `scripts.qa_performance` does not exist.
 
-- [ ] 3.3 Implement `scripts/qa_performance.py` using existing `LibraryDB`.
+- [x] 3.3 Implement `scripts/qa_performance.py` using existing `LibraryDB`.
 
 Required public surface:
 
@@ -313,7 +313,7 @@ db.artists_page(limit=50, offset=0)
 
 Exclude database creation and 10,000 inserts. Emit `status`, `relative_status`, rounded p95 values, and ceiling values to `--output` (default `output/qa/performance.json`). Exit 1 only for absolute failure; relative regression remains machine-readable for scorer.
 
-- [ ] 3.4 Verify tests and one real local probe.
+- [x] 3.4 Verify tests and one real local probe.
 
 ```bash
 uv run --project tidaldl-py --extra test python -m pytest tests/test_qa_performance.py -q
@@ -322,7 +322,7 @@ uv run --project tidaldl-py python scripts/qa_performance.py --output output/qa/
 
 Expected: tests pass; local probe exits 0; JSON has three p95 measurements. Do not encode local measurements as CI baselines.
 
-- [ ] 3.5 Commit deterministic probe.
+- [x] 3.5 Commit deterministic probe.
 
 ```bash
 git add scripts/qa_performance.py tests/test_qa_performance.py
@@ -336,7 +336,7 @@ git commit -m "feat: add deterministic library performance probe"
 - Create: `tests/test_qa_live_smoke.py`
 - Create: `scripts/qa_live_smoke.py`
 
-- [ ] 4.1 Write injected-service tests.
+- [x] 4.1 Write injected-service tests.
 
 Tests must prove:
 
@@ -365,7 +365,7 @@ def test_discord_check_is_read_only_and_secret_safe():
     assert token not in json.dumps(asdict(result))
 ```
 
-- [ ] 4.2 Run live-smoke tests to verify red state.
+- [x] 4.2 Run live-smoke tests to verify red state.
 
 ```bash
 uv run --project tidaldl-py --extra test python -m pytest tests/test_qa_live_smoke.py -q
@@ -373,7 +373,7 @@ uv run --project tidaldl-py --extra test python -m pytest tests/test_qa_live_smo
 
 Expected: FAIL because `scripts.qa_live_smoke` does not exist.
 
-- [ ] 4.3 Implement `scripts/qa_live_smoke.py` with dependency injection at service boundaries.
+- [x] 4.3 Implement `scripts/qa_live_smoke.py` with dependency injection at service boundaries.
 
 Required public surface:
 
@@ -392,7 +392,7 @@ def main(argv: Sequence[str] | None = None) -> int: ...
 
 Tidal flow: instantiate existing `Tidal`, call `login_token(quiet=True)`, require `session.check_login()`, then run `session.search("Daft Punk", models=[Track], limit=1)`. Discord flow: one bot-authenticated GET to `/users/@me`. Write JSON to `--output` (default `output/qa/live.json`). Return 1 when either service fails. Never print exception representations that could contain headers or tokens.
 
-- [ ] 4.4 Verify unit tests; do not run live credentials during ordinary local tests.
+- [x] 4.4 Verify unit tests; do not run live credentials during ordinary local tests.
 
 ```bash
 uv run --project tidaldl-py --extra test python -m pytest tests/test_qa_live_smoke.py -q
@@ -400,7 +400,7 @@ uv run --project tidaldl-py --extra test python -m pytest tests/test_qa_live_smo
 
 Expected: all tests pass without network access.
 
-- [ ] 4.5 Commit live-smoke helper.
+- [x] 4.5 Commit live-smoke helper.
 
 ```bash
 git add scripts/qa_live_smoke.py tests/test_qa_live_smoke.py
@@ -414,7 +414,7 @@ git commit -m "feat: add read-only live service smoke"
 - Create: `tests/test_qa_workflow.py`
 - Rename: `.github/workflows/gui-smoke.yml` -> `.github/workflows/qa.yml`
 
-- [ ] 5.1 Write workflow contract tests before renaming or editing workflow.
+- [x] 5.1 Write workflow contract tests before renaming or editing workflow.
 
 Read workflow as text. Assert all of these exact contracts:
 
@@ -451,7 +451,7 @@ def test_final_qa_always_aggregates():
 
 Also assert: every checkout that computes a base/head diff or scans commits uses `fetch-depth: 0`; job timeout is 10 minutes; Python uses uv; bot uses Bun; Ruff uses `--no-fix`; performance probe runs; both Gitleaks and dependency-review action steps use `continue-on-error: true`; dependency review fails at `high`; affected build has explicit path rules; final scorer is advisory without `--enforce`; live token file is created under `$RUNNER_TEMP`, permission `600`, and removed in `if: always()` cleanup.
 
-- [ ] 5.2 Run workflow tests to verify red state.
+- [x] 5.2 Run workflow tests to verify red state.
 
 ```bash
 uv run --project tidaldl-py --extra test python -m pytest tests/test_qa_workflow.py -q
@@ -459,7 +459,7 @@ uv run --project tidaldl-py --extra test python -m pytest tests/test_qa_workflow
 
 Expected: FAIL because `.github/workflows/qa.yml` does not exist.
 
-- [ ] 5.3 Rename existing workflow and preserve its current GUI/API smoke command as the `python_smoke` check.
+- [x] 5.3 Rename existing workflow and preserve its current GUI/API smoke command as the `python_smoke` check.
 
 ```bash
 git mv .github/workflows/gui-smoke.yml .github/workflows/qa.yml
@@ -469,7 +469,7 @@ Set workflow name `qa`; trigger only PRs targeting `master`, including the `labe
 
 Use `actions/checkout` with `fetch-depth: 0` for every job that computes the PR base/head diff or scans the PR commit range. This is required for both changed-path selection and Gitleaks history.
 
-- [ ] 5.4 Add parallel outcome-producing jobs with `timeout-minutes: 10`.
+- [x] 5.4 Add parallel outcome-producing jobs with `timeout-minutes: 10`.
 
 Jobs and exact commands:
 
@@ -505,7 +505,7 @@ Affected path rules:
 - Docker: `docker/**`, `docker-compose.yml`, or `tidaldl-py/pyproject.toml` -> `docker build -f docker/Dockerfile -t music-dl:qa .`.
 - Tauri package metadata: `tidaldl-py/package.json` -> `cd tidaldl-py && bun install && bunx tauri --version`. Do not use `--frozen-lockfile`: current `tidaldl-py/bun.lock` is ignored and absent from a fresh checkout. Tracking that lockfile is outside this change.
 
-- [ ] 5.5 Add protected live job without exposing credentials to fork PRs.
+- [x] 5.5 Add protected live job without exposing credentials to fork PRs.
 
 Condition:
 
@@ -523,11 +523,11 @@ Protected environment inputs:
 
 Write Tidal JSON to `$RUNNER_TEMP/music-dl/token.json`, `chmod 600`, set `MUSIC_DL_CONFIG_DIR=$RUNNER_TEMP/music-dl`, run `scripts/qa_live_smoke.py`, then remove token file in an `if: always()` cleanup step. Never print secret values. Label absent -> `not_requested`; fork label -> `not_applicable`; trusted labelled job missing/failure -> hard blocker.
 
-- [ ] 5.6 Add final always-running `qa` aggregation job.
+- [x] 5.6 Add final always-running `qa` aggregation job.
 
 Final job needs every deterministic and live job. It invokes `scripts/qa_score.py` with all scored `--result` outputs, deterministic-job `--duration` outputs, and three performance `--metric` outputs; derives trusted/live-requested booleans from event context; passes `--summary "$GITHUB_STEP_SUMMARY"`; and omits `--enforce` during calibration. Never pass live-job duration into the shared deterministic duration award. Job summary is the calibration record; no new artifact upload is needed.
 
-- [ ] 5.7 Run workflow and scorer contract tests.
+- [x] 5.7 Run workflow and scorer contract tests.
 
 ```bash
 uv run --project tidaldl-py --extra test python -m pytest \
@@ -536,14 +536,14 @@ uv run --project tidaldl-py --extra test python -m pytest \
 
 Expected: all tests pass.
 
-- [ ] 5.8 Commit advisory workflow.
+- [x] 5.8 Commit advisory workflow.
 
 ```bash
 git add .github/workflows/qa.yml .github/workflows/gui-smoke.yml tests/test_qa_workflow.py
 git commit -m "ci: add advisory pull request QA gate"
 ```
 
-- [ ] 5.9 Verify native GitHub secret scanning and push protection are enabled; stop if either is disabled.
+- [x] 5.9 Verify native GitHub secret scanning and push protection are enabled; stop if either is disabled.
 
 ```bash
 gh api repos/alfdav/music-dl --jq '.security_and_analysis | {
@@ -562,11 +562,11 @@ Expected: both values are `enabled`. This read-only repository setting check is 
 - Modify: `CONTRIBUTING.md`
 - Modify: `openspec/changes/qa-pr-rubric/tasks.md`
 
-- [ ] 6.1 Replace `gui-smoke` wording in `CONTRIBUTING.md` with final `qa` summary semantics.
+- [x] 6.1 Replace `gui-smoke` wording in `CONTRIBUTING.md` with final `qa` summary semantics.
 
 Document: 90-100 ready, 80-89 ready with debt, below 80 blocked after enforcement, and any hard blocker blocked. State workflow remains advisory for first five PRs.
 
-- [ ] 6.2 Add local QA commands to README Development section.
+- [x] 6.2 Add local QA commands to README Development section.
 
 Include exact commands:
 
@@ -581,9 +581,9 @@ cd apps/discord-bot && bun test && bun run typecheck
 
 Document `qa-live` as internal-only, approval-protected, read-only, and never available to fork PRs. Do not document secret values.
 
-- [ ] 6.3 Add a calibration evidence table to the end of this plan.
+- [x] 6.3 Add a calibration evidence table to the end of this plan.
 
-- [ ] 6.4 Run documentation contract tests.
+- [x] 6.4 Run documentation contract tests.
 
 ```bash
 for test_script in \
@@ -598,7 +598,7 @@ done
 
 Expected: every script exits 0.
 
-- [ ] 6.5 Commit documentation.
+- [x] 6.5 Commit documentation.
 
 ```bash
 git add README.md CONTRIBUTING.md openspec/changes/qa-pr-rubric/tasks.md

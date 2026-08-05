@@ -23,8 +23,16 @@ Create a branch, make your changes, open a PR against `master`.
 1. One logical change per PR. Split unrelated work into separate PRs.
 2. Write a clear title: `fix: ...`, `feat: ...`, `docs: ...`, `security: ...`
 3. The PR description should explain *what* and *why*. Code explains *how*.
-4. CI must pass (gui-smoke tests run automatically on PRs).
+4. Review the final `qa` summary:
+   - 90–100: ready
+   - 80–89: ready with visible debt
+   - Below 80: would be blocked after enforcement
+   - Any hard blocker: would be blocked after enforcement
 5. If you touch the GUI, test in a browser. If you touch Docker, build and run the image.
+
+The `qa` workflow is advisory for its first five representative PRs. During
+this calibration period it reports what would block, but does not enforce the
+merge decision yet.
 
 ## Code Conventions
 
