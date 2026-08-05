@@ -143,13 +143,14 @@ def test_changed_path_processing_is_nul_safe():
 
 def test_gitleaks_is_commit_pinned_and_receives_no_secret():
     block = job_block(workflow_text(), "supply_chain")
-    assert "gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7" in block
-    assert "GITHUB_TOKEN: ${{ github.token }}" in block
-    assert 'GITLEAKS_VERSION: "8.24.3"' in block
-    assert "BASE_REF: ${{ github.event.pull_request.base.sha }}" in block
-    assert 'GITLEAKS_ENABLE_COMMENTS: "false"' in block
-    assert 'GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"' in block
-    assert "GITLEAKS_LICENSE" not in block
+    action = step_block(block, "Scan commits with Gitleaks")
+    assert "gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7" in action
+    assert "GITHUB_TOKEN: ${{ github.token }}" in action
+    assert 'GITLEAKS_VERSION: "8.24.3"' in action
+    assert "BASE_REF:" not in action
+    assert 'GITLEAKS_ENABLE_COMMENTS: "false"' in action
+    assert 'GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"' in action
+    assert "GITLEAKS_LICENSE" not in action
     assert re.search(
         r"uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7"
         r"[\s\S]*?continue-on-error: true",
