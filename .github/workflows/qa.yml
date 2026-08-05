@@ -1,0 +1,591 @@
+name: qa
+
+on:
+  pull_request:
+    branches: [master]
+    types: [opened, synchronize, reopened, labeled]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      python_smoke: ${{ steps.results.outputs.python_smoke }}
+      ruff: ${{ steps.results.outputs.ruff }}
+      security_tests: ${{ steps.results.outputs.security_tests }}
+      uv_build: ${{ steps.results.outputs.uv_build }}
+      duration: ${{ steps.results.outputs.duration }}
+    steps:
+      - name: Start timer
+        id: start
+        run: echo "epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Run GUI and API smoke tests
+        id: python_smoke
+        working-directory: tidaldl-py
+        continue-on-error: true
+        run: >-
+          PYTHONNOUSERSITE=1 uv run --extra test python -m pytest
+          tests/test_gui_command.py::TestGuiCommandHelp::test_gui_help_exits_zero
+          tests/test_gui_command.py::TestGuiCommandHelp::test_gui_help_mentions_port
+          tests/test_gui_command.py::TestGuiCommandHelp::test_gui_appears_in_root_help
+          tests/test_gui_command.py::TestGuiCommandInvocation::test_default_port_and_browser
+          tests/test_gui_command.py::TestGuiCommandInvocation::test_custom_port
+          tests/test_gui_command.py::TestGuiCommandInvocation::test_no_browser_flag
+          tests/test_gui_command.py::TestGuiCommandInvocation::test_custom_port_and_no_browser
+          tests/test_gui_api.py
+          tests/test_setup.py
+          tests/test_api_endpoints.py
+          tests/test_downloads.py
+          tests/test_gui_security.py
+          -q
+
+      - name: Run Ruff checks
+        id: ruff
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          uv run --project tidaldl-py ruff check --no-fix --select E9,F63,F7,F82 \
+            tidaldl-py/tidal_dl tidaldl-py/tests scripts tests
+          git diff --name-only --diff-filter=AM \
+            "origin/${{ github.base_ref }}...HEAD" -- '*.py' \
+            > "$RUNNER_TEMP/changed-python.txt"
+          mapfile -t changed_python < "$RUNNER_TEMP/changed-python.txt"
+          if (( ${#changed_python[@]} )); then
+            uv run --project tidaldl-py ruff check --no-fix "${changed_python[@]}"
+          fi
+
+      - name: Run security tests
+        id: security_tests
+        continue-on-error: true
+        run: >-
+          uv run --project tidaldl-py --extra test python -m pytest
+          tidaldl-py/tests/test_gui_security.py
+          tidaldl-py/tests/test_bot_api.py
+          tidaldl-py/tests/test_bot_control_api.py
+          tests/test_qa_workflow.py
+          -q
+
+      - name: Build Python package
+        id: uv_build
+        continue-on-error: true
+        run: uv build --project tidaldl-py
+
+      - name: Collect Python results
+        id: results
+        if: always()
+        env:
+          START_EPOCH: ${{ steps.start.outputs.epoch }}
+        run: |
+          echo "python_smoke=${{ steps.python_smoke.outcome }}" >> "$GITHUB_OUTPUT"
+          echo "ruff=${{ steps.ruff.outcome }}" >> "$GITHUB_OUTPUT"
+          echo "security_tests=${{ steps.security_tests.outcome }}" >> "$GITHUB_OUTPUT"
+          echo "uv_build=${{ steps.uv_build.outcome }}" >> "$GITHUB_OUTPUT"
+          echo "duration=$(($(date +%s) - START_EPOCH))" >> "$GITHUB_OUTPUT"
+
+  bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      bun_tests: ${{ steps.results.outputs.bun_tests }}
+      typescript: ${{ steps.results.outputs.typescript }}
+      duration: ${{ steps.results.outputs.duration }}
+    steps:
+      - name: Start timer
+        id: start
+        run: echo "epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install bot dependencies
+        working-directory: apps/discord-bot
+        run: bun install --frozen-lockfile
+
+      - name: Run bot tests
+        id: bun_tests
+        working-directory: apps/discord-bot
+        continue-on-error: true
+        run: bun test
+
+      - name: Type-check bot
+        id: typescript
+        working-directory: apps/discord-bot
+        continue-on-error: true
+        run: bun run typecheck
+
+      - name: Collect bot results
+        id: results
+        if: always()
+        env:
+          START_EPOCH: ${{ steps.start.outputs.epoch }}
+        run: |
+          echo "bun_tests=${{ steps.bun_tests.outcome }}" >> "$GITHUB_OUTPUT"
+          echo "typescript=${{ steps.typescript.outcome }}" >> "$GITHUB_OUTPUT"
+          echo "duration=$(($(date +%s) - START_EPOCH))" >> "$GITHUB_OUTPUT"
+
+  contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      release_installers: ${{ steps.results.outputs.release_installers }}
+      docs_contracts: ${{ steps.results.outputs.docs_contracts }}
+      diff_hygiene: ${{ steps.results.outputs.diff_hygiene }}
+      duration: ${{ steps.results.outputs.duration }}
+    steps:
+      - name: Start timer
+        id: start
+        run: echo "epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Validate release and installers
+        id: release_installers
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          uv run --project tidaldl-py --extra test python -m pytest \
+            tests/test_release_version.py tests/test_edge_channel.py -q
+          bash tests/test_macos_local_installer.sh
+          bash tests/test_macos_release_installer.sh
+          bash tests/test_windows_local_installer.sh
+
+      - name: Validate documentation contracts
+        id: docs_contracts
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          bash tests/test_edge_installers.sh
+          bash tests/test_edge_workflow.sh
+          bash tests/test_one_line_install_docs.sh
+          bash tests/test_stable_release_workflow.sh
+
+      - name: Check diff hygiene
+        id: diff_hygiene
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          git diff --check "origin/${{ github.base_ref }}...HEAD"
+          if git ls-files | grep -Eq '(^|/)(__pycache__|\.pytest_cache|dist|target|output)(/|$)'; then
+            echo "Tracked generated files found"
+            exit 1
+          fi
+
+      - name: Collect contract results
+        id: results
+        if: always()
+        env:
+          START_EPOCH: ${{ steps.start.outputs.epoch }}
+        run: |
+          echo "release_installers=${{ steps.release_installers.outcome }}" >> "$GITHUB_OUTPUT"
+          echo "docs_contracts=${{ steps.docs_contracts.outcome }}" >> "$GITHUB_OUTPUT"
+          echo "diff_hygiene=${{ steps.diff_hygiene.outcome }}" >> "$GITHUB_OUTPUT"
+          echo "duration=$(($(date +%s) - START_EPOCH))" >> "$GITHUB_OUTPUT"
+
+  performance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      library_performance: ${{ steps.results.outputs.library_performance }}
+      pagination_p95_ms: ${{ steps.results.outputs.pagination_p95_ms }}
+      search_p95_ms: ${{ steps.results.outputs.search_p95_ms }}
+      artists_p95_ms: ${{ steps.results.outputs.artists_p95_ms }}
+      duration: ${{ steps.results.outputs.duration }}
+    steps:
+      - name: Start timer
+        id: start
+        run: echo "epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Run LibraryDB performance probe
+        id: probe
+        continue-on-error: true
+        run: >-
+          uv run --project tidaldl-py python
+          scripts/qa_performance.py --output "$RUNNER_TEMP/performance.json"
+
+      - name: Parse performance result
+        id: parsed
+        if: always()
+        env:
+          PERFORMANCE_JSON: ${{ runner.temp }}/performance.json
+        run: |
+          uv run --project tidaldl-py python - <<'PY'
+          import json
+          import math
+          import os
+
+          try:
+              with open(os.environ["PERFORMANCE_JSON"], encoding="utf-8") as handle:
+                  data = json.load(handle)
+              status = data["status"]
+              metrics = data["p95_ms"]
+              values = {name: float(metrics[name]) for name in ("pagination", "search", "artists")}
+              if status not in {"pass", "regression", "fail"}:
+                  raise ValueError
+              if any(not math.isfinite(value) or value < 0 for value in values.values()):
+                  raise ValueError
+          except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+              raise SystemExit(0)
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              print(f"library_performance={status}", file=output)
+              for name, value in values.items():
+                  print(f"{name}_p95_ms={value}", file=output)
+          PY
+
+      - name: Collect performance results
+        id: results
+        if: always()
+        env:
+          START_EPOCH: ${{ steps.start.outputs.epoch }}
+        run: |
+          echo "library_performance=${{ steps.parsed.outputs.library_performance }}" >> "$GITHUB_OUTPUT"
+          echo "pagination_p95_ms=${{ steps.parsed.outputs.pagination_p95_ms }}" >> "$GITHUB_OUTPUT"
+          echo "search_p95_ms=${{ steps.parsed.outputs.search_p95_ms }}" >> "$GITHUB_OUTPUT"
+          echo "artists_p95_ms=${{ steps.parsed.outputs.artists_p95_ms }}" >> "$GITHUB_OUTPUT"
+          echo "duration=$(($(date +%s) - START_EPOCH))" >> "$GITHUB_OUTPUT"
+
+  supply_chain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      gitleaks: ${{ steps.results.outputs.gitleaks }}
+      dependency_review: ${{ steps.results.outputs.dependency_review }}
+      duration: ${{ steps.results.outputs.duration }}
+    steps:
+      - name: Start timer
+        id: start
+        run: echo "epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Scan commits with Gitleaks
+        id: gitleaks
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - name: Review dependency changes
+        id: dependency_review
+        uses: actions/dependency-review-action@v4
+        continue-on-error: true
+        with:
+          fail-on-severity: high
+
+      - name: Collect supply-chain results
+        id: results
+        if: always()
+        env:
+          START_EPOCH: ${{ steps.start.outputs.epoch }}
+        run: |
+          echo "gitleaks=${{ steps.gitleaks.outcome }}" >> "$GITHUB_OUTPUT"
+          echo "dependency_review=${{ steps.dependency_review.outcome }}" >> "$GITHUB_OUTPUT"
+          echo "duration=$(($(date +%s) - START_EPOCH))" >> "$GITHUB_OUTPUT"
+
+  affected_build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      affected_build: ${{ steps.results.outputs.affected_build }}
+      duration: ${{ steps.results.outputs.duration }}
+    steps:
+      - name: Start timer
+        id: start
+        run: echo "epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Detect affected builds
+        id: affected
+        run: |
+          set -euo pipefail
+          rust=false
+          docker=false
+          tauri_package=false
+          git diff --name-only "origin/${{ github.base_ref }}...HEAD" \
+            > "$RUNNER_TEMP/changed-paths.txt"
+          while IFS= read -r path; do
+            case "$path" in
+              tidaldl-py/src-tauri/*) rust=true ;;
+              docker/*|docker-compose.yml|tidaldl-py/pyproject.toml) docker=true ;;
+              tidaldl-py/package.json) tauri_package=true ;;
+            esac
+          done < "$RUNNER_TEMP/changed-paths.txt"
+          echo "rust=$rust" >> "$GITHUB_OUTPUT"
+          echo "docker=$docker" >> "$GITHUB_OUTPUT"
+          echo "tauri_package=$tauri_package" >> "$GITHUB_OUTPUT"
+
+      - name: Install Linux system dependencies
+        if: steps.affected.outputs.rust == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev librsvg2-dev \
+            patchelf libgtk-3-dev libayatana-appindicator3-dev \
+            ffmpeg
+
+      - name: Set up Rust
+        if: steps.affected.outputs.rust == 'true'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Check Tauri Rust
+        id: rust
+        if: steps.affected.outputs.rust == 'true'
+        continue-on-error: true
+        run: cargo check --manifest-path tidaldl-py/src-tauri/Cargo.toml
+
+      - name: Build Docker image
+        id: docker
+        if: steps.affected.outputs.docker == 'true'
+        continue-on-error: true
+        run: docker build -f docker/Dockerfile -t music-dl:qa .
+
+      - name: Set up Bun
+        if: steps.affected.outputs.tauri_package == 'true'
+        uses: oven-sh/setup-bun@v2
+
+      - name: Check Tauri package metadata
+        id: tauri_package
+        if: steps.affected.outputs.tauri_package == 'true'
+        working-directory: tidaldl-py
+        continue-on-error: true
+        run: bun install && bunx tauri --version
+
+      - name: Collect affected-build result
+        id: results
+        if: always()
+        env:
+          START_EPOCH: ${{ steps.start.outputs.epoch }}
+          DETECT_OUTCOME: ${{ steps.affected.outcome }}
+          RUST_SELECTED: ${{ steps.affected.outputs.rust }}
+          RUST_OUTCOME: ${{ steps.rust.outcome }}
+          DOCKER_SELECTED: ${{ steps.affected.outputs.docker }}
+          DOCKER_OUTCOME: ${{ steps.docker.outcome }}
+          TAURI_SELECTED: ${{ steps.affected.outputs.tauri_package }}
+          TAURI_OUTCOME: ${{ steps.tauri_package.outcome }}
+        run: |
+          echo "duration=$(($(date +%s) - START_EPOCH))" >> "$GITHUB_OUTPUT"
+          if [[ "$DETECT_OUTCOME" != success ]]; then exit 0; fi
+          selected=false
+          result=pass
+          for pair in \
+            "$RUST_SELECTED:$RUST_OUTCOME" \
+            "$DOCKER_SELECTED:$DOCKER_OUTCOME" \
+            "$TAURI_SELECTED:$TAURI_OUTCOME"
+          do
+            selection=${pair%%:*}
+            outcome=${pair#*:}
+            if [[ "$selection" == true ]]; then
+              selected=true
+              if [[ "$outcome" == failure ]]; then result=fail; fi
+              if [[ "$outcome" != success && "$outcome" != failure ]]; then exit 0; fi
+            fi
+          done
+          if [[ "$selected" == false ]]; then
+            echo "affected_build=not_applicable" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "affected_build=$result" >> "$GITHUB_OUTPUT"
+
+  live:
+    if: >-
+      contains(github.event.pull_request.labels.*.name, 'qa-live') &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    environment: qa-live
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      live_status: ${{ steps.results.outputs.live_status }}
+      duration: ${{ steps.results.outputs.duration }}
+    steps:
+      - name: Start timer
+        id: start
+        run: echo "epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Prepare ephemeral Tidal token
+        env:
+          MUSIC_DL_TIDAL_TOKEN_JSON: ${{ secrets.MUSIC_DL_TIDAL_TOKEN_JSON }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/music-dl"
+          printf '%s' "$MUSIC_DL_TIDAL_TOKEN_JSON" > "$RUNNER_TEMP/music-dl/token.json"
+          chmod 600 "$RUNNER_TEMP/music-dl/token.json"
+
+      - name: Run read-only live smoke
+        id: smoke
+        continue-on-error: true
+        env:
+          MUSIC_DL_CONFIG_DIR: ${{ runner.temp }}/music-dl
+          DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
+        run: >-
+          uv run --project tidaldl-py python
+          scripts/qa_live_smoke.py --output "$RUNNER_TEMP/live.json"
+
+      - name: Remove ephemeral credentials
+        if: always()
+        run: rm -f "$RUNNER_TEMP/music-dl/token.json" "$RUNNER_TEMP/live.json"
+
+      - name: Collect live result
+        id: results
+        if: always()
+        env:
+          START_EPOCH: ${{ steps.start.outputs.epoch }}
+          SMOKE_OUTCOME: ${{ steps.smoke.outcome }}
+        run: |
+          echo "duration=$(($(date +%s) - START_EPOCH))" >> "$GITHUB_OUTPUT"
+          case "$SMOKE_OUTCOME" in
+            success) echo "live_status=pass" >> "$GITHUB_OUTPUT" ;;
+            failure) echo "live_status=fail" >> "$GITHUB_OUTPUT" ;;
+            *) echo "live_status=missing" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+  qa:
+    if: always()
+    needs: [python, bot, contracts, performance, supply_chain, affected_build, live]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+
+      - name: Write advisory QA score
+        continue-on-error: true
+        env:
+          PYTHON_SMOKE: ${{ needs.python.outputs.python_smoke }}
+          RUFF: ${{ needs.python.outputs.ruff }}
+          SECURITY_TESTS: ${{ needs.python.outputs.security_tests }}
+          UV_BUILD: ${{ needs.python.outputs.uv_build }}
+          BUN_TESTS: ${{ needs.bot.outputs.bun_tests }}
+          TYPESCRIPT: ${{ needs.bot.outputs.typescript }}
+          RELEASE_INSTALLERS: ${{ needs.contracts.outputs.release_installers }}
+          DOCS_CONTRACTS: ${{ needs.contracts.outputs.docs_contracts }}
+          DIFF_HYGIENE: ${{ needs.contracts.outputs.diff_hygiene }}
+          LIBRARY_PERFORMANCE: ${{ needs.performance.outputs.library_performance }}
+          GITLEAKS: ${{ needs.supply_chain.outputs.gitleaks }}
+          DEPENDENCY_REVIEW: ${{ needs.supply_chain.outputs.dependency_review }}
+          AFFECTED_BUILD: ${{ needs.affected_build.outputs.affected_build }}
+          PYTHON_DURATION: ${{ needs.python.outputs.duration }}
+          BOT_DURATION: ${{ needs.bot.outputs.duration }}
+          CONTRACTS_DURATION: ${{ needs.contracts.outputs.duration }}
+          PERFORMANCE_DURATION: ${{ needs.performance.outputs.duration }}
+          SUPPLY_CHAIN_DURATION: ${{ needs.supply_chain.outputs.duration }}
+          AFFECTED_BUILD_DURATION: ${{ needs.affected_build.outputs.duration }}
+          PAGINATION_P95_MS: ${{ needs.performance.outputs.pagination_p95_ms }}
+          SEARCH_P95_MS: ${{ needs.performance.outputs.search_p95_ms }}
+          ARTISTS_P95_MS: ${{ needs.performance.outputs.artists_p95_ms }}
+          LIVE_REQUESTED: ${{ contains(github.event.pull_request.labels.*.name, 'qa-live') }}
+          LIVE_TRUSTED: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+          LIVE_JOB_STATUS: ${{ needs.live.outputs.live_status }}
+        run: |
+          args=(
+            --result "python_smoke=${PYTHON_SMOKE:-missing}"
+            --result "bun_tests=${BUN_TESTS:-missing}"
+            --result "release_installers=${RELEASE_INSTALLERS:-missing}"
+            --result "typescript=${TYPESCRIPT:-missing}"
+            --result "ruff=${RUFF:-missing}"
+            --result "security_tests=${SECURITY_TESTS:-missing}"
+            --result "gitleaks=${GITLEAKS:-missing}"
+            --result "dependency_review=${DEPENDENCY_REVIEW:-missing}"
+            --result "library_performance=${LIBRARY_PERFORMANCE:-missing}"
+            --result "uv_build=${UV_BUILD:-missing}"
+            --result "affected_build=${AFFECTED_BUILD:-missing}"
+            --result "docs_contracts=${DOCS_CONTRACTS:-missing}"
+            --result "diff_hygiene=${DIFF_HYGIENE:-missing}"
+          )
+          for duration in \
+            "python:$PYTHON_DURATION" \
+            "bot:$BOT_DURATION" \
+            "contracts:$CONTRACTS_DURATION" \
+            "performance:$PERFORMANCE_DURATION" \
+            "supply_chain:$SUPPLY_CHAIN_DURATION" \
+            "affected_build:$AFFECTED_BUILD_DURATION"
+          do
+            name=${duration%%:*}
+            value=${duration#*:}
+            if [[ -n "$value" ]]; then args+=(--duration "$name=$value"); fi
+          done
+          for metric in \
+            "pagination_p95_ms:$PAGINATION_P95_MS" \
+            "search_p95_ms:$SEARCH_P95_MS" \
+            "artists_p95_ms:$ARTISTS_P95_MS"
+          do
+            name=${metric%%:*}
+            value=${metric#*:}
+            if [[ -n "$value" ]]; then args+=(--metric "$name=$value"); fi
+          done
+          if [[ "$LIVE_REQUESTED" == true ]]; then
+            args+=(--live-requested)
+            if [[ "$LIVE_TRUSTED" == true ]]; then
+              args+=(--live-trusted)
+              live_status=${LIVE_JOB_STATUS:-missing}
+            else
+              live_status=not_applicable
+            fi
+          else
+            live_status=not_requested
+          fi
+          uv run --project tidaldl-py python scripts/qa_score.py \
+            "${args[@]}" \
+            --live-status "$live_status" \
+            --summary "$GITHUB_STEP_SUMMARY" \
+            --output "$RUNNER_TEMP/qa-score.json"
