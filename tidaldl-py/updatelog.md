@@ -20,6 +20,22 @@ uv tool install --from git+https://github.com/alfdav/music-dl.git#subdirectory=t
 
 ---
 
+## v1.6.9 (2026-07-13)
+- Fixed update checks incorrectly offering an older published release to newer
+  local or source builds, and made the current version appear without requiring
+  a manual update check.
+- Added a Settings action to reset stale Tidal credentials locally without
+  restarting the app or automatically starting another OAuth request.
+- Removed browser-driven Tidal keepalive polling; token refresh now remains
+  demand-driven before explicit Tidal-facing actions.
+- Made startup and Settings account indicators use local token/expiry state
+  instead of provider-backed login validation requests.
+- Made Hi-Fi discovery and status checks passive, cached tracker results for 60
+  seconds, and removed stale hard-coded fallback instances.
+- Serialized Hi-Fi requests across clients, limited rotation to one attempt per
+  host, and stopped immediately on authentication, authorization, or rate-limit
+  responses.
+
 ## v1.6.8 (2026-06-05)
 
 - Hardened upgrade queue handling by validating direct Tidal upgrade paths

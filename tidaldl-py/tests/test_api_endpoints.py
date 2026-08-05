@@ -10,6 +10,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from tidal_dl.helper.library_db import LibraryDB
+
 
 class TestLibraryTracks:
     def test_returns_200(self, client):
@@ -41,6 +43,268 @@ class TestLibraryTracks:
         for sort in ("recent", "artist", "album", "title"):
             resp = client.get(f"/api/library?sort={sort}", headers=client._host_header)
             assert resp.status_code == 200, f"Failed for sort={sort}"
+
+
+class TestLocalArtworkAvailability:
+    def test_cached_art_for_unapproved_path_is_denied(self, tmp_path, monkeypatch, client):
+        import tidal_dl.gui.api.library as library_api
+
+        allowed_dir = tmp_path / "allowed"
+        allowed_dir.mkdir()
+        unapproved_audio = tmp_path / "outside" / "private.mp3"
+        unapproved_audio.parent.mkdir()
+        unapproved_audio.write_bytes(b"not audio")
+
+        class FakeSettings:
+            data = SimpleNamespace(download_base_path=str(allowed_dir), scan_paths="")
+
+        monkeypatch.setattr(library_api, "Settings", FakeSettings)
+        monkeypatch.setattr(library_api, "path_config_base", lambda: str(tmp_path))
+        cached_bytes = b"cached-private-artwork"
+        cache_file = tmp_path / "art_cache" / library_api._art_cache_key(str(unapproved_audio))
+        cache_file.parent.mkdir()
+        cache_file.write_bytes(cached_bytes)
+
+        response = client.get(
+            "/api/library/art",
+            params={"path": str(unapproved_audio)},
+            headers=client._host_header,
+        )
+
+        assert response.status_code == 403
+        assert response.content != cached_bytes
+
+    def test_cached_art_for_approved_path_is_served(self, tmp_path, monkeypatch, client):
+        import tidal_dl.gui.api.library as library_api
+
+        allowed_dir = tmp_path / "allowed"
+        allowed_dir.mkdir()
+        approved_audio = allowed_dir / "public.mp3"
+        approved_audio.write_bytes(b"not audio")
+
+        class FakeSettings:
+            data = SimpleNamespace(download_base_path=str(allowed_dir), scan_paths="")
+
+        monkeypatch.setattr(library_api, "Settings", FakeSettings)
+        monkeypatch.setattr(library_api, "path_config_base", lambda: str(tmp_path))
+        cached_bytes = b"cached-public-artwork"
+        cache_file = tmp_path / "art_cache" / library_api._art_cache_key(str(approved_audio))
+        cache_file.parent.mkdir()
+        cache_file.write_bytes(cached_bytes)
+
+        response = client.get(
+            "/api/library/art",
+            params={"path": str(approved_audio)},
+            headers=client._host_header,
+        )
+
+        assert response.status_code == 200
+        assert response.content == cached_bytes
+
+    def test_cached_art_marks_legacy_row_available(self, tmp_path, monkeypatch):
+        import tidal_dl.gui.api.library as library_api
+
+        allowed_dir = tmp_path / "allowed"
+        allowed_dir.mkdir()
+        audio_path = allowed_dir / "legacy.mp3"
+        audio_path.write_bytes(b"not audio")
+
+        class FakeSettings:
+            data = SimpleNamespace(download_base_path=str(allowed_dir), scan_paths="")
+
+        db = LibraryDB(tmp_path / "library.db")
+        db.open()
+        db.record(str(audio_path), status="tagged", artist="Artist", title="Legacy")
+        db.commit()
+
+        monkeypatch.setattr(library_api, "Settings", FakeSettings)
+        monkeypatch.setattr(library_api, "path_config_base", lambda: str(tmp_path))
+        monkeypatch.setattr(library_api, "_get_db", lambda: db)
+        cache_file = tmp_path / "art_cache" / library_api._art_cache_key(str(audio_path))
+        cache_file.parent.mkdir()
+        cache_file.write_bytes(b"cached-legacy-artwork")
+
+        response = library_api.library_art(str(audio_path))
+
+        assert response.status_code == 200
+        assert response.headers["cache-control"] == "public, max-age=86400"
+        assert db.get(str(audio_path))["art_available"] == 1
+        db.close()
+
+    def test_sibling_art_cache_ignores_unsupported_file_metadata(
+        self, tmp_path, monkeypatch, client,
+    ):
+        import shutil
+
+        import tidal_dl.gui.api.library as library_api
+
+        library_dir = tmp_path / "music"
+        library_dir.mkdir()
+        audio_path = library_dir / "track.mp3"
+        audio_path.write_bytes(b"not audio")
+        cover_path = library_dir / "cover.jpg"
+        cover_bytes = b"album artwork"
+        cover_path.write_bytes(cover_bytes)
+
+        class FakeSettings:
+            data = SimpleNamespace(download_base_path=str(library_dir), scan_paths="")
+
+        def reject_metadata_copy(*args, **kwargs):
+            raise PermissionError("filesystem does not allow metadata flags")
+
+        monkeypatch.setattr(library_api, "Settings", FakeSettings)
+        monkeypatch.setattr(library_api, "path_config_base", lambda: str(tmp_path))
+        monkeypatch.setattr(library_api, "MutagenFile", lambda *args, **kwargs: None)
+        monkeypatch.setattr(shutil, "copystat", reject_metadata_copy)
+
+        response = client.get(
+            "/api/library/art",
+            params={"path": str(audio_path)},
+            headers=client._host_header,
+        )
+
+        assert response.status_code == 200
+        assert response.content == cover_bytes
+
+    def test_newly_scanned_coverless_track_omits_art_url(self, tmp_path, monkeypatch):
+        import tidal_dl.gui.api.library as library_api
+
+        library_dir = tmp_path / "music"
+        library_dir.mkdir()
+        track = library_dir / "coverless.mp3"
+        track.write_bytes(b"not audio")
+
+        class FakeSettings:
+            data = SimpleNamespace(download_base_path=str(library_dir), scan_paths="")
+
+        monkeypatch.setattr(library_api, "Settings", FakeSettings)
+        monkeypatch.setattr(library_api, "path_config_base", lambda: str(tmp_path))
+        monkeypatch.setattr(
+            library_api,
+            "_read_metadata",
+            lambda path: {
+                "path": str(path), "name": "Coverless", "artist": "Artist",
+                "album": "Album", "duration": 180, "isrc": "", "genre": None,
+                "quality": "MP3", "format": "MP3", "is_local": True,
+            },
+        )
+        monkeypatch.setattr("tidal_dl.helper.waveform.extract_both", lambda path: None)
+
+        library_api._background_scan(rescan=False)
+        db = LibraryDB(tmp_path / "library.db")
+        db.open()
+        monkeypatch.setattr(library_api, "_get_db", lambda: db)
+
+        response = library_api.library(sort="recent", limit=50, offset=0, q="")
+
+        assert db.get(str(track))["art_available"] == 0
+        assert response["tracks"][0]["cover_url"] == ""
+        db.close()
+
+    def test_known_coverless_local_rows_omit_art_urls_everywhere(self, tmp_path, monkeypatch):
+        import tidal_dl.gui.api.home as home_api
+        import tidal_dl.gui.api.library as library_api
+
+        db = LibraryDB(tmp_path / "library.db")
+        db.open()
+        path = "/music/artist/album/coverless.flac"
+        db.record(
+            path,
+            status="tagged",
+            artist="Artist",
+            title="Coverless",
+            album="Album",
+            duration=180,
+            art_available=False,
+        )
+        db.record_download(
+            track_id=1,
+            name="Coverless",
+            artist="Artist",
+            album="Album",
+            status="done",
+            finished_at=100,
+        )
+        db.add_favorite(path=path, artist="Artist", title="Coverless", album="Album")
+        db.log_play_event(path=path, artist="Artist", duration=180, played_at=100)
+        db.commit()
+
+        monkeypatch.setattr(library_api, "_get_db", lambda: db)
+        monkeypatch.setattr(home_api, "_get_db", lambda: db)
+        monkeypatch.setattr(home_api, "_volume_available_cached", lambda: True)
+
+        responses = [
+            library_api.library(sort="recent", limit=50, offset=0, q=""),
+            library_api.library_artists(limit=50, offset=0, q=""),
+            library_api.all_albums(q=""),
+            library_api.library_recent_albums(limit=12, offset=0),
+            library_api.artist_albums("Artist"),
+            library_api.library_search(q="Coverless", type="tracks", limit=20),
+            library_api.library_search(q="Album", type="albums", limit=20),
+            library_api.library_search(q="Artist", type="artists", limit=20),
+            library_api.get_favorites(),
+            home_api.recent_plays(limit=20),
+            home_api.home_stats(),
+        ]
+
+        def cover_urls(value):
+            if isinstance(value, dict):
+                for key, item in value.items():
+                    if key == "cover_url":
+                        yield item
+                    else:
+                        yield from cover_urls(item)
+            elif isinstance(value, list):
+                for item in value:
+                    yield from cover_urls(item)
+
+        assert list(cover_urls(responses))
+        assert set(cover_urls(responses)) == {""}
+        db.close()
+
+    def test_art_present_local_track_serializes_art_url(self, tmp_path, monkeypatch):
+        import tidal_dl.gui.api.library as library_api
+
+        db = LibraryDB(tmp_path / "library.db")
+        db.open()
+        path = "/music/artist/album/with-art.flac"
+        db.record(path, status="tagged", artist="Artist", title="With Art", art_available=True)
+        db.commit()
+        monkeypatch.setattr(library_api, "_get_db", lambda: db)
+
+        response = library_api.library(sort="recent", limit=50, offset=0, q="")
+
+        assert response["tracks"][0]["cover_url"].startswith("/api/library/art?path=")
+        db.close()
+
+    def test_legacy_unknown_art_returns_fallback_and_records_no_art(self, tmp_path, monkeypatch):
+        from types import SimpleNamespace
+
+        import tidal_dl.gui.api.library as library_api
+        import tidal_dl.gui.security as security
+
+        audio_path = tmp_path / "coverless.mp3"
+        audio_path.write_bytes(b"not audio")
+        db = LibraryDB(tmp_path / "library.db")
+        db.open()
+        db.record(str(audio_path), status="tagged", artist="Artist", title="Legacy")
+        db.commit()
+        monkeypatch.setattr(library_api, "_get_db", lambda: db)
+        monkeypatch.setattr(
+            security,
+            "resolve_local_audio_path",
+            lambda *args, **kwargs: SimpleNamespace(kind="ok", path=audio_path),
+        )
+        monkeypatch.setattr(library_api, "MutagenFile", lambda *args, **kwargs: None)
+
+        initial = library_api._db_row_to_track(db.get(str(audio_path)))
+        response = library_api.library_art(str(audio_path))
+
+        assert initial["cover_url"].startswith("/api/library/art?path=")
+        assert response.status_code == 200
+        assert response.media_type == "image/png"
+        assert db.get(str(audio_path))["art_available"] == 0
+        db.close()
 
 
 class TestLibraryArtists:
@@ -424,3 +688,8 @@ class TestStaticFileServing:
     def test_style_css_served(self, client):
         resp = client.get("/style.css", headers=client._host_header)
         assert resp.status_code == 200
+
+    def test_favicon_served(self, client):
+        resp = client.get("/favicon.ico", headers=client._host_header)
+        assert resp.status_code == 200
+        assert "image" in resp.headers.get("content-type", "")

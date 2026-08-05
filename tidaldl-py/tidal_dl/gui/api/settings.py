@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import os
 import threading
+import time
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from tidal_dl import __version__
@@ -140,27 +141,68 @@ def settings_status() -> dict:
 
 
 @router.get("/auth/status")
-def auth_status() -> dict:
-    """Return OAuth session status."""
-    tidal = get_tidal_instance()
-    logged_in = tidal.session.check_login()
+def auth_status(tidal: Tidal = Depends(get_tidal_instance)) -> dict:
+    """Return OAuth state from local token data without provider requests."""
+    return _local_auth_status(tidal)
+
+
+def _local_auth_status(tidal: Tidal) -> dict:
     username = ""
-    if logged_in:
-        try:
-            user = tidal.session.user
-            username = getattr(user, "name", "") or ""
-        except Exception:
-            pass
-    return {"logged_in": logged_in, "username": username}
+    access_token = getattr(tidal.data, "access_token", None)
+    if not access_token:
+        return {"logged_in": False, "username": username, "auth_state": "not_configured"}
+
+    try:
+        raw_expiry = getattr(tidal.data, "expiry_time", 0) or 0
+        expiry_time = raw_expiry.timestamp() if hasattr(raw_expiry, "timestamp") else float(raw_expiry)
+    except (TypeError, ValueError):
+        return {"logged_in": False, "username": username, "auth_state": "unavailable"}
+
+    if expiry_time > 0 and expiry_time <= time.time():
+        return {"logged_in": False, "username": username, "auth_state": "expired"}
+
+    user = getattr(tidal.session, "user", None)
+    username = getattr(user, "name", "") or ""
+    return {"logged_in": True, "username": username, "auth_state": "connected"}
 
 
 _login_lock = threading.Lock()
 _login_state = {"status": "idle"}  # idle | pending | success | failed
+_login_generation = 0
+
+
+def _replace_login_state(status: str) -> None:
+    _login_state.clear()
+    _login_state.update({"status": status})
+
+
+def _wait_for_login(tidal: Tidal, future, generation: int) -> None:
+    try:
+        future.result(timeout=300)  # 5 min timeout
+    except TimeoutError:
+        status = "timeout"
+    except Exception:
+        status = "failed"
+    else:
+        with _login_lock:
+            if generation != _login_generation:
+                return
+            try:
+                status = "success" if tidal.login_finalize() else "failed"
+            except Exception:
+                status = "failed"
+            _replace_login_state(status)
+        return
+
+    with _login_lock:
+        if generation == _login_generation:
+            _replace_login_state(status)
 
 
 @router.post("/auth/login")
 def auth_login() -> dict:
     """Start OAuth login. Opens a Tidal link, polls in background until confirmed."""
+    global _login_generation
     tidal = get_tidal_instance()
     with _login_lock:
         if tidal.session.check_login():
@@ -177,6 +219,9 @@ def auth_login() -> dict:
             if uri and not uri.startswith("http"):
                 uri = "https://" + uri
 
+            _login_generation += 1
+            generation = _login_generation
+            _login_state.clear()
             _login_state.update({
                 "status": "pending",
                 "verification_uri": uri,
@@ -187,37 +232,19 @@ def auth_login() -> dict:
             _login_state["status"] = "failed"
             raise HTTPException(status_code=500, detail=f"Login failed: {exc}") from exc
 
-    def _wait_for_login():
-        try:
-            future.result(timeout=300)  # 5 min timeout
-            with _login_lock:
-                if tidal.login_finalize():
-                    _login_state["status"] = "success"
-                else:
-                    _login_state["status"] = "failed"
-        except TimeoutError:
-            with _login_lock:
-                _login_state["status"] = "timeout"
-        except Exception:
-            with _login_lock:
-                _login_state["status"] = "failed"
-
-    threading.Thread(target=_wait_for_login, daemon=True).start()
+    threading.Thread(target=_wait_for_login, args=(tidal, future, generation), daemon=True).start()
     with _login_lock:
         return _login_state.copy()
 
 
 @router.post("/auth/keepalive")
 def auth_keepalive() -> dict:
-    """Proactively refresh the token if it's within 30 min of expiry.
+    """Refresh the token only when local expiry data says it is near expiry.
 
-    Called by the frontend heartbeat to prevent silent expiration during idle
-    periods.  Uses a wide refresh window (1800s) so the token stays fresh even
-    when the user isn't actively making API calls.
+    Retained for older clients. This avoids provider-backed login checks; current
+    clients rely on request middleware before explicit Tidal-facing actions.
     """
     tidal = get_tidal_instance()
-    if not tidal.session.check_login():
-        return {"refreshed": False, "reason": "not_logged_in"}
     try:
         refreshed = tidal._ensure_token_fresh(refresh_window_sec=1800)
         return {"refreshed": refreshed}
@@ -230,6 +257,21 @@ def auth_login_status() -> dict:
     """Poll login progress."""
     with _login_lock:
         return _login_state.copy()
+
+
+@router.post("/auth/reset")
+def auth_reset(tidal: Tidal = Depends(get_tidal_instance)) -> dict:
+    """Remove local OAuth credentials without starting a provider request."""
+    global _login_generation
+    with _login_lock:
+        try:
+            if not tidal.logout():
+                raise RuntimeError("Tidal logout returned false")
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail="Could not reset Tidal connection") from exc
+        _login_generation += 1
+        _replace_login_state("idle")
+    return {"status": "reset", "auth_state": "not_configured"}
 
 
 @router.get("/hifi/status")

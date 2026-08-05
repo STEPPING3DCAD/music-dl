@@ -181,6 +181,7 @@ class ScannedMixin:
         genre: str | None = None,
         waveform: str | None = None,
         waveform_hires: str | None = None,
+        art_available: bool | None = None,
         ) -> None:
         """Insert or update a scan result."""
         assert self._conn
@@ -188,8 +189,8 @@ class ScannedMixin:
         self._conn.execute(
             """INSERT INTO scanned (path, isrc, status, artist, title, album,
                                     duration, quality, format, genre, waveform,
-                                    waveform_hires, scanned_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                    waveform_hires, art_available, scanned_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(path) DO UPDATE SET
                    isrc = excluded.isrc,
                    status = excluded.status,
@@ -202,8 +203,9 @@ class ScannedMixin:
                    genre = excluded.genre,
                    waveform = COALESCE(excluded.waveform, scanned.waveform),
                    waveform_hires = COALESCE(excluded.waveform_hires, scanned.waveform_hires),
+                   art_available = COALESCE(excluded.art_available, scanned.art_available),
                    scanned_at = excluded.scanned_at""",
-            (path, isrc, status, artist, title, album, duration, quality, fmt, genre, waveform, waveform_hires, now),
+            (path, isrc, status, artist, title, album, duration, quality, fmt, genre, waveform, waveform_hires, art_available, now),
         )
 
     def remove(self, path: str) -> None:

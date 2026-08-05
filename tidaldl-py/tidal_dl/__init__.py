@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 import importlib.metadata
 from pathlib import Path
+import re
 import tomllib
 from urllib.parse import urlparse
 
@@ -136,9 +137,16 @@ __name_display__ = name_app()
 __version__ = version_app()
 
 
+def _stable_version_parts(value: str) -> tuple[int, int, int] | None:
+    match = re.fullmatch(r"v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", value)
+    if match is None:
+        return None
+    return tuple(int(part) for part in match.groups())
+
+
 def update_available() -> tuple[bool, ReleaseLatest]:
     latest_info: ReleaseLatest = latest_version_information()
-    version_current: str = f"v{__version__}"
+    current = _stable_version_parts(__version__)
+    latest = _stable_version_parts(latest_info.version)
 
-    result = version_current not in [latest_info.version, "v0.0.0"]
-    return result, latest_info
+    return bool(current and latest and latest > current), latest_info

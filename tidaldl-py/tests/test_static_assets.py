@@ -14,7 +14,7 @@ import sys
 from tests.gui_js_source import GUI_JS_FILES, read_gui_js
 
 STATIC_DIR = Path(__file__).resolve().parents[1] / "tidal_dl" / "gui" / "static"
-REQUIRED_FILES = ["index.html", "routes.js", *GUI_JS_FILES, "style.css"]
+REQUIRED_FILES = ["index.html", "favicon.ico", "routes.js", *GUI_JS_FILES, "style.css"]
 
 
 class TestStaticAssetsExist:
@@ -212,6 +212,10 @@ class TestAppJsFeatureMarkers:
         assert html.index('/routes.js') < html.index('/api.js')
         assert html.index('/api.js') < html.index('/views.js')
         assert html.index('/views.js') < html.index('/player.js')
+
+    def test_html_declares_favicon(self):
+        html = (STATIC_DIR / "index.html").read_text()
+        assert '<link rel="icon" href="/favicon.ico"' in html
 
     def test_h_helper_does_not_write_false_boolean_attributes(self):
         js = read_gui_js()
