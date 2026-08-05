@@ -13,6 +13,80 @@ JOB_NAMES = (
     "live",
     "qa",
 )
+DETERMINISTIC_JOBS = (
+    "python",
+    "bot",
+    "contracts",
+    "performance",
+    "supply_chain",
+    "affected_build",
+)
+CHECK_STEPS = {
+    "python": (
+        "Run GUI and API smoke tests",
+        "Run Ruff checks",
+        "Run security tests",
+        "Build Python package",
+    ),
+    "bot": ("Run bot tests", "Type-check bot"),
+    "contracts": (
+        "Validate release and installers",
+        "Validate documentation contracts",
+        "Check diff hygiene",
+    ),
+    "performance": ("Run LibraryDB performance probe",),
+    "supply_chain": (
+        "Scan commits with Gitleaks",
+        "Review dependency changes",
+    ),
+    "affected_build": (
+        "Check Tauri Rust",
+        "Build Docker image",
+        "Check Tauri package metadata",
+    ),
+}
+COLLECTORS = {
+    "python": "Collect Python results",
+    "bot": "Collect bot results",
+    "contracts": "Collect contract results",
+    "performance": "Collect performance results",
+    "supply_chain": "Collect supply-chain results",
+    "affected_build": "Collect affected-build result",
+}
+JOB_OUTPUTS = {
+    "python": ("python_smoke", "ruff", "security_tests", "uv_build", "duration"),
+    "bot": ("bun_tests", "typescript", "duration"),
+    "contracts": (
+        "release_installers",
+        "docs_contracts",
+        "diff_hygiene",
+        "duration",
+    ),
+    "performance": (
+        "library_performance",
+        "pagination_p95_ms",
+        "search_p95_ms",
+        "artists_p95_ms",
+        "duration",
+    ),
+    "supply_chain": ("gitleaks", "dependency_review", "duration"),
+    "affected_build": ("affected_build", "duration"),
+}
+SETUP_STEPS = {
+    "python": ("Start timer", "Checkout", "Set up uv"),
+    "bot": ("Start timer", "Checkout", "Set up Bun", "Install bot dependencies"),
+    "contracts": ("Start timer", "Checkout", "Set up uv"),
+    "performance": ("Start timer", "Checkout", "Set up uv"),
+    "supply_chain": ("Start timer", "Checkout"),
+    "affected_build": (
+        "Start timer",
+        "Checkout",
+        "Detect affected builds",
+        "Install Linux system dependencies",
+        "Set up Rust",
+        "Set up Bun",
+    ),
+}
 
 
 def workflow_text() -> str:
@@ -28,6 +102,12 @@ def job_block(text: str, name: str) -> str:
     ]
     end = min(following, default=len(text))
     return text[start:end]
+
+
+def step_block(job: str, name: str) -> str:
+    start = job.index(f"      - name: {name}\n")
+    end = job.find("\n      - name:", start + 1)
+    return job[start:] if end == -1 else job[start:end]
 
 
 def test_qa_workflow_has_safe_triggers_and_permissions():
@@ -73,23 +153,92 @@ def test_dependency_review_is_high_severity_and_independently_collected():
 
 
 def test_live_job_is_internal_labelled_protected_and_ephemeral():
-    block = job_block(workflow_text(), "live")
+    text = workflow_text()
+    block = job_block(text, "live")
+    outside_live = text.replace(block, "")
     assert "contains(github.event.pull_request.labels.*.name, 'qa-live')" in block
     assert "github.event.pull_request.head.repo.full_name == github.repository" in block
     assert "environment: qa-live" in block
-    assert "MUSIC_DL_TIDAL_TOKEN_JSON" in block
-    assert "DISCORD_TOKEN" in block
+    assert (
+        "MUSIC_DL_TIDAL_TOKEN_JSON: ${{ secrets.MUSIC_DL_TIDAL_TOKEN_JSON }}" in block
+    )
+    assert "DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}" in block
+    assert "MUSIC_DL_TIDAL_TOKEN_JSON" not in outside_live
+    assert "DISCORD_TOKEN" not in outside_live
+    assert "${{ secrets." not in outside_live
     assert "$RUNNER_TEMP/music-dl/token.json" in block
     assert "MUSIC_DL_CONFIG_DIR: ${{ runner.temp }}/music-dl" in block
     assert 'chmod 600 "$RUNNER_TEMP/music-dl/token.json"' in block
-    assert "if: always()" in block
-    assert 'rm -f "$RUNNER_TEMP/music-dl/token.json"' in block
+    cleanup = step_block(block, "Remove ephemeral credentials")
+    assert "if: always()" in cleanup
+    assert 'rm -f "$RUNNER_TEMP/music-dl/token.json"' in cleanup
+    collector = step_block(block, "Collect live result")
+    assert 'success) echo "live_status=pass"' in collector
+    assert 'failure) echo "live_status=fail"' in collector
+    assert '*) echo "live_status=missing"' in collector
 
 
 def test_all_jobs_have_ten_minute_timeouts():
     text = workflow_text()
     for name in JOB_NAMES:
         assert "timeout-minutes: 10" in job_block(text, name)
+
+
+def test_python_smoke_preserves_original_gui_and_api_selection():
+    smoke = step_block(
+        job_block(workflow_text(), "python"), "Run GUI and API smoke tests"
+    )
+    for selector in (
+        "tests/test_gui_command.py::TestGuiCommandHelp::test_gui_help_exits_zero",
+        "tests/test_gui_command.py::TestGuiCommandHelp::test_gui_help_mentions_port",
+        "tests/test_gui_command.py::TestGuiCommandHelp::test_gui_appears_in_root_help",
+        "tests/test_gui_command.py::TestGuiCommandInvocation::test_default_port_and_browser",
+        "tests/test_gui_command.py::TestGuiCommandInvocation::test_custom_port",
+        "tests/test_gui_command.py::TestGuiCommandInvocation::test_no_browser_flag",
+        "tests/test_gui_command.py::TestGuiCommandInvocation::test_custom_port_and_no_browser",
+        "tests/test_gui_api.py",
+        "tests/test_setup.py",
+        "tests/test_api_endpoints.py",
+        "tests/test_downloads.py",
+        "tests/test_gui_security.py",
+    ):
+        assert f"          {selector}\n" in smoke
+
+
+def test_deterministic_checks_continue_but_setup_stays_fail_closed():
+    text = workflow_text()
+    auxiliary_steps = {"performance": ("Parse performance result",)}
+    for name in DETERMINISTIC_JOBS:
+        block = job_block(text, name)
+        actual_steps = set(re.findall(r"^      - name: (.+)$", block, re.MULTILINE))
+        expected_steps = {
+            *CHECK_STEPS[name],
+            *SETUP_STEPS[name],
+            COLLECTORS[name],
+            *auxiliary_steps.get(name, ()),
+        }
+        assert actual_steps == expected_steps
+        for step in CHECK_STEPS[name]:
+            assert "continue-on-error: true" in step_block(block, step)
+        for step in SETUP_STEPS[name]:
+            assert "continue-on-error" not in step_block(block, step)
+
+
+def test_deterministic_job_outputs_only_come_from_final_collectors():
+    text = workflow_text()
+    duration_line = 'echo "duration=$(($(date +%s) - START_EPOCH))"'
+    for name in DETERMINISTIC_JOBS:
+        block = job_block(text, name)
+        header = block[: block.index("    steps:\n")]
+        collector = step_block(block, COLLECTORS[name])
+        assert ".outcome" not in header
+        assert "if: always()" in collector
+        assert duration_line in collector
+        assert block.rstrip().endswith(collector.rstrip())
+        for output in JOB_OUTPUTS[name]:
+            assert f"{output}: ${{{{ steps.results.outputs.{output} }}}}" in header
+            if output != "duration":
+                assert f'"{output}=' in collector
 
 
 def test_python_job_uses_uv_and_keeps_security_contract_hard():
@@ -143,6 +292,26 @@ def test_bot_contract_and_performance_jobs_run_required_checks():
         "artists_p95_ms",
     ):
         assert output in performance
+
+
+def test_performance_result_is_validated_without_artifact_upload():
+    text = workflow_text()
+    parsed = step_block(job_block(text, "performance"), "Parse performance result")
+    assert 'with open(os.environ["PERFORMANCE_JSON"], encoding="utf-8")' in parsed
+    assert "data = json.load(handle)" in parsed
+    assert 'data["status"]' in parsed
+    assert 'data["p95_ms"]' in parsed
+    assert '("pagination", "search", "artists")' in parsed
+    assert 'status not in {"pass", "regression", "fail"}' in parsed
+    assert "math.isfinite" in parsed
+    assert "except (OSError" in parsed
+    assert "raise SystemExit(0)" in parsed
+    assert parsed.index("raise SystemExit(0)") < parsed.index(
+        'os.environ["GITHUB_OUTPUT"]'
+    )
+    assert parsed.count("_p95_ms={value}") == 1
+    assert "actions/upload-artifact" not in text
+    assert "artifact upload" not in text.lower()
 
 
 def test_affected_build_has_explicit_path_rules_and_commands():
@@ -204,3 +373,8 @@ def test_final_qa_always_aggregates_all_evidence_in_advisory_mode():
     assert "--live-requested" in block
     assert "--live-trusted" in block
     assert "--live-status" in block
+    assert 'if [[ "$LIVE_REQUESTED" == true ]]' in block
+    assert 'if [[ "$LIVE_TRUSTED" == true ]]' in block
+    assert "live_status=${LIVE_JOB_STATUS:-missing}" in block
+    assert "live_status=not_applicable" in block
+    assert "live_status=not_requested" in block
