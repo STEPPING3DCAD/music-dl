@@ -50,6 +50,14 @@ return { _authStateCanReset, _resetTidalConnection, getLoginPoll: () => _loginPo
   );
 }
 
+function loadAlbumFilterHelper() {
+  const helperSource = viewsSource.match(
+    /function _filterTidalAlbums\(items, qualityFilter, ratingFilter\) \{[\s\S]*?\n\}/,
+  );
+  if (!helperSource) throw new Error('album filter helper not found');
+  return new Function(`${helperSource[0]}\nreturn _filterTidalAlbums;`)();
+}
+
 describe('library view decisions', () => {
   test('keeps artists grouped when a later page crosses an artist boundary', () => {
     const groupArtistTracks = loadArtistGroupingHelper();
@@ -139,5 +147,24 @@ describe('Tidal connection reset decisions', () => {
     expect(container.marker).toBe('connected');
     expect(calls).toEqual([['toast', 'Could not reset Tidal connection', 'error']]);
     expect(helpers.getLoginPoll()).toBe(42);
+  });
+});
+
+describe('Tidal album filter decisions', () => {
+  test('filters albums by quality and rating', () => {
+    const filterTidalAlbums = loadAlbumFilterHelper();
+    const albums = [
+      { id: 1, quality: 'HI_RES_LOSSLESS', explicit: true },
+      { id: 2, quality: 'HI_RES', explicit: false },
+      { id: 3, quality: 'LOSSLESS', explicit: false },
+      { id: 4, quality: 'HIGH', explicit: true },
+      { id: 5, quality: 'UNKNOWN', explicit: null, atmos: true },
+    ];
+
+    expect(filterTidalAlbums(albums, 'all', 'all')).toEqual(albums);
+    expect(filterTidalAlbums(albums, 'max', 'all').map(album => album.id)).toEqual([1, 2]);
+    expect(filterTidalAlbums(albums, 'lossless', 'clean').map(album => album.id)).toEqual([3]);
+    expect(filterTidalAlbums(albums, 'high', 'explicit').map(album => album.id)).toEqual([4]);
+    expect(filterTidalAlbums(albums, 'max', 'all').some(album => album.id === 5)).toBe(false);
   });
 });

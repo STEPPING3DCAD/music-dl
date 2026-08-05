@@ -716,6 +716,17 @@ function _renderRecentSearches(recentEl, input, resultsArea) {
   recentEl.classList.add('visible');
 }
 
+function _filterTidalAlbums(items, qualityFilter, ratingFilter) {
+  return (items || []).filter(item => {
+    const qualityMatches = qualityFilter === 'all'
+      || (qualityFilter === 'max' && ['HI_RES_LOSSLESS', 'HI_RES'].includes(item.quality))
+      || item.quality === qualityFilter.toUpperCase();
+    const ratingMatches = ratingFilter === 'all'
+      || (ratingFilter === 'explicit' ? item.explicit === true : item.explicit === false);
+    return qualityMatches && ratingMatches;
+  });
+}
+
 function renderSearch(container) {
   const searchArea = h('div', { className: 'search-area' });
 
