@@ -163,9 +163,12 @@ describe('Tidal album filter decisions', () => {
 
     expect(filterTidalAlbums(albums, 'all', 'all')).toEqual(albums);
     expect(filterTidalAlbums(albums, 'max', 'all').map(album => album.id)).toEqual([1, 2]);
+    expect(filterTidalAlbums(albums, 'lossless', 'all').map(album => album.id)).toEqual([3]);
     expect(filterTidalAlbums(albums, 'lossless', 'clean').map(album => album.id)).toEqual([3]);
+    expect(filterTidalAlbums(albums, 'all', 'clean').map(album => album.id)).toEqual([2, 3]);
     expect(filterTidalAlbums(albums, 'high', 'explicit').map(album => album.id)).toEqual([4]);
     expect(filterTidalAlbums(albums, 'max', 'all').some(album => album.id === 5)).toBe(false);
     expect(filterTidalAlbums([{ id: 6, quality: 'MAX', explicit: false }], 'max', 'all')).toEqual([]);
+    expect(filterTidalAlbums([{ id: 7, quality: 'HIGH', explicit: 'true' }], 'all', 'explicit')).toEqual([]);
   });
 });
