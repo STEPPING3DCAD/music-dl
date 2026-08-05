@@ -93,7 +93,8 @@ def search(
         }
 
     items = results.get(type, []) or []
-    return {type: [_serialize_item(item) for item in items], "total": len(items)}
+    serializer = _serialize_album if type == "albums" else _serialize_item
+    return {type: [serializer(item) for item in items], "total": len(items)}
 
 
 def _model_for_type(type_str: str):
@@ -124,4 +125,35 @@ def _serialize_item(item: Any) -> dict:
             pass
     if hasattr(item, "num_tracks"):
         result["num_tracks"] = item.num_tracks
+    return result
+
+
+def _serialize_album(item: Any) -> dict:
+    result = _serialize_item(item)
+    tags = {
+        str(tag).upper()
+        for tag in (getattr(item, "media_metadata_tags", None) or [])
+    }
+    modes = {
+        str(mode).upper() for mode in (getattr(item, "audio_modes", None) or [])
+    }
+    raw_quality = str(getattr(item, "audio_quality", "") or "").upper()
+
+    if "HIRES_LOSSLESS" in tags:
+        quality = "HI_RES_LOSSLESS"
+    elif "HIRES" in tags:
+        quality = "HI_RES"
+    elif raw_quality in {"HI_RES_LOSSLESS", "HI_RES", "LOSSLESS", "HIGH", "LOW"}:
+        quality = raw_quality
+    else:
+        quality = "UNKNOWN"
+
+    explicit = getattr(item, "explicit", None)
+    result.update(
+        {
+            "quality": quality,
+            "atmos": "DOLBY_ATMOS" in tags or "DOLBY_ATMOS" in modes,
+            "explicit": explicit if isinstance(explicit, bool) else None,
+        }
+    )
     return result

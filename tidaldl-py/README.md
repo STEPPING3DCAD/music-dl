@@ -16,7 +16,7 @@ uv tool install --from git+https://github.com/alfdav/music-dl.git#subdirectory=t
 music-dl gui
 ```
 
-The web UI opens in your browser and serves the local music library, search, download, and playback flows.
+The web UI opens in your browser and serves the local music library, search, download, and playback flows. Album search can refine the current cached page of Tidal results by quality or content rating, with independent resolution, Atmos, and Explicit badges.
 
 You need your own active Tidal account. music-dl does not provide access to
 Tidal without sign-in.

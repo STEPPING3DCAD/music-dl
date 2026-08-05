@@ -148,6 +148,8 @@ const state = {
   searchQuery: '',
   searchType: 'tracks',
   searchResults: null,
+  albumQualityFilter: 'all',
+  albumRatingFilter: 'all',
   queue: [],
   queueOriginal: [],
   queueIndex: -1,
@@ -648,4 +650,3 @@ function toggleShortcutsHelp() {
   overlay.setAttribute('tabindex', '-1');
   overlay.focus();
 }
-
