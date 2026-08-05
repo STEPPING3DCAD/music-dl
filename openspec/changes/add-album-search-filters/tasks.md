@@ -226,9 +226,10 @@ git commit -m "feat(search): filter cached Tidal albums"
 
 **Files:**
 - Modify: `tidaldl-py/tests/test_static_assets.py:63-145`
+- Modify: `tidaldl-py/tests/test_gui_api.py:238-256`
 - Modify: `tidaldl-py/tidal_dl/gui/static/views.js:719-1112`
 
-- [ ] **Step 1: Write failing dependency-free UI contract test**
+- [x] **Step 1: Write failing dependency-free UI contract test**
 
 Add to `TestAppJsFeatureMarkers`:
 
@@ -249,7 +250,7 @@ def test_has_accessible_album_search_filters_without_catalog_refetch(self):
     assert "No albums match these filters" in js
 ```
 
-- [ ] **Step 2: Run test and verify RED**
+- [x] **Step 2: Run test and verify RED**
 
 ```shell
 PYTHONNOUSERSITE=1 uv run --extra test python -m pytest -q \
@@ -258,7 +259,7 @@ PYTHONNOUSERSITE=1 uv run --extra test python -m pytest -q \
 
 Expected: split marker fails because the controls do not exist.
 
-- [ ] **Step 3: Render controls from current state**
+- [x] **Step 3: Render controls from current state**
 
 Add `_rerenderCachedSearch(resultsArea)` that calls `renderUnifiedSearchResults()` using only `state.searchResults`. Add `_renderAlbumFilterControls(container, resultsArea)` that:
 
@@ -271,7 +272,7 @@ Add `_rerenderCachedSearch(resultsArea)` that calls `renderUnifiedSearchResults(
 
 Mount one filter container under the existing type pills. Keep it mounted and set `hidden` unless `state.searchType === 'albums'`, because type-pill clicks do not rebuild the Search shell. Synchronize `hidden` in both paths that change `state.searchType`: the type-pill click handler and the recent-search chip handler in `_renderRecentSearches()`. The recent-search path can find the mounted container through `input.closest('.search-area')?.querySelector('.album-search-filters')`. Type changes may keep their existing TIDAL request; album filter clicks must never call `doSearch()`.
 
-- [ ] **Step 4: Filter only the TIDAL album section**
+- [x] **Step 4: Filter only the TIDAL album section**
 
 In `renderUnifiedSearchResults()`:
 
@@ -291,7 +292,7 @@ Album mode must have exactly one retained count path:
 
 When filtered albums are empty but `unfiltered_total > 0`, the one outer header remains and the body shows `No albums match these filters` plus `Use Clear filters above to see every album.`
 
-- [ ] **Step 5: Run focused Python and Bun checks**
+- [x] **Step 5: Run focused Python and Bun checks**
 
 Run the Step 2 command plus:
 
@@ -301,7 +302,7 @@ bun test tests/views-decisions.test.js
 
 Expected: both pass.
 
-- [ ] **Step 6: Commit interactive controls**
+- [x] **Step 6: Commit interactive controls**
 
 ```shell
 git add tidaldl-py/tests/test_static_assets.py tidaldl-py/tidal_dl/gui/static/views.js
