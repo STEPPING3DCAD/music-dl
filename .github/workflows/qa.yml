@@ -66,7 +66,7 @@ jobs:
           set -euo pipefail
           uv run --project tidaldl-py ruff check --no-fix --select E9,F63,F7,F82 \
             tidaldl-py/tidal_dl tidaldl-py/tests scripts tests
-          git diff --name-only --diff-filter=AM -z \
+          git diff --name-only --diff-filter=ACMR -z \
             "origin/${{ github.base_ref }}...HEAD" -- '*.py' \
             > "$RUNNER_TEMP/changed-python.txt"
           mapfile -d '' -t changed_python < "$RUNNER_TEMP/changed-python.txt"

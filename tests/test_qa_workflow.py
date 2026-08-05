@@ -131,7 +131,8 @@ def test_diff_and_scan_jobs_have_full_history():
 def test_changed_path_processing_is_nul_safe():
     text = workflow_text()
     ruff = step_block(job_block(text, "python"), "Run Ruff checks")
-    assert "git diff --name-only --diff-filter=AM -z" in ruff
+    assert "git diff --name-only --diff-filter=ACMR -z" in ruff
+    assert "git diff --name-only --diff-filter=AM -z" not in ruff
     assert "mapfile -d '' -t changed_python" in ruff
     assert 'ruff check --no-fix -- "${changed_python[@]}"' in ruff
 
