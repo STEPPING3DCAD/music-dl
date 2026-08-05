@@ -10,6 +10,7 @@ import {
   SlashCommandBuilder,
   type ChatInputCommandInteraction,
   type GuildMember,
+  type SlashCommandSubcommandBuilder,
 } from "discord.js";
 
 import type { BotConfig } from "./config";
@@ -98,7 +99,7 @@ function addQueryOption(builder: SlashCommandBuilder, description = QUERY_OPTION
 }
 
 function addPlaylistNameOption(
-  builder: ReturnType<SlashCommandBuilder["addSubcommand"]>,
+  builder: SlashCommandSubcommandBuilder,
 ): void {
   builder.addStringOption((o) =>
     o.setName(PLAYLIST_NAME_OPTION.name).setDescription(PLAYLIST_NAME_OPTION.description).setRequired(true),
