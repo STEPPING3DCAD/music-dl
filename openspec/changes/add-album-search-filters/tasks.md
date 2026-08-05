@@ -30,7 +30,7 @@ No new product module, dependency, backend query parameter, database field, or p
 - Create: `tidaldl-py/tests/test_album_search_filters.py`
 - Modify: `tidaldl-py/tidal_dl/gui/api/search.py:95-127`
 
-- [ ] **Step 1: Write failing album serializer tests**
+- [x] **Step 1: Write failing album serializer tests**
 
 Create direct tests that never start the FastAPI lifespan:
 
@@ -90,7 +90,7 @@ def test_generic_item_serializer_does_not_add_album_metadata():
     assert "explicit" not in result
 ```
 
-- [ ] **Step 2: Run tests and verify RED**
+- [x] **Step 2: Run tests and verify RED**
 
 Run from `tidaldl-py/`:
 
@@ -100,7 +100,7 @@ PYTHONNOUSERSITE=1 uv run --extra test python -m pytest -q tests/test_album_sear
 
 Expected: collection fails because `_serialize_album` does not exist.
 
-- [ ] **Step 3: Add the minimum album-only serializer**
+- [x] **Step 3: Add the minimum album-only serializer**
 
 Keep `_serialize_track()` and `_serialize_item()` unchanged. Add one album wrapper:
 
@@ -131,11 +131,11 @@ def _serialize_album(item: Any) -> dict:
 
 In `search()`, choose `_serialize_album` only when `type == "albums"`; continue using `_serialize_item` for artists and playlists.
 
-- [ ] **Step 4: Run tests and verify GREEN**
+- [x] **Step 4: Run tests and verify GREEN**
 
 Run the Step 2 command. Expected: 4 passed.
 
-- [ ] **Step 5: Commit backend metadata support**
+- [x] **Step 5: Commit backend metadata support**
 
 ```shell
 git add tidaldl-py/tests/test_album_search_filters.py tidaldl-py/tidal_dl/gui/api/search.py
