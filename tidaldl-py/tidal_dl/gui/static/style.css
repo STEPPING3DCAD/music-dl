@@ -400,6 +400,10 @@ body {
   max-width: 100%;
 }
 
+.album-search-filters[hidden] {
+  display: none;
+}
+
 .album-search-filters > .filter-pills {
   align-items: center;
   flex-wrap: wrap;

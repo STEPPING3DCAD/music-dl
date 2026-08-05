@@ -152,6 +152,9 @@ class TestAppJsFeatureMarkers:
         assert "textEl('span', 'E', 'album-search-badge')" in badge_source
         assert "artDiv.appendChild(badges)" in badge_source
         assert ".album-search-filters" in css
+        assert ".album-search-filters[hidden]" in css
+        hidden_rule = css.split(".album-search-filters[hidden]")[1].split("}")[0]
+        assert "display: none" in hidden_rule
         assert ".album-search-badges" in css
         assert ".album-search-badge" in css
         assert ".album-search-filters .pill:focus-visible" in css
