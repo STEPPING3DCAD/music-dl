@@ -607,7 +607,7 @@ git commit -m "docs: explain pull request QA gate"
 
 ## 7. Verify implementation before advisory rollout
 
-- [ ] 7.1 Run focused QA unit and contract tests.
+- [x] 7.1 Run focused QA unit and contract tests.
 
 ```bash
 uv run --project tidaldl-py --extra test python -m pytest \
@@ -619,17 +619,17 @@ uv run --project tidaldl-py --extra test python -m pytest \
   tests/test_edge_channel.py -q
 ```
 
-- [ ] 7.2 Run existing deterministic Python smoke and security groups from workflow exactly.
+- [x] 7.2 Run existing deterministic Python smoke and security groups from workflow exactly.
 
-- [ ] 7.3 Run every root shell contract assigned to `release_installers` and `docs_contracts`.
+- [x] 7.3 Run every root shell contract assigned to `release_installers` and `docs_contracts`.
 
-- [ ] 7.4 Run bot checks.
+- [x] 7.4 Run bot checks.
 
 ```bash
 cd apps/discord-bot && bun test && bun run typecheck
 ```
 
-- [ ] 7.5 Run static and packaging checks.
+- [x] 7.5 Run static and packaging checks.
 
 ```bash
 uv run --project tidaldl-py ruff check --no-fix --select E9,F63,F7,F82 \
@@ -637,11 +637,11 @@ uv run --project tidaldl-py ruff check --no-fix --select E9,F63,F7,F82 \
 uv build --project tidaldl-py
 ```
 
-- [ ] 7.6 Run one real deterministic performance probe and confirm all absolute p95 ceilings pass.
+- [x] 7.6 Run one real deterministic performance probe and confirm all absolute p95 ceilings pass.
 
-- [ ] 7.7 Run `openspec validate qa-pr-rubric`, Superpowers verification, and `ponytail:ponytail-review` on the complete diff. Fix only concrete findings, rerun affected checks, and update relevant docs.
+- [x] 7.7 Run `openspec validate qa-pr-rubric`, Superpowers verification, and `ponytail:ponytail-review` on the complete diff. Fix only concrete findings, rerun affected checks, and update relevant docs.
 
-- [ ] 7.8 Confirm `git status --short` contains only known user-owned untracked files or intended implementation changes before publishing.
+- [x] 7.8 Confirm `git status --short` contains only known user-owned untracked files or intended implementation changes before publishing.
 
 ## 8. Calibrate on five PRs, then enforce
 
