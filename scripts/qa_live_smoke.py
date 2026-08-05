@@ -92,10 +92,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     token = os.environ.get("DISCORD_TOKEN", "")
-    if not token:
-        results = [check_discord(token)]
-    else:
-        results = [check_tidal(), check_discord(token)]
+    results = [check_tidal(), check_discord(token)]
     _write_results(args.output, results)
     return int(any(result.status != "pass" for result in results))
 

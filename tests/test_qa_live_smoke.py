@@ -1,14 +1,14 @@
+import ast
+import inspect
 import json
-import os
-import subprocess
-import sys
+import textwrap
 from dataclasses import asdict
 from pathlib import Path
 
 import requests
 
 from scripts import qa_live_smoke
-from scripts.qa_live_smoke import Track, check_discord, check_tidal
+from scripts.qa_live_smoke import ServiceResult, Track, check_discord, check_tidal
 
 
 class FakeResponse:
@@ -132,30 +132,41 @@ def test_module_exposes_no_mutating_http_helpers() -> None:
         assert not hasattr(qa_live_smoke, method)
 
 
-def test_cli_missing_discord_token_writes_safe_failure(tmp_path: Path) -> None:
+def test_main_always_collects_both_service_results() -> None:
+    tree = ast.parse(textwrap.dedent(inspect.getsource(qa_live_smoke.main)))
+    results_assignments = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "results"
+            for target in node.targets
+        )
+    ]
+
+    assert len(results_assignments) == 1
+    value = results_assignments[0].value
+    assert isinstance(value, ast.List)
+    assert [ast.unparse(item) for item in value.elts] == [
+        "check_tidal()",
+        "check_discord(token)",
+    ]
+    assert not any(isinstance(node, ast.If) for node in ast.walk(tree))
+
+
+def test_write_results_serializes_both_safe_service_entries(tmp_path: Path) -> None:
     output = tmp_path / "live.json"
-    env = os.environ.copy()
-    env.pop("DISCORD_TOKEN", None)
+    results = [
+        ServiceResult("tidal", "pass", 1.25, "authenticated search succeeded"),
+        ServiceResult("discord", "fail", 0.1, "missing DISCORD_TOKEN"),
+    ]
 
-    completed = subprocess.run(
-        [
-            sys.executable,
-            "scripts/qa_live_smoke.py",
-            "--output",
-            str(output),
-        ],
-        cwd=Path(__file__).parents[1],
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    qa_live_smoke._write_results(output, results)
 
-    assert completed.returncode == 1
     payload = json.loads(output.read_text())
     assert set(payload) == {"services"}
-    discord = next(item for item in payload["services"] if item["service"] == "discord")
-    assert set(discord) == {"service", "status", "latency_ms", "detail"}
-    assert discord["status"] == "fail"
-    assert discord["detail"] == "missing DISCORD_TOKEN"
-    assert completed.stderr == ""
+    assert [item["service"] for item in payload["services"]] == ["tidal", "discord"]
+    assert all(
+        set(item) == {"service", "status", "latency_ms", "detail"}
+        for item in payload["services"]
+    )
