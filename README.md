@@ -243,7 +243,7 @@ Your browser opens automatically. The wizard handles the rest.
 
 - **Library browser** — your local collection organized by artist or album with page-sized/cached loading, a dedicated Recently Added category, album art, quality badges (24-bit, lossless, MQA), and instant search
 - **Home dashboard** — recent additions, recently played, top artists, genres, repeat listening stats, and Continue Listening resume
-- **Tidal search & download** — search the full Tidal catalog, filter album results by quality or content rating, see independent resolution, Atmos, and Explicit badges, and download what you're missing
+- **Tidal search & download** — search the full Tidal catalog, refine the current cached page of album results by quality or content rating, see independent resolution, Atmos, and Explicit badges, and download what you're missing
 - **Quality upgrades** — re-download existing tracks at higher quality without duplicates
 - **Duplicate cleanup** — ISRC-based deduplication finds exact copies across your collection
 - **In-browser playback** — play anything in your library, bit-perfect to your DAC, with persisted queue, volume, repeat/shuffle preferences, keyboard shortcuts, and queue actions

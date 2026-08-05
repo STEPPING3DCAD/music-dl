@@ -22,7 +22,7 @@ uv tool install --from git+https://github.com/alfdav/music-dl.git#subdirectory=t
 
 ## Unreleased
 
-- Added album quality and content filters with independent Max, Atmos, and Explicit badges.
+- Added quality and content filters for the current cached page of Tidal album results, with independent Max, Atmos, and Explicit badges.
 
 ## v1.6.9 (2026-07-13)
 - Fixed update checks incorrectly offering an older published release to newer
