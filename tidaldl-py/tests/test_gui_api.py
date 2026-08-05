@@ -252,7 +252,10 @@ def test_static_js_search_explains_tidal_auth_without_hiding_local_results():
     assert "state.searchResults.tidalAuthRequired" in search_view_source
     assert "Connect Tidal to search, stream, and download" in search_source
     assert "connectButton.addEventListener('click', () => triggerLogin());" in search_source
-    assert "&& originalTidalItems.length === 0 && !tidalAuthRequired)" in search_source
+    assert (
+        "if (localItems.length === 0 && tidalItems.length === 0\n"
+        "      && originalTidalItems.length === 0 && !tidalAuthRequired)"
+    ) in search_source
 
 
 def test_static_js_removes_unreachable_wizard_login_step():
