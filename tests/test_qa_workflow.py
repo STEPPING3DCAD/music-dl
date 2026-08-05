@@ -37,6 +37,7 @@ CHECK_STEPS = {
     "performance": ("Run LibraryDB performance probe",),
     "supply_chain": (
         "Scan commits with Gitleaks",
+        "Scan explicit PR range with Gitleaks",
         "Review dependency changes",
     ),
     "affected_build": (
@@ -127,16 +128,61 @@ def test_diff_and_scan_jobs_have_full_history():
         assert "fetch-depth: 0" in job_block(text, name)
 
 
+def test_changed_path_processing_is_nul_safe():
+    text = workflow_text()
+    ruff = step_block(job_block(text, "python"), "Run Ruff checks")
+    assert "git diff --name-only --diff-filter=AM -z" in ruff
+    assert "mapfile -d '' -t changed_python" in ruff
+    assert 'ruff check --no-fix -- "${changed_python[@]}"' in ruff
+
+    affected = step_block(job_block(text, "affected_build"), "Detect affected builds")
+    assert "git diff --name-only -z" in affected
+    assert "mapfile -d '' -t changed_paths" in affected
+    assert 'for path in "${changed_paths[@]}"' in affected
+
+
 def test_gitleaks_is_commit_pinned_and_receives_no_secret():
     block = job_block(workflow_text(), "supply_chain")
     assert "gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7" in block
     assert "GITHUB_TOKEN: ${{ github.token }}" in block
+    assert 'GITLEAKS_VERSION: "8.24.3"' in block
+    assert "BASE_REF: ${{ github.event.pull_request.base.sha }}" in block
+    assert 'GITLEAKS_ENABLE_COMMENTS: "false"' in block
+    assert 'GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"' in block
     assert "GITLEAKS_LICENSE" not in block
     assert re.search(
         r"uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7"
         r"[\s\S]*?continue-on-error: true",
         block,
     )
+
+
+def test_gitleaks_scans_explicit_immutable_pr_range_and_combines_outcomes():
+    block = job_block(workflow_text(), "supply_chain")
+    scan = step_block(block, "Scan explicit PR range with Gitleaks")
+    assert "continue-on-error: true" in scan
+    assert "gitleaks detect --redact --exit-code=2" in scan
+    assert (
+        '--log-opts="${{ github.event.pull_request.base.sha }}..'
+        '${{ github.event.pull_request.head.sha }}"' in scan
+    )
+    assert "--first-parent" not in scan
+    assert "--no-merges" not in scan
+
+    collector = step_block(block, "Collect supply-chain results")
+    assert "steps.gitleaks.outcome" in collector
+    assert "steps.gitleaks_range.outcome" in collector
+    assert (
+        'if [[ "$GITLEAKS_ACTION_OUTCOME" == failure || '
+        '"$GITLEAKS_RANGE_OUTCOME" == failure ]]' in collector
+    )
+    assert (
+        'elif [[ "$GITLEAKS_ACTION_OUTCOME" == success && '
+        '"$GITLEAKS_RANGE_OUTCOME" == success ]]' in collector
+    )
+    assert 'echo "gitleaks=success"' in collector
+    assert 'echo "gitleaks=failure"' in collector
+    assert 'echo "gitleaks=${{ steps.gitleaks.outcome }}"' not in collector
 
 
 def test_dependency_review_is_high_severity_and_independently_collected():
@@ -148,7 +194,6 @@ def test_dependency_review_is_high_severity_and_independently_collected():
         r"[\s\S]*?continue-on-error: true",
         block,
     )
-    assert "gitleaks=${{ steps.gitleaks.outcome }}" in block
     assert "dependency_review=${{ steps.dependency_review.outcome }}" in block
 
 
@@ -176,6 +221,32 @@ def test_live_job_is_internal_labelled_protected_and_ephemeral():
     assert 'success) echo "live_status=pass"' in collector
     assert 'failure) echo "live_status=fail"' in collector
     assert '*) echo "live_status=missing"' in collector
+
+
+def test_live_latency_is_validated_before_cleanup_and_forwarded():
+    block = job_block(workflow_text(), "live")
+    parser = step_block(block, "Parse live latency")
+    cleanup = step_block(block, "Remove ephemeral credentials")
+    collector = step_block(block, "Collect live result")
+    assert block.index(parser) < block.index(cleanup) < block.index(collector)
+    assert "if: always()" in parser
+    assert "continue-on-error: true" in parser
+    assert '"tidal", "discord"' in parser
+    assert "math.isfinite" in parser
+    assert "latency < 0" in parser
+    assert "detail" not in parser
+    assert "token" not in parser.lower()
+    for name in ("tidal_latency_ms", "discord_latency_ms"):
+        assert f"{name}: ${{{{ steps.results.outputs.{name} }}}}" in block
+        assert f'"{name}=' in collector
+    assert "PARSE_OUTCOME" in collector
+    assert '"$PARSE_OUTCOME" != success' in collector
+    assert (
+        'if [[ "$PARSE_OUTCOME" != success ]]; then\n'
+        '            echo "live_status=missing" >> "$GITHUB_OUTPUT"\n'
+        "          else\n"
+        '            echo "tidal_latency_ms=$TIDAL_LATENCY_MS"' in collector
+    )
 
 
 def test_all_jobs_have_ten_minute_timeouts():
@@ -314,6 +385,16 @@ def test_performance_result_is_validated_without_artifact_upload():
     assert "artifact upload" not in text.lower()
 
 
+def test_checkout_and_setup_uv_are_immutably_pinned():
+    text = workflow_text()
+    checkout = "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6"
+    setup_uv = "astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7"
+    assert text.count(checkout) == 8
+    assert text.count(setup_uv) == 5
+    assert "actions/checkout@v6" not in text
+    assert "astral-sh/setup-uv@v7" not in text
+
+
 def test_affected_build_has_explicit_path_rules_and_commands():
     block = job_block(workflow_text(), "affected_build")
     for path in (
@@ -378,3 +459,24 @@ def test_final_qa_always_aggregates_all_evidence_in_advisory_mode():
     assert "live_status=${LIVE_JOB_STATUS:-missing}" in block
     assert "live_status=not_applicable" in block
     assert "live_status=not_requested" in block
+
+
+def test_final_scorer_fails_closed_and_live_latency_is_summary_only():
+    block = job_block(workflow_text(), "qa")
+    scorer = step_block(block, "Write advisory QA score")
+    summary = step_block(block, "Append live latency summary")
+    assert "if: always()" in summary
+    assert block.index(scorer) < block.index(summary)
+    assert "GITHUB_STEP_SUMMARY" in summary
+    assert "TIDAL_LATENCY_MS: ${{ needs.live.outputs.tidal_latency_ms }}" in summary
+    assert "DISCORD_LATENCY_MS: ${{ needs.live.outputs.discord_latency_ms }}" in summary
+    assert "not requested" in summary
+    assert "unavailable" in summary
+    assert "tidal_latency_ms" not in scorer
+    assert "discord_latency_ms" not in scorer
+    assert "--duration live=" not in scorer
+
+
+def test_final_scorer_does_not_hide_infrastructure_failures():
+    scorer = step_block(job_block(workflow_text(), "qa"), "Write advisory QA score")
+    assert "continue-on-error" not in scorer

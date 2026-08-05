@@ -29,12 +29,12 @@ jobs:
         run: echo "epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
 
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
         with:
           python-version: "3.12"
           enable-cache: true
@@ -66,12 +66,12 @@ jobs:
           set -euo pipefail
           uv run --project tidaldl-py ruff check --no-fix --select E9,F63,F7,F82 \
             tidaldl-py/tidal_dl tidaldl-py/tests scripts tests
-          git diff --name-only --diff-filter=AM \
+          git diff --name-only --diff-filter=AM -z \
             "origin/${{ github.base_ref }}...HEAD" -- '*.py' \
             > "$RUNNER_TEMP/changed-python.txt"
-          mapfile -t changed_python < "$RUNNER_TEMP/changed-python.txt"
+          mapfile -d '' -t changed_python < "$RUNNER_TEMP/changed-python.txt"
           if (( ${#changed_python[@]} )); then
-            uv run --project tidaldl-py ruff check --no-fix "${changed_python[@]}"
+            uv run --project tidaldl-py ruff check --no-fix -- "${changed_python[@]}"
           fi
 
       - name: Run security tests
@@ -115,7 +115,7 @@ jobs:
         run: echo "epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
 
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
@@ -160,12 +160,12 @@ jobs:
         run: echo "epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
 
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
         with:
           python-version: "3.12"
           enable-cache: true
@@ -228,10 +228,10 @@ jobs:
         run: echo "epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
 
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
         with:
           python-version: "3.12"
           enable-cache: true
@@ -298,7 +298,7 @@ jobs:
         run: echo "epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
 
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
 
@@ -308,6 +308,17 @@ jobs:
         continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          GITLEAKS_VERSION: "8.24.3"
+          BASE_REF: ${{ github.event.pull_request.base.sha }}
+          GITLEAKS_ENABLE_COMMENTS: "false"
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
+
+      - name: Scan explicit PR range with Gitleaks
+        id: gitleaks_range
+        continue-on-error: true
+        run: >-
+          gitleaks detect --redact --exit-code=2
+          --log-opts="${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
 
       - name: Review dependency changes
         id: dependency_review
@@ -321,8 +332,14 @@ jobs:
         if: always()
         env:
           START_EPOCH: ${{ steps.start.outputs.epoch }}
+          GITLEAKS_ACTION_OUTCOME: ${{ steps.gitleaks.outcome }}
+          GITLEAKS_RANGE_OUTCOME: ${{ steps.gitleaks_range.outcome }}
         run: |
-          echo "gitleaks=${{ steps.gitleaks.outcome }}" >> "$GITHUB_OUTPUT"
+          if [[ "$GITLEAKS_ACTION_OUTCOME" == failure || "$GITLEAKS_RANGE_OUTCOME" == failure ]]; then
+            echo "gitleaks=failure" >> "$GITHUB_OUTPUT"
+          elif [[ "$GITLEAKS_ACTION_OUTCOME" == success && "$GITLEAKS_RANGE_OUTCOME" == success ]]; then
+            echo "gitleaks=success" >> "$GITHUB_OUTPUT"
+          fi
           echo "dependency_review=${{ steps.dependency_review.outcome }}" >> "$GITHUB_OUTPUT"
           echo "duration=$(($(date +%s) - START_EPOCH))" >> "$GITHUB_OUTPUT"
 
@@ -338,7 +355,7 @@ jobs:
         run: echo "epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
 
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
 
@@ -349,15 +366,16 @@ jobs:
           rust=false
           docker=false
           tauri_package=false
-          git diff --name-only "origin/${{ github.base_ref }}...HEAD" \
+          git diff --name-only -z "origin/${{ github.base_ref }}...HEAD" \
             > "$RUNNER_TEMP/changed-paths.txt"
-          while IFS= read -r path; do
+          mapfile -d '' -t changed_paths < "$RUNNER_TEMP/changed-paths.txt"
+          for path in "${changed_paths[@]}"; do
             case "$path" in
               tidaldl-py/src-tauri/*) rust=true ;;
               docker/*|docker-compose.yml|tidaldl-py/pyproject.toml) docker=true ;;
               tidaldl-py/package.json) tauri_package=true ;;
             esac
-          done < "$RUNNER_TEMP/changed-paths.txt"
+          done
           echo "rust=$rust" >> "$GITHUB_OUTPUT"
           echo "docker=$docker" >> "$GITHUB_OUTPUT"
           echo "tauri_package=$tauri_package" >> "$GITHUB_OUTPUT"
@@ -443,6 +461,8 @@ jobs:
     timeout-minutes: 10
     outputs:
       live_status: ${{ steps.results.outputs.live_status }}
+      tidal_latency_ms: ${{ steps.results.outputs.tidal_latency_ms }}
+      discord_latency_ms: ${{ steps.results.outputs.discord_latency_ms }}
       duration: ${{ steps.results.outputs.duration }}
     steps:
       - name: Start timer
@@ -450,10 +470,10 @@ jobs:
         run: echo "epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
 
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
         with:
           python-version: "3.12"
           enable-cache: true
@@ -476,6 +496,50 @@ jobs:
           uv run --project tidaldl-py python
           scripts/qa_live_smoke.py --output "$RUNNER_TEMP/live.json"
 
+      - name: Parse live latency
+        id: live_latency
+        if: always()
+        continue-on-error: true
+        env:
+          LIVE_JSON: ${{ runner.temp }}/live.json
+        run: |
+          uv run --project tidaldl-py python - <<'PY'
+          import json
+          import math
+          import os
+
+          try:
+              with open(os.environ["LIVE_JSON"], encoding="utf-8") as handle:
+                  data = json.load(handle)
+              services = data["services"]
+              if not isinstance(services, list):
+                  raise ValueError
+              latencies = {}
+              for service_data in services:
+                  if not isinstance(service_data, dict):
+                      raise ValueError
+                  service = service_data["service"]
+                  latency = service_data["latency_ms"]
+                  if service not in {"tidal", "discord"} or service in latencies:
+                      raise ValueError
+                  if (
+                      isinstance(latency, bool)
+                      or not isinstance(latency, (int, float))
+                      or not math.isfinite(latency)
+                      or latency < 0
+                  ):
+                      raise ValueError
+                  latencies[service] = float(latency)
+              if set(latencies) != {"tidal", "discord"}:
+                  raise ValueError
+          except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+              raise SystemExit(1)
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              for service, latency in latencies.items():
+                  print(f"{service}_latency_ms={latency}", file=output)
+          PY
+
       - name: Remove ephemeral credentials
         if: always()
         run: rm -f "$RUNNER_TEMP/music-dl/token.json" "$RUNNER_TEMP/live.json"
@@ -486,13 +550,22 @@ jobs:
         env:
           START_EPOCH: ${{ steps.start.outputs.epoch }}
           SMOKE_OUTCOME: ${{ steps.smoke.outcome }}
+          PARSE_OUTCOME: ${{ steps.live_latency.outcome }}
+          TIDAL_LATENCY_MS: ${{ steps.live_latency.outputs.tidal_latency_ms }}
+          DISCORD_LATENCY_MS: ${{ steps.live_latency.outputs.discord_latency_ms }}
         run: |
           echo "duration=$(($(date +%s) - START_EPOCH))" >> "$GITHUB_OUTPUT"
-          case "$SMOKE_OUTCOME" in
-            success) echo "live_status=pass" >> "$GITHUB_OUTPUT" ;;
-            failure) echo "live_status=fail" >> "$GITHUB_OUTPUT" ;;
-            *) echo "live_status=missing" >> "$GITHUB_OUTPUT" ;;
-          esac
+          if [[ "$PARSE_OUTCOME" != success ]]; then
+            echo "live_status=missing" >> "$GITHUB_OUTPUT"
+          else
+            echo "tidal_latency_ms=$TIDAL_LATENCY_MS" >> "$GITHUB_OUTPUT"
+            echo "discord_latency_ms=$DISCORD_LATENCY_MS" >> "$GITHUB_OUTPUT"
+            case "$SMOKE_OUTCOME" in
+              success) echo "live_status=pass" >> "$GITHUB_OUTPUT" ;;
+              failure) echo "live_status=fail" >> "$GITHUB_OUTPUT" ;;
+              *) echo "live_status=missing" >> "$GITHUB_OUTPUT" ;;
+            esac
+          fi
 
   qa:
     if: always()
@@ -501,15 +574,14 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
         with:
           python-version: "3.12"
 
       - name: Write advisory QA score
-        continue-on-error: true
         env:
           PYTHON_SMOKE: ${{ needs.python.outputs.python_smoke }}
           RUFF: ${{ needs.python.outputs.ruff }}
@@ -589,3 +661,28 @@ jobs:
             --live-status "$live_status" \
             --summary "$GITHUB_STEP_SUMMARY" \
             --output "$RUNNER_TEMP/qa-score.json"
+
+      - name: Append live latency summary
+        if: always()
+        env:
+          LIVE_REQUESTED: ${{ contains(github.event.pull_request.labels.*.name, 'qa-live') }}
+          LIVE_TRUSTED: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+          TIDAL_LATENCY_MS: ${{ needs.live.outputs.tidal_latency_ms }}
+          DISCORD_LATENCY_MS: ${{ needs.live.outputs.discord_latency_ms }}
+        run: |
+          {
+            echo
+            echo "### Live smoke latency"
+            if [[ "$LIVE_REQUESTED" != true ]]; then
+              echo "- not requested"
+            elif [[ "$LIVE_TRUSTED" != true ]]; then
+              echo "- unavailable for fork pull requests"
+            elif [[ -n "$TIDAL_LATENCY_MS" && -n "$DISCORD_LATENCY_MS" ]]; then
+              echo "| Service | Latency (ms) |"
+              echo "| --- | ---: |"
+              echo "| Tidal | $TIDAL_LATENCY_MS |"
+              echo "| Discord | $DISCORD_LATENCY_MS |"
+            else
+              echo "- unavailable"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
