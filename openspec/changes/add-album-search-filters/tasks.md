@@ -149,7 +149,7 @@ git commit -m "feat(search): expose album quality metadata"
 - Modify: `tidaldl-py/tidal_dl/gui/static/views.js:717-719`
 - Modify: `tidaldl-py/tidal_dl/gui/static/api.js:145-161`
 
-- [ ] **Step 1: Write failing Bun decision tests**
+- [x] **Step 1: Write failing Bun decision tests**
 
 Add a source loader beside the existing helpers:
 
@@ -177,7 +177,7 @@ const albums = [
 
 Assert All returns all five; Max returns IDs 1 and 2; Lossless plus Clean returns ID 3; High plus Explicit returns ID 4; unknown metadata passes only All.
 
-- [ ] **Step 2: Run tests and verify RED**
+- [x] **Step 2: Run tests and verify RED**
 
 ```shell
 bun test tests/views-decisions.test.js
@@ -185,7 +185,7 @@ bun test tests/views-decisions.test.js
 
 Expected: `album filter helper not found`.
 
-- [ ] **Step 3: Implement one pure filter helper and session state**
+- [x] **Step 3: Implement one pure filter helper and session state**
 
 Add before `renderSearch()`:
 
@@ -211,11 +211,11 @@ albumRatingFilter: 'all',
 
 Do not use `localStorage`; current-session state is enough.
 
-- [ ] **Step 4: Run tests and verify GREEN**
+- [x] **Step 4: Run tests and verify GREEN**
 
 Run the Step 2 command. Expected: all view-decision tests pass.
 
-- [ ] **Step 5: Commit filter decisions**
+- [x] **Step 5: Commit filter decisions**
 
 ```shell
 git add tidaldl-py/tests/views-decisions.test.js tidaldl-py/tidal_dl/gui/static/views.js tidaldl-py/tidal_dl/gui/static/api.js
