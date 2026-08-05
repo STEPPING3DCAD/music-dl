@@ -709,6 +709,8 @@ function _renderRecentSearches(recentEl, input, resultsArea) {
           p.classList.toggle('active', p.textContent.toLowerCase() === item.type);
         });
       }
+      const albumFilters = input.closest('.search-area')?.querySelector('.album-search-filters');
+      if (albumFilters) albumFilters.hidden = state.searchType !== 'albums';
     });
     chips.appendChild(chip);
   }
@@ -728,8 +730,62 @@ function _filterTidalAlbums(items, qualityFilter, ratingFilter) {
   });
 }
 
+function _rerenderCachedSearch(resultsArea) {
+  if (!state.searchResults || !state.searchQuery) {
+    renderSearchEmpty(resultsArea);
+    return;
+  }
+  renderUnifiedSearchResults(
+    resultsArea,
+    state.searchResults.local,
+    state.searchResults.tidal,
+    state.searchResults.tidalAuthRequired
+  );
+}
+
+function _renderAlbumFilterControls(container, resultsArea) {
+  while (container.firstChild) container.removeChild(container.firstChild);
+  container.hidden = state.searchType !== 'albums';
+
+  const groups = [
+    ['Quality', 'albumQualityFilter', [['all', 'All'], ['max', 'Max'], ['lossless', 'Lossless'], ['high', 'High']]],
+    ['Rating', 'albumRatingFilter', [['all', 'All'], ['explicit', 'Explicit'], ['clean', 'Clean']]],
+  ];
+  for (const [label, stateKey, options] of groups) {
+    const group = h('div', { className: 'filter-pills', role: 'group', 'aria-label': label + ' filter' });
+    group.appendChild(textEl('span', label, 'results-count'));
+    for (const [value, text] of options) {
+      const selected = state[stateKey] === value;
+      const button = h('button', {
+        className: 'pill' + (selected ? ' active selected' : ''),
+        type: 'button',
+        'aria-pressed': selected ? 'true' : 'false',
+      }, text);
+      button.addEventListener('click', () => {
+        state[stateKey] = value;
+        _renderAlbumFilterControls(container, resultsArea);
+        _rerenderCachedSearch(resultsArea);
+      });
+      group.appendChild(button);
+    }
+    container.appendChild(group);
+  }
+
+  if (state.albumQualityFilter !== 'all' || state.albumRatingFilter !== 'all') {
+    const clearButton = h('button', { className: 'pill', type: 'button' }, 'Clear filters');
+    clearButton.addEventListener('click', () => {
+      state.albumQualityFilter = 'all';
+      state.albumRatingFilter = 'all';
+      _renderAlbumFilterControls(container, resultsArea);
+      _rerenderCachedSearch(resultsArea);
+    });
+    container.appendChild(clearButton);
+  }
+}
+
 function renderSearch(container) {
   const searchArea = h('div', { className: 'search-area' });
+  const resultsArea = h('div', { className: 'results' });
 
   const searchRow = h('div', { className: 'search-row' });
   const searchField = h('div', { className: 'search-field' });
@@ -780,6 +836,7 @@ function renderSearch(container) {
       state.searchType = type;
       pills.querySelectorAll('.pill').forEach(p => p.classList.remove('active'));
       pill.classList.add('active');
+      albumFilters.hidden = state.searchType !== 'albums';
       if (state.searchQuery) doSearch(resultsArea);
       else _renderRecentSearches(recentSearchesEl, input, resultsArea);
     });
@@ -787,9 +844,11 @@ function renderSearch(container) {
     pills.appendChild(pill);
   }
   searchArea.appendChild(pills);
+  const albumFilters = h('div', { className: 'album-search-filters' });
+  _renderAlbumFilterControls(albumFilters, resultsArea);
+  searchArea.appendChild(albumFilters);
   container.appendChild(searchArea);
 
-  const resultsArea = h('div', { className: 'results' });
   container.appendChild(resultsArea);
 
   if (state.searchResults && state.searchQuery) {
@@ -1001,8 +1060,16 @@ function renderUnifiedSearchResults(container, localData, tidalData, tidalAuthRe
   }
 
   // Divider between local and Tidal sections
-  const tidalItems = tidalData ? (tidalData[type] || []) : [];
-  if (localItems.length > 0 && tidalItems.length > 0) {
+  const originalTidalItems = tidalData ? (tidalData[type] || []) : [];
+  const albumFiltersActive = type === 'albums'
+    && (state.albumQualityFilter !== 'all' || state.albumRatingFilter !== 'all');
+  const tidalItems = type === 'albums'
+    ? _filterTidalAlbums(originalTidalItems, state.albumQualityFilter, state.albumRatingFilter)
+    : originalTidalItems;
+  const tidalResponse = type === 'albums'
+    ? { ...(tidalData || {}), albums: tidalItems, unfiltered_total: originalTidalItems.length }
+    : tidalData;
+  if (type !== 'albums' && localItems.length > 0 && tidalItems.length > 0) {
     const divider = h('div', { className: 'search-divider' });
     divider.appendChild(textEl('span', 'Tidal', 'search-divider-label'));
     container.appendChild(divider);
@@ -1010,7 +1077,19 @@ function renderUnifiedSearchResults(container, localData, tidalData, tidalAuthRe
 
   // Tidal results section — delegate to existing renderer via a sub-container
   // to prevent it from clearing the local results we just rendered
-  if (tidalItems.length > 0) {
+  if (type === 'albums' && originalTidalItems.length > 0) {
+    const tidalHeader = h('div', { className: 'results-header' });
+    tidalHeader.appendChild(textEl('h3', 'Tidal Albums', 'results-section-title'));
+    const count = albumFiltersActive
+      ? tidalItems.length + ' of ' + originalTidalItems.length + ' albums'
+      : originalTidalItems.length + ' albums';
+    tidalHeader.appendChild(textEl('span', count, 'results-count'));
+    container.appendChild(tidalHeader);
+
+    const tidalWrap = h('div', {});
+    container.appendChild(tidalWrap);
+    renderSearchResults(tidalWrap, tidalResponse, false);
+  } else if (tidalItems.length > 0) {
     if (localItems.length === 0) {
       const tidalHeader = h('div', { className: 'results-header' });
       tidalHeader.appendChild(textEl('h3', 'Tidal', 'results-section-title'));
@@ -1035,20 +1114,23 @@ function renderUnifiedSearchResults(container, localData, tidalData, tidalAuthRe
     renderTidalSearchAuthPanel(container);
   }
 
-  if (localItems.length === 0 && tidalItems.length === 0 && !tidalAuthRequired) {
+  if (localItems.length === 0 && tidalItems.length === 0
+      && originalTidalItems.length === 0 && !tidalAuthRequired) {
     container.appendChild(textEl('div', 'No results found', 'search-empty-text'));
   }
 }
 
-function renderSearchResults(container, data) {
+function renderSearchResults(container, data, showHeader = true) {
   while (container.firstChild) container.removeChild(container.firstChild);
 
   if (state.searchType === 'tracks') {
     const tracks = data.tracks || [];
-    container.appendChild(h('div', { className: 'results-header' },
-      textEl('div', 'Search Results', 'results-title'),
-      textEl('div', tracks.length + ' tracks', 'results-count')
-    ));
+    if (showHeader) {
+      container.appendChild(h('div', { className: 'results-header' },
+        textEl('div', 'Search Results', 'results-title'),
+        textEl('div', tracks.length + ' tracks', 'results-count')
+      ));
+    }
 
     if (tracks.length === 0) {
       container.appendChild(h('div', { className: 'empty-state' },
@@ -1068,12 +1150,21 @@ function renderSearchResults(container, data) {
     container.appendChild(trackList);
   } else {
     const items = data[state.searchType] || [];
-    container.appendChild(h('div', { className: 'results-header' },
-      textEl('div', 'Search Results', 'results-title'),
-      textEl('div', items.length + ' ' + state.searchType, 'results-count')
-    ));
+    if (showHeader) {
+      container.appendChild(h('div', { className: 'results-header' },
+        textEl('div', 'Search Results', 'results-title'),
+        textEl('div', items.length + ' ' + state.searchType, 'results-count')
+      ));
+    }
 
     if (items.length === 0) {
+      if (state.searchType === 'albums' && data.unfiltered_total > 0) {
+        container.appendChild(h('div', { className: 'empty-state' },
+          textEl('div', 'No albums match these filters', 'empty-state-title'),
+          textEl('div', 'Use Clear filters above to see every album.', 'empty-state-sub')
+        ));
+        return;
+      }
       container.appendChild(h('div', { className: 'empty-state' },
         textEl('div', 'Nothing here', 'empty-state-title'),
         textEl('div', 'Try different words or check the spelling.', 'empty-state-sub')

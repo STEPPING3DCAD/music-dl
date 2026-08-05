@@ -102,6 +102,28 @@ class TestAppJsFeatureMarkers:
         assert "Clear older than 30 days" in js
         assert "_clearRecentOlderThan30Days" in js
 
+    def test_has_accessible_album_search_filters_without_catalog_refetch(self):
+        js = read_gui_js()
+        source = js.split("function _renderAlbumFilterControls(")[1].split(
+            "function renderSearch(container) {"
+        )[0]
+        assert "albumQualityFilter: 'all'" in js
+        assert "albumRatingFilter: 'all'" in js
+        assert "aria-pressed" in source
+        assert "Clear filters" in source
+        assert "_rerenderCachedSearch(resultsArea)" in source
+        assert "doSearch(" not in source
+        assert "Tidal Albums" in js
+        assert "querySelector('.album-search-filters')" in js
+        assert "No albums match these filters" in js
+
+    def test_filtered_album_empty_suppresses_generic_empty(self):
+        js = read_gui_js()
+        source = js.split("function renderUnifiedSearchResults(")[1].split(
+            "function renderSearchResults("
+        )[0]
+        assert "originalTidalItems.length === 0" in source
+
     def test_has_queue_context_actions(self):
         js = read_gui_js()
         assert "Play Next" in js
