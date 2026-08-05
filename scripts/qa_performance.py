@@ -58,19 +58,23 @@ def measure(operation: Callable[[], object], iterations: int = 25) -> float:
 def build_fixture(path: Path, tracks: int = 10_000) -> LibraryDB:
     """Build and return an open LibraryDB containing deterministic track data."""
     db = LibraryDB(path)
-    db.open()
-    for index in range(tracks):
-        db.record(
-            f"fixture://track/{index:05d}.flac",
-            status="tagged",
-            artist=f"Artist {index % 500:03d}",
-            title=f"Track {index}",
-            album=f"Album {index % 1_000:04d}",
-            duration=180 + index % 240,
-            quality="LOSSLESS",
-            fmt="FLAC",
-        )
-    db.commit()
+    try:
+        db.open()
+        for index in range(tracks):
+            db.record(
+                f"fixture://track/{index:05d}.flac",
+                status="tagged",
+                artist=f"Artist {index % 500:03d}",
+                title=f"Track {index}",
+                album=f"Album {index % 1_000:04d}",
+                duration=180 + index % 240,
+                quality="LOSSLESS",
+                fmt="FLAC",
+            )
+        db.commit()
+    except BaseException:
+        db.close()
+        raise
     return db
 
 
@@ -127,6 +131,7 @@ def _load_baseline(path: Path) -> dict[str, float]:
         isinstance(value, bool)
         or not isinstance(value, (int, float))
         or not math.isfinite(value)
+        or value <= 0
         for value in payload.values()
     ):
         raise ValueError
