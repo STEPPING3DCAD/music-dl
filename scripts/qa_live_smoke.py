@@ -55,9 +55,10 @@ def check_tidal(tidal_factory: Callable[[], object] = Tidal) -> ServiceResult:
                 "tidal", "fail", started, "ephemeral credential directory required"
             )
         try:
-            config_is_ephemeral = (
-                Path(config_dir).resolve().is_relative_to(Path(runner_temp).resolve())
-            )
+            token_path = Path(config_dir) / "token.json"
+            config_is_ephemeral = not token_path.is_symlink() and token_path.resolve(
+                strict=False
+            ).is_relative_to(Path(runner_temp).resolve())
         except (OSError, RuntimeError):
             config_is_ephemeral = False
         if not config_is_ephemeral:

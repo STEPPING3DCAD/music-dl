@@ -188,6 +188,41 @@ def test_default_tidal_rejects_resolved_config_escape(tmp_path: Path) -> None:
     assert list(outside.iterdir()) == []
 
 
+def test_default_tidal_rejects_token_symlink_escape(tmp_path: Path) -> None:
+    runner = tmp_path / "runner"
+    config = runner / "music-dl"
+    outside = tmp_path / "outside"
+    config.mkdir(parents=True)
+    outside.mkdir()
+    sentinel = outside / "sentinel"
+    sentinel.write_bytes(b"do not replace")
+    token_link = config / "token.json"
+    token_link.symlink_to(sentinel)
+    env = os.environ.copy()
+    env["RUNNER_TEMP"] = str(runner)
+    env["MUSIC_DL_CONFIG_DIR"] = str(config)
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            CHECK_TIDAL_COMMAND,
+        ],
+        cwd=Path(__file__).parents[1],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0
+    assert json.loads(completed.stdout)["detail"] == (
+        "ephemeral credential directory required"
+    )
+    assert sentinel.read_bytes() == b"do not replace"
+    assert token_link.is_symlink()
+
+
 def test_tidal_failed_login_and_empty_search_are_concise() -> None:
     failed_login = check_tidal(lambda: FakeTidal(FakeSession(logged_in=False)))
     empty_search = check_tidal(lambda: FakeTidal(FakeSession(search_result={})))
