@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 import pathlib
 
 from tidal_dl.helper.library_db import LibraryDB
 from tidal_dl.helper.path import path_config_base
+
+logger = logging.getLogger("music-dl.download.registry")
 
 
 def register_downloaded_track(file_path: pathlib.Path | str) -> None:
@@ -35,9 +38,11 @@ def register_downloaded_track(file_path: pathlib.Path | str) -> None:
                 genre=meta.get("genre"),
                 quality=meta["quality"],
                 fmt=meta["format"],
+                codec=meta["codec"],
+                metadata_complete=True,
             )
             db.commit()
         finally:
             db.close()
     except Exception:
-        pass
+        logger.debug("Could not register downloaded track", exc_info=True)

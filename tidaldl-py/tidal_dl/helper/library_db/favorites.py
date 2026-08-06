@@ -1,6 +1,7 @@
 """Favorites persistence."""
 
-from tidal_dl.helper.library_db._common import *  # noqa: F403
+from tidal_dl.helper.library_db._common import *
+
 
 class FavoritesMixin:
     def add_favorite(
@@ -64,6 +65,7 @@ class FavoritesMixin:
                       s.quality  AS scanned_quality,
                       s.duration AS scanned_duration,
                       s.format   AS scanned_format,
+                      s.codec    AS scanned_codec,
                       s.art_available AS scanned_art_available
                FROM favorites f
                LEFT JOIN scanned s ON s.path = f.path

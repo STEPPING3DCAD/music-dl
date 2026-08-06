@@ -1,0 +1,21 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "loopback",
+  "description": "Desktop commands available to the music-dl loopback web UI",
+  "local": false,
+  "remote": {
+    "urls": ["http://127.0.0.1:*"]
+  },
+  "windows": ["main"],
+  "permissions": [
+    "allow-get-updater-state",
+    "allow-check-for-updates",
+    "allow-install-update",
+    "allow-sidecar-status",
+    "allow-stop-sidecar",
+    "allow-start-sidecar",
+    "allow-restart-sidecar",
+    "core:event:default",
+    "shell:allow-open"
+  ]
+}

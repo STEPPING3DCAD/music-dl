@@ -1,7 +1,16 @@
 import os
 
-from tidal_dl.gui.services.upgrade_jobs import cleanup_replaced_track_files
+from tidal_dl.gui.services.upgrade_jobs import (
+    cleanup_replaced_track_files,
+    tier_rank_for_quality,
+)
 from tidal_dl.helper.library_db import LibraryDB
+
+
+def test_tier_rank_uses_codec_not_m4a_container():
+    assert tier_rank_for_quality("44100Hz/16bit", "M4A", "aac") == 1
+    assert tier_rank_for_quality("44100Hz/16bit", "M4A", "alac") == 2
+    assert tier_rank_for_quality("44100Hz/16bit", "M4A", None) == 0
 
 
 def test_cleanup_replaced_track_files_removes_stale_same_isrc_rows_and_files(tmp_path, monkeypatch):

@@ -78,14 +78,20 @@ function formatTime(seconds) {
 }
 
 // Semantic quality badges (Lossless / Hi-Res / Lossy)
-function _qualityTier(q, fmt) {
+function _qualityTier(q, fmt, codec) {
+  const cl = (codec || '').toLowerCase();
+  if (cl === 'aac' || cl === 'mp3' || cl === 'ogg' || cl === 'opus' || cl === 'vorbis')
+    return { tier: 'Lossy', cls: 'quality-lossy', desc: (codec || fmt || q) + ' · Lossy', rank: 1 };
+  if (cl === 'flac' || cl === 'alac' || cl === 'pcm') {
+    const ql = (q || '').toUpperCase();
+    if (ql.includes('24BIT') || ql.includes('/24')) {
+      const hz = parseInt(ql);
+      return { tier: 'Hi-Res', cls: 'quality-hires', desc: q + ' · Hi-Res', rank: hz > 48000 ? 4 : 3 };
+    }
+    return { tier: 'Lossless', cls: 'quality-lossless', desc: (q || codec) + ' · Lossless', rank: 2 };
+  }
   if (!q) return { tier: 'Unknown', cls: 'quality-unknown', desc: 'Unknown quality', rank: 0 };
   const ql = q.toUpperCase();
-  const fl = (fmt || '').toUpperCase();
-
-  // Lossy formats always cap at Lossy regardless of quality string.
-  if (fl === 'MP3' || fl === 'AAC' || fl === 'OGG' || fl === 'M4A')
-    return { tier: 'Lossy', cls: 'quality-lossy', desc: (fmt || q) + ' · Lossy', rank: 1 };
 
   if (ql === 'DOLBY_ATMOS' || ql.includes('ATMOS') || ql.includes('DOLBY'))
     return { tier: 'Hi-Res', cls: 'quality-hires', desc: 'Dolby Atmos · Spatial Audio', rank: 5 };
@@ -100,22 +106,18 @@ function _qualityTier(q, fmt) {
   if (ql === 'LOW')
     return { tier: 'Lossy', cls: 'quality-lossy', desc: 'LOW · 96 kbps', rank: 0 };
 
-  if (ql.includes('24BIT') || ql.includes('/24')) {
-    const hz = parseInt(ql);
-    return { tier: 'Hi-Res', cls: 'quality-hires', desc: q + ' · Hi-Res', rank: hz > 48000 ? 4 : 3 };
-  }
-  if (ql.includes('16BIT') || ql.includes('/16') || ql === 'FLAC' || ql === 'WAV')
+  if (ql === 'FLAC' || ql === 'WAV')
     return { tier: 'Lossless', cls: 'quality-lossless', desc: q + ' · Lossless', rank: 2 };
-  if (ql === 'MP3' || ql === 'AAC' || ql === 'OGG' || ql === 'M4A')
+  if (ql === 'MP3' || ql === 'AAC' || ql === 'OGG')
     return { tier: 'Lossy', cls: 'quality-lossy', desc: q + ' · Lossy', rank: 1 };
 
-  return { tier: 'Unknown', cls: 'quality-unknown', desc: q, rank: 0 };
+  return { tier: 'Unknown', cls: 'quality-unknown', desc: q || fmt || 'Unknown quality', rank: 0 };
 }
 
-function qualityClass(q, fmt) { return _qualityTier(q, fmt).cls; }
-function qualityLabel(q, fmt) { return _qualityTier(q, fmt).tier; }
-function qualityTitle(q, fmt) { return _qualityTier(q, fmt).desc; }
-function qualityRank(q, fmt) { return _qualityTier(q, fmt).rank; }
+function qualityClass(q, fmt, codec) { return _qualityTier(q, fmt, codec).cls; }
+function qualityLabel(q, fmt, codec) { return _qualityTier(q, fmt, codec).tier; }
+function qualityTitle(q, fmt, codec) { return _qualityTier(q, fmt, codec).desc; }
+function qualityRank(q, fmt, codec) { return _qualityTier(q, fmt, codec).rank; }
 
 function artGradient(id) {
   const hue = ((id || 0) * 137.508) % 360;
@@ -269,7 +271,7 @@ function _playlistUpgradeCandidates(tracks) {
   const targetRank = _playlistUpgradeTargetRank();
   return (tracks || []).filter(t => {
     if (!t || !t.is_local || !t.isrc) return false;
-    return qualityRank(t.quality, t.format) < targetRank;
+    return qualityRank(t.quality, t.format, t.codec) < targetRank;
   });
 }
 
@@ -280,7 +282,7 @@ function _setPlaylistUpgradeBadge(trackList, track, maxQuality) {
   if (ex) ex.remove();
 
   const probeRanks = { 'LOW': 0, 'HIGH': 1, 'LOSSLESS': 2, 'HI_RES': 3, 'HI_RES_LOSSLESS': 4 };
-  const localRank = qualityRank(track.quality, track.format);
+  const localRank = qualityRank(track.quality, track.format, track.codec);
   const probeRank = probeRanks[maxQuality] || 0;
   const targetRank = _playlistUpgradeTargetRank();
   if (probeRank <= localRank || probeRank < targetRank) return false;

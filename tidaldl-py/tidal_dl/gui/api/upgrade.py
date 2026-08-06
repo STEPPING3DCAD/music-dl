@@ -111,7 +111,7 @@ def _scan_broadcast(event: dict) -> None:
     for q in _scan_clients[:]:
         try:
             _scan_event_loop.call_soon_threadsafe(q.put_nowait, event)
-        except Exception:
+        except Exception:  # noqa: BLE001, S110
             pass
 
 
@@ -170,9 +170,7 @@ def _extract_quality(t: Any) -> str:
     tag_upper = [str(tag).upper() for tag in tags]
     if "HIRES_LOSSLESS" in tag_upper or "HI_RES_LOSSLESS" in tag_upper:
         max_q = "HI_RES_LOSSLESS"
-    elif "HIRES" in tag_upper or "HI_RES" in tag_upper:
-        max_q = "HI_RES"
-    elif "MQA" in tag_upper:
+    elif "HIRES" in tag_upper or "HI_RES" in tag_upper or "MQA" in tag_upper:
         max_q = "HI_RES"
     return max_q
 
@@ -200,8 +198,6 @@ def _probe_tidal_meta(
             tracks = getattr(results, "tracks", []) or []
 
         target_title = _norm(title)
-        target_artist = _norm(artist)
-
         for t in tracks:
             t_name = _norm(getattr(t, "name", "") or getattr(t, "full_name", "") or "")
             # Title must match closely (substring ok — titles are usually unique)
@@ -273,11 +269,7 @@ def probe_isrcs(req: ProbeRequest) -> dict:
     if not req.isrcs:
         raise HTTPException(status_code=400, detail="Provide at least one ISRC")
 
-    from tidal_dl.config import Settings, Tidal
-
-    settings = Settings()
-    target_quality = getattr(settings.data, "upgrade_target_quality", "HI_RES_LOSSLESS")
-    target_rank = TIER_RANK.get(target_quality, 4)
+    from tidal_dl.config import Tidal
 
     tidal = Tidal()
     session = tidal.session
@@ -358,11 +350,7 @@ def probe_by_meta(req: ProbeByMetaRequest) -> dict:
     if not req.tracks:
         raise HTTPException(status_code=400, detail="Provide at least one track")
 
-    from tidal_dl.config import Settings, Tidal
-
-    settings = Settings()
-    target_quality = getattr(settings.data, "upgrade_target_quality", "HI_RES_LOSSLESS")
-    target_rank = TIER_RANK.get(target_quality, 4)
+    from tidal_dl.config import Tidal
 
     tidal = Tidal()
     session = tidal.session
@@ -472,7 +460,9 @@ def start_upgrade(req: UpgradeStartRequest, request: Request) -> dict:
                 continue
 
             probed_rank = TIER_RANK.get(probe["max_quality"], 0)
-            local_rank = _tier_rank_for_quality(row.get("quality"), row.get("format"))
+            local_rank = _tier_rank_for_quality(
+                row.get("quality"), row.get("format"), row.get("codec")
+            )
 
             if probed_rank <= local_rank:
                 skipped += 1
@@ -559,9 +549,9 @@ async def scan_sse() -> StreamingResponse:
                     # Stop streaming after scan completes or is cancelled
                     if event.get("type") in ("scan_complete", "scan_cancelled", "scan_error"):
                         break
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     yield f"data: {_json({'type': 'ping'})}\n\n"
-        except Exception:
+        except Exception:  # noqa: BLE001, S110
             pass
         finally:
             if queue in _scan_clients:
@@ -616,7 +606,9 @@ def _start_bulk_scan(cancel_event: threading.Event) -> None:
             if not os.path.exists(t["path"]):
                 stale_paths.append(t["path"])
                 continue
-            local_rank = _tier_rank_for_quality(t.get("quality"), t.get("format"))
+            local_rank = _tier_rank_for_quality(
+                t.get("quality"), t.get("format"), t.get("codec")
+            )
             if local_rank < target_rank:
                 candidates.append(t)
 
@@ -677,7 +669,9 @@ def _start_bulk_scan(cancel_event: threading.Event) -> None:
             # Check if upgradeable
             if probe.get("tidal_track_id") and probe.get("max_quality"):
                 probed_rank = TIER_RANK.get(probe["max_quality"], 0)
-                local_rank = _tier_rank_for_quality(t.get("quality"), t.get("format"))
+                local_rank = _tier_rank_for_quality(
+                    t.get("quality"), t.get("format"), t.get("codec")
+                )
                 if probed_rank > local_rank and probed_rank >= target_rank:
                     upgradeable_results.append({
                         "path": t["path"],
@@ -763,7 +757,9 @@ def _rebuild_results_from_db() -> list[dict]:
             if not probe or not probe.get("tidal_track_id") or not probe.get("max_quality"):
                 continue
             probed_rank = TIER_RANK.get(probe["max_quality"], 0)
-            local_rank = _tier_rank_for_quality(t.get("quality"), t.get("format"))
+            local_rank = _tier_rank_for_quality(
+                t.get("quality"), t.get("format"), t.get("codec")
+            )
             if probed_rank > local_rank and probed_rank >= target_rank:
                 results.append({
                     "path": t["path"],
@@ -803,7 +799,7 @@ def scan_status(include_results: bool = Query(False)) -> dict:
                     results=results,
                 )
                 status = "complete"
-        except Exception:
+        except Exception:  # noqa: BLE001, S110
             pass  # fall through to idle
 
     resp: dict = {

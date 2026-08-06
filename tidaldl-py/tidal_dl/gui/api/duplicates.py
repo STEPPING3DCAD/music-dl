@@ -149,7 +149,7 @@ def _prune_stale(db: LibraryDB, reachable_dirs: list[Path]) -> int:
     for row in rows:
         p = row["path"]
         under_reachable = any(
-            p.startswith(str(d) + "/") or p.startswith(str(d) + os.sep)
+            p.startswith((str(d) + "/", str(d) + os.sep))
             for d in reachable_dirs
         )
         if not under_reachable:
@@ -189,7 +189,9 @@ def _find_duplicate_groups(db: LibraryDB) -> list[dict]:
         # Rank: best quality first, then most canonical path, then shortest path
         tracks.sort(
             key=lambda t: (
-                -_tier_rank_for_quality(t.get("quality"), t.get("format")),
+                -_tier_rank_for_quality(
+                    t.get("quality"), t.get("format"), t.get("codec")
+                ),
                 _path_score(t["path"]),
                 len(t["path"]),
             )
@@ -198,7 +200,9 @@ def _find_duplicate_groups(db: LibraryDB) -> list[dict]:
         keeper = tracks[0]
         duplicates = tracks[1:]
 
-        keeper_rank = _tier_rank_for_quality(keeper.get("quality"), keeper.get("format"))
+        keeper_rank = _tier_rank_for_quality(
+            keeper.get("quality"), keeper.get("format"), keeper.get("codec")
+        )
         groups.append({
             "key": f"isrc:{g['isrc']}|{g['album_key']}",
             "keeper": {
@@ -213,7 +217,9 @@ def _find_duplicate_groups(db: LibraryDB) -> list[dict]:
                     "quality": d.get("quality"),
                     "format": d.get("format"),
                     "tier": _TIER_NAMES.get(
-                        _tier_rank_for_quality(d.get("quality"), d.get("format")),
+                        _tier_rank_for_quality(
+                            d.get("quality"), d.get("format"), d.get("codec")
+                        ),
                         "Common",
                     ),
                 }
@@ -266,7 +272,9 @@ def _find_duplicate_groups(db: LibraryDB) -> list[dict]:
         for dg in duration_groups:
             dg.sort(
                 key=lambda t: (
-                    -_tier_rank_for_quality(t.get("quality"), t.get("format")),
+                    -_tier_rank_for_quality(
+                        t.get("quality"), t.get("format"), t.get("codec")
+                    ),
                     _path_score(t["path"]),
                     len(t["path"]),
                 )
@@ -274,7 +282,7 @@ def _find_duplicate_groups(db: LibraryDB) -> list[dict]:
             keeper = dg[0]
             duplicates = dg[1:]
             keeper_rank = _tier_rank_for_quality(
-                keeper.get("quality"), keeper.get("format")
+                keeper.get("quality"), keeper.get("format"), keeper.get("codec")
             )
             groups.append({
                 "key": f"meta:{title}|{artist}",
@@ -290,7 +298,9 @@ def _find_duplicate_groups(db: LibraryDB) -> list[dict]:
                         "quality": d.get("quality"),
                         "format": d.get("format"),
                         "tier": _TIER_NAMES.get(
-                            _tier_rank_for_quality(d.get("quality"), d.get("format")),
+                            _tier_rank_for_quality(
+                                d.get("quality"), d.get("format"), d.get("codec")
+                            ),
                             "Common",
                         ),
                     }
@@ -322,9 +332,9 @@ def _cleanup_old_staging() -> None:
             continue
         manifest = _read_manifest(d)
         # No manifest = orphaned from a crash with no recovery possible, or very old
-        if manifest is None and now - ts > 300:
-            shutil.rmtree(d, ignore_errors=True)
-        elif manifest and manifest.get("expires_at", 0) < now:
+        orphaned = manifest is None and now - ts > 300
+        expired = bool(manifest and manifest.get("expires_at", 0) < now)
+        if orphaned or expired:
             shutil.rmtree(d, ignore_errors=True)
 
 
@@ -472,10 +482,12 @@ def undo_cleanup() -> dict:
                     duration=row.get("duration"),
                     quality=row.get("quality"),
                     fmt=row.get("format"),
+                    codec=row.get("codec"),
+                    metadata_complete=row.get("metadata_complete"),
                     genre=row.get("genre"),
                 )
                 restored += 1
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 failed += 1
                 errors.append(f"{original_path}: {exc}")
 

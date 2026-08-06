@@ -4,7 +4,17 @@ use std::path::PathBuf;
 
 fn main() {
     ensure_debug_sidecar_placeholder();
-    tauri_build::build()
+    let manifest = tauri_build::AppManifest::new().commands(&[
+        "get_updater_state",
+        "check_for_updates",
+        "install_update",
+        "sidecar_status",
+        "stop_sidecar",
+        "start_sidecar",
+        "restart_sidecar",
+    ]);
+    tauri_build::try_build(tauri_build::Attributes::new().app_manifest(manifest))
+        .expect("failed to build Tauri application");
 }
 
 fn ensure_debug_sidecar_placeholder() {

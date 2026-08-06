@@ -1,11 +1,12 @@
 """Connection lifecycle and schema migrations."""
 
-from tidal_dl.helper.library_db._common import *  # noqa: F403
+from tidal_dl.helper.library_db._common import *
+
 
 class LibraryDBCore:
     """Thin wrapper around a SQLite scan ledger."""
 
-    _SCHEMA_VERSION = 5
+    _SCHEMA_VERSION = 6
 
     def __init__(self, db_path: pathlib.Path) -> None:
         self._path = db_path
@@ -49,6 +50,8 @@ class LibraryDBCore:
                     duration   INTEGER,
                     quality    TEXT,
                     format     TEXT,
+                    codec      TEXT,
+                    metadata_complete INTEGER,
                     play_count INTEGER DEFAULT 0,
                     last_played INTEGER,
                     genre      TEXT,
@@ -103,6 +106,42 @@ class LibraryDBCore:
             # NULL preserves legacy rows until art is checked on demand.
             if "art_available" not in cols:
                 self._conn.execute("ALTER TABLE scanned ADD COLUMN art_available INTEGER")
+
+            # v5 -> v6: inspected codec and completed metadata resolution.
+            if "codec" not in cols:
+                self._conn.execute("ALTER TABLE scanned ADD COLUMN codec TEXT")
+            if "metadata_complete" not in cols:
+                self._conn.execute(
+                    "ALTER TABLE scanned ADD COLUMN metadata_complete INTEGER"
+                )
+
+        # Backfill codecs that are unambiguous from their native file type.
+        self._conn.execute(
+            """UPDATE scanned
+               SET codec = CASE
+                   WHEN lower(path) LIKE '%.flac' THEN 'flac'
+                   WHEN lower(path) LIKE '%.mp3' THEN 'mp3'
+                   WHEN lower(path) LIKE '%.aac' THEN 'aac'
+                   WHEN lower(path) LIKE '%.ogg' THEN 'ogg'
+                   WHEN lower(path) LIKE '%.wav' THEN 'pcm'
+               END
+               WHERE codec IS NULL
+                 AND (lower(path) LIKE '%.flac'
+                      OR lower(path) LIKE '%.mp3'
+                      OR lower(path) LIKE '%.aac'
+                      OR lower(path) LIKE '%.ogg'
+                      OR lower(path) LIKE '%.wav')"""
+        )
+        self._conn.execute(
+            """UPDATE scanned SET metadata_complete = 1
+               WHERE metadata_complete IS NULL
+                 AND NULLIF(TRIM(title), '') IS NOT NULL
+                 AND NULLIF(TRIM(artist), '') IS NOT NULL
+                 AND NULLIF(TRIM(album), '') IS NOT NULL
+                 AND lower(TRIM(artist)) != 'unknown artist'
+                 AND lower(TRIM(album)) != 'unknown album'
+                 AND lower(TRIM(title)) NOT LIKE 'track %'"""
+        )
 
         # play_events table (time-series for activity charts)
         self._conn.execute(
@@ -176,11 +215,11 @@ class LibraryDBCore:
         # Migrate: add cover_url and quality columns if missing
         try:
             self._conn.execute("SELECT cover_url FROM download_history LIMIT 1")
-        except Exception:
+        except sqlite3.OperationalError:
             self._conn.execute("ALTER TABLE download_history ADD COLUMN cover_url TEXT")
         try:
             self._conn.execute("SELECT quality FROM download_history LIMIT 1")
-        except Exception:
+        except sqlite3.OperationalError:
             self._conn.execute("ALTER TABLE download_history ADD COLUMN quality TEXT")
 
         # persisted download/upgrade job queue

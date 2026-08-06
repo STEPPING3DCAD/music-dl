@@ -829,11 +829,11 @@ function updateNowPlaying(track) {
     // Quality badge
     const nowQuality = document.getElementById('now-quality');
     if (nowQuality) {
-      const q = track.quality || track.format || '';
-      if (q) {
-        nowQuality.textContent = qualityLabel(q);
-        nowQuality.title = qualityTitle(q);
-        nowQuality.className = 'quality-tag ' + qualityClass(q);
+      const q = track.quality || '';
+      if (q || track.codec) {
+        nowQuality.textContent = qualityLabel(track.quality, track.format, track.codec);
+        nowQuality.title = qualityTitle(track.quality, track.format, track.codec);
+        nowQuality.className = 'quality-tag ' + qualityClass(track.quality, track.format, track.codec);
         nowQuality.style.display = '';
       } else {
         nowQuality.style.display = 'none';

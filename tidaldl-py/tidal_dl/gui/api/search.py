@@ -32,7 +32,7 @@ def _serialize_track(track: Any, isrc_index: Any = None) -> dict:
     if album:
         try:
             cover_url = album.image(320)
-        except Exception:
+        except Exception:  # noqa: BLE001, S110
             pass
 
     isrc = getattr(track, "isrc", "") or ""
@@ -76,6 +76,7 @@ def _serialize_track(track: Any, isrc_index: Any = None) -> dict:
             "path": local_path,
             "quality": local_row.get("quality") or quality,
             "format": local_row.get("format") or "",
+            "codec": local_row.get("codec") or "unknown",
         })
     return result
 
@@ -131,7 +132,7 @@ def _serialize_item(item: Any) -> dict:
     cover_url = ""
     try:
         cover_url = item.image(320)
-    except Exception:
+    except Exception:  # noqa: BLE001, S110
         pass
     result = {"id": item.id, "name": getattr(item, "name", ""), "cover_url": cover_url}
     if hasattr(item, "artist") and item.artist:
@@ -140,7 +141,7 @@ def _serialize_item(item: Any) -> dict:
         try:
             roles = [r.value if hasattr(r, "value") else str(r) for r in item.roles]
             result["roles"] = ", ".join(r.replace("_", " ").title() for r in roles[:3])
-        except Exception:
+        except Exception:  # noqa: BLE001, S110
             pass
     if hasattr(item, "num_tracks"):
         result["num_tracks"] = item.num_tracks

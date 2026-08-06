@@ -11,6 +11,7 @@ The library lives on a NAS (/Volumes/Music), so scanning is slow. Strategy:
 from __future__ import annotations
 
 import os
+import re
 import sqlite3
 import threading
 import time
@@ -72,7 +73,7 @@ def _close_thread_db() -> None:
     if db is not None:
         try:
             db.close()
-        except Exception:
+        except Exception:  # noqa: BLE001, S110
             pass
     _db_local.db = None
     _db_local.opened_at = 0.0
@@ -114,7 +115,7 @@ def _get_db() -> LibraryDB:
         # Validate the connection is still alive (NAS mounts can drop)
         try:
             db._conn.execute("SELECT 1")
-        except Exception:
+        except Exception:  # noqa: BLE001
             _close_thread_db()
             db = LibraryDB(db_path)
             db.open()
@@ -144,7 +145,7 @@ def _path_in_library(path: str) -> bool:
         row = conn.execute("SELECT 1 FROM scanned WHERE path = ? LIMIT 1", (path,)).fetchone()
         conn.close()
         return row is not None
-    except Exception:
+    except Exception:  # noqa: BLE001
         return False
 
 
@@ -162,11 +163,113 @@ def _trusted_library_path(path: str) -> Path | None:
         if not row:
             return None
         return Path(row[0]).resolve(strict=True)
-    except Exception:
+    except Exception:  # noqa: BLE001
         return None
 
 
-def _read_metadata(file_path: Path) -> dict | None:
+def _codec_family(info: object | None) -> str:
+    if info is None:
+        return "unknown"
+    codec = " ".join(
+        str(value).casefold()
+        for value in (
+            getattr(info, "codec", None),
+            getattr(info, "codec_description", None),
+        )
+        if value
+    )
+    for family, markers in (
+        ("flac", ("flac",)),
+        ("alac", ("alac", "apple lossless")),
+        ("aac", ("aac", "mp4a")),
+        ("mp3", ("mp3", "mpeg layer iii", "mpeg-1 layer 3")),
+        ("opus", ("opus",)),
+        ("vorbis", ("vorbis",)),
+        ("pcm", ("pcm", "wave")),
+    ):
+        if any(marker in codec for marker in markers):
+            return family
+    return "unknown"
+
+
+def _native_codec_from_extension(file_path: Path) -> str | None:
+    return {
+        ".flac": "flac",
+        ".mp3": "mp3",
+        ".aac": "aac",
+        ".ogg": "ogg",
+        ".wav": "pcm",
+    }.get(file_path.suffix.casefold())
+
+
+_GENERIC_TRACK = re.compile(r"^track\s*\d+$", re.IGNORECASE)
+
+
+def _meaningful(value: str | None, unknown: str) -> bool:
+    cleaned = (value or "").strip()
+    return bool(cleaned and cleaned.casefold() != unknown.casefold())
+
+
+def _meaningful_title(value: str | None) -> bool:
+    cleaned = (value or "").strip()
+    return bool(cleaned and not _GENERIC_TRACK.fullmatch(cleaned))
+
+
+def _structured_path_metadata(file_path: Path, scan_dirs: list[Path]) -> tuple[str, str] | None:
+    resolved_file = file_path.resolve(strict=False)
+    roots = sorted(
+        (root.resolve(strict=False) for root in scan_dirs),
+        key=lambda root: len(root.parts),
+        reverse=True,
+    )
+    for root in roots:
+        try:
+            relative = resolved_file.relative_to(root)
+        except ValueError:
+            continue
+        if len(relative.parts) >= 3:
+            return relative.parts[0].strip(), relative.parts[-2].strip()
+    return None
+
+
+def _resolve_local_metadata(
+    file_path: Path,
+    scan_dirs: list[Path],
+    *,
+    title: str = "",
+    artist: str = "",
+    album: str = "",
+) -> dict:
+    structured = _structured_path_metadata(file_path, scan_dirs)
+    path_artist, path_album = structured or ("", "")
+    resolved_artist = artist.strip() if _meaningful(artist, "Unknown Artist") else path_artist
+    resolved_artist = resolved_artist or "Unknown Artist"
+
+    resolved_album = album.strip() if _meaningful(album, "Unknown Album") else path_album
+    if path_artist and resolved_album == path_album:
+        for separator in (" - ", " – ", " — "):
+            prefix = path_artist + separator
+            if resolved_album.casefold().startswith(prefix.casefold()):
+                resolved_album = resolved_album[len(prefix):].strip()
+                break
+    resolved_album = resolved_album or "Unknown Album"
+
+    filename_title = re.sub(r"^\d{1,3}[\s._-]+", "", file_path.stem).strip()
+    if _meaningful_title(title):
+        resolved_title = title.strip()
+    elif _meaningful_title(filename_title):
+        resolved_title = filename_title
+    else:
+        resolved_title = title.strip() or file_path.stem
+
+    return {
+        "name": resolved_title,
+        "artist": resolved_artist,
+        "album": resolved_album,
+    }
+
+
+def _read_metadata(file_path: Path, scan_dirs: list[Path] | None = None) -> dict | None:
     try:
         # easy=True gives uniform tag keys across ID3, MP4, Vorbis, etc.
         audio = MutagenFile(file_path, easy=True)
@@ -199,19 +302,30 @@ def _read_metadata(file_path: Path) -> dict | None:
                             isrc = str(val)
                         break
 
+        resolved = _resolve_local_metadata(
+            file_path,
+            scan_dirs or [],
+            title=_tag("title"),
+            artist=_tag("artist"),
+            album=_tag("album"),
+        )
+        codec = _codec_family(audio.info)
+        if codec == "unknown":
+            codec = _native_codec_from_extension(file_path) or "unknown"
+
         return {
             "path": str(file_path),
-            "name": _tag("title", file_path.stem),
-            "artist": _tag("artist", "Unknown Artist"),
-            "album": _tag("album", "Unknown Album"),
+            **resolved,
             "duration": round(audio.info.length) if audio.info else 0,
             "isrc": isrc,
             "genre": _normalize_genre(_tag("genre")),
             "quality": quality,
             "format": file_path.suffix[1:].upper(),
+            "codec": codec,
+            "metadata_complete": True,
             "is_local": True,
         }
-    except Exception:
+    except Exception:  # noqa: BLE001
         return None
 
 
@@ -227,7 +341,7 @@ def _has_local_art(file_path: Path) -> bool:
                 return True
             if tags.get("covr"):
                 return True
-    except Exception:
+    except Exception:  # noqa: BLE001, S110
         pass
     return any((file_path.parent / name).is_file() for name in _COVER_NAMES)
 
@@ -252,6 +366,7 @@ def _db_row_to_track(row: dict) -> dict:
         "genre": row.get("genre") or "",
         "quality": row.get("quality") or p.suffix[1:].upper(),
         "format": row.get("format") or p.suffix[1:].upper(),
+        "codec": row.get("codec") or "unknown",
         "cover_url": _local_cover_url(row["path"], row.get("art_available")),
         "play_count": row.get("play_count") or 0,
         "is_local": True,
@@ -317,7 +432,7 @@ def _migrate_volume_prefixes(db: LibraryDB, scan_dirs: list[Path]) -> None:
     for scan_dir in scan_dirs:
         current_prefix = str(scan_dir)
         # Check if any stored path already starts with this scan dir — no migration needed
-        if any(p.startswith(current_prefix + os.sep) or p.startswith(current_prefix + "/") for p in stored_paths):
+        if any(p.startswith((current_prefix + os.sep, current_prefix + "/")) for p in stored_paths):
             continue
 
         # Try to find a stored prefix that looks like a variant of this scan dir.
@@ -373,6 +488,50 @@ def _migrate_volume_prefixes(db: LibraryDB, scan_dirs: list[Path]) -> None:
         print(f"[library] Volume prefix migration complete — {count} paths updated")
 
 
+def _reconcile_library_rows(db: LibraryDB, *, scan_dirs: list[Path]) -> int:
+    """Resolve legacy metadata facts once without repeating waveform work."""
+    repaired = 0
+    for row in db.metadata_repair_worklist():
+        file_path = Path(row["path"])
+        if not file_path.is_file():
+            continue
+        meta = _read_metadata(file_path, scan_dirs)
+        if meta:
+            db.record(
+                row["path"],
+                status="tagged" if meta["isrc"] else "needs_isrc",
+                isrc=meta["isrc"] or None,
+                artist=meta["artist"],
+                title=meta["name"],
+                album=meta["album"],
+                duration=meta["duration"],
+                genre=meta.get("genre"),
+                quality=meta["quality"],
+                fmt=meta["format"],
+                codec=meta["codec"],
+                metadata_complete=True,
+            )
+        else:
+            db.record(
+                row["path"],
+                status=row["status"],
+                isrc=row.get("isrc"),
+                artist=row.get("artist"),
+                title=row.get("title"),
+                album=row.get("album"),
+                duration=row.get("duration"),
+                genre=row.get("genre"),
+                quality=row.get("quality"),
+                fmt=row.get("format"),
+                codec=row.get("codec") or "unknown",
+                metadata_complete=True,
+            )
+        repaired += 1
+    if repaired:
+        db.commit()
+    return repaired
+
+
 def _background_scan(rescan: bool) -> None:
     """Walk all configured dirs, read tags for unknown files, prune deleted ones."""
     global _scan_running, _scan_progress
@@ -404,7 +563,12 @@ def _background_scan(rescan: bool) -> None:
             db.close()
             return
 
-        known = set() if rescan else db.complete_paths()
+        if not rescan:
+            repaired = _reconcile_library_rows(db, scan_dirs=scan_dirs)
+            if repaired:
+                print(f"[library] Repaired metadata for {repaired} cached rows")
+
+        known = set() if rescan else db.known_paths()
 
         # --- Fast-path: skip walk if nothing changed on disk ---
         import json as _json
@@ -451,7 +615,7 @@ def _background_scan(rescan: bool) -> None:
             for path_str in new_paths:
                 file_path = Path(path_str)
                 art_available = _has_local_art(file_path)
-                meta = _read_metadata(file_path)
+                meta = _read_metadata(file_path, scan_dirs)
                 if meta:
                     # Extract waveform peaks (single ffmpeg decode, ~30ms per file)
                     waveform_json = None
@@ -472,12 +636,20 @@ def _background_scan(rescan: bool) -> None:
                         genre=meta.get("genre"),
                         quality=meta["quality"],
                         fmt=meta["format"],
+                        codec=meta["codec"],
+                        metadata_complete=True,
                         waveform=waveform_json,
                         waveform_hires=hires_json,
                         art_available=art_available,
                     )
                 else:
-                    db.record(path_str, status="unreadable", art_available=art_available)
+                    db.record(
+                        path_str,
+                        status="unreadable",
+                        art_available=art_available,
+                        codec="unknown",
+                        metadata_complete=True,
+                    )
                 batch += 1
                 if batch >= 50:
                     db.commit()
@@ -505,7 +677,7 @@ def _background_scan(rescan: bool) -> None:
         if finger:
             # Recompute with final known_count (scan may have added/removed rows)
             try:
-                final_known = len(db.complete_paths()) if not rescan else len(disk_paths)
+                final_known = len(db.known_paths()) if not rescan else len(disk_paths)
                 finger = _json.dumps({
                     "dirs": sorted(str(d) for d in scan_dirs),
                     "mtimes": [os.stat(str(d)).st_mtime for d in sorted(scan_dirs)],
@@ -544,7 +716,7 @@ def _background_scan(rescan: bool) -> None:
                                 (genre, row[0]),
                             )
                             gfilled += 1
-                except Exception:
+                except Exception:  # noqa: BLE001, S110
                     pass
             if gfilled:
                 db.commit()
@@ -728,12 +900,12 @@ def library_art(path: str = Query(..., description="Absolute path to audio file"
             # M4A / MP4
             if not art_data:
                 tags = audio.tags or {}
-                if "covr" in tags and tags["covr"]:
+                if tags.get("covr"):
                     art_data = bytes(tags["covr"][0])
 
     except HTTPException:
         raise
-    except Exception:
+    except Exception:  # noqa: BLE001, S110
         pass
 
     # Write to disk cache and return
@@ -910,6 +1082,8 @@ def get_favorites():
             "isrc": f.get("isrc") or "",
             "cover_url": f.get("cover_url") or "",
             "quality": quality,
+            "format": f.get("scanned_format") or "",
+            "codec": f.get("scanned_codec") or "unknown",
             "duration": duration,
             "favorited_at": f["favorited_at"],
             "is_local": bool(f.get("path")),

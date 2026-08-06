@@ -1,6 +1,8 @@
 """Tests for LibraryDB — CRUD, pagination, dedup, migration, pragmas."""
 import sqlite3
+
 import pytest
+
 from tidal_dl.helper.library_db import LibraryDB
 
 
@@ -74,13 +76,16 @@ class TestCRUD:
     def test_record_and_get(self, db):
         db.record("/music/track.flac", status="tagged", artist="Daft Punk",
                   title="One More Time", album="Discovery", duration=320,
-                  quality="44100Hz/16bit", fmt="FLAC", genre="Electronic")
+                  quality="44100Hz/16bit", fmt="FLAC", codec="flac",
+                  metadata_complete=True, genre="Electronic")
         db.commit()
         row = db.get("/music/track.flac")
         assert row is not None
         assert row["artist"] == "Daft Punk"
         assert row["format"] == "FLAC"
         assert row["quality"] == "44100Hz/16bit"
+        assert row["codec"] == "flac"
+        assert row["metadata_complete"] == 1
 
     def test_get_nonexistent_returns_none(self, db):
         assert db.get("/nonexistent.flac") is None
@@ -169,7 +174,7 @@ class TestPagination:
 
     def test_artists_page(self, db):
         self._seed(db)
-        rows, total = db.artists_page(limit=50, offset=0)
+        _rows, total = db.artists_page(limit=50, offset=0)
         assert total == 3  # Artist 0, 1, 2
 
     def test_all_albums(self, db):
@@ -197,6 +202,7 @@ class TestAlbumDedup:
             album="Alb",
             quality="44100Hz/16bit",
             fmt="FLAC",
+            codec="flac",
         )
         db.record(
             "/very/long/path/new.flac",
@@ -206,6 +212,7 @@ class TestAlbumDedup:
             album="Alb",
             quality="96000Hz/24bit",
             fmt="FLAC",
+            codec="flac",
         )
         db.commit()
 
@@ -213,6 +220,24 @@ class TestAlbumDedup:
 
         assert len(tracks) == 1
         assert tracks[0]["path"] == "/very/long/path/new.flac"
+
+    def test_album_tracks_use_codec_to_distinguish_m4a_quality(self, db):
+        for path, codec in (("/music/aac.m4a", "aac"), ("/music/alac.m4a", "alac")):
+            db.record(
+                path,
+                status="tagged",
+                artist="X",
+                title="Same Song",
+                album="Alb",
+                quality="44100Hz/16bit",
+                fmt="M4A",
+                codec=codec,
+            )
+        db.commit()
+
+        tracks = db.album_tracks("X", "Alb")
+
+        assert [track["path"] for track in tracks] == ["/music/alac.m4a"]
 
 
 class TestDownloadHistory:
@@ -556,7 +581,7 @@ class TestMigration:
                     "quality_probes", "library_meta", "download_history", "favorites"}
         assert expected.issubset(tables)
 
-    def test_v1_to_v5_migration(self, tmp_path):
+    def test_v1_to_v6_migration(self, tmp_path):
         """Create a v1-style DB, then open with LibraryDB to trigger migration."""
         db_path = tmp_path / "legacy.db"
         conn = sqlite3.connect(str(db_path))
@@ -579,10 +604,14 @@ class TestMigration:
         assert "waveform" in cols
         assert "waveform_hires" in cols
         assert "art_available" in cols
-        assert LibraryDB._SCHEMA_VERSION == 5
+        assert "codec" in cols
+        assert "metadata_complete" in cols
+        assert LibraryDB._SCHEMA_VERSION == 6
         row = db.get("/a.flac")
         assert row["artist"] == "X"
         assert row["art_available"] is None
+        assert row["codec"] == "flac"
+        assert row["metadata_complete"] is None
         db.close()
 
     def test_backup_includes_committed_wal_rows(self, tmp_path):

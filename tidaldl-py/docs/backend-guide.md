@@ -213,7 +213,7 @@ TIDAL_CDN_HOSTS  = {"audio.tidal.com", "sp-ad-cf.audio.tidal.com", ...}
 
 ## 7. Database Schema
 
-SQLite at `~/.config/music-dl/library.db`. Schema version 5, WAL mode, and a
+SQLite at `~/.config/music-dl/library.db`. Schema version 6, WAL mode, and a
 5-second busy timeout.
 
 ### Tables
@@ -231,6 +231,8 @@ SQLite at `~/.config/music-dl/library.db`. Schema version 5, WAL mode, and a
 | `duration` | INTEGER | Seconds |
 | `quality` | TEXT | `HI_RES_LOSSLESS`, `LOSSLESS`, etc. |
 | `format` | TEXT | `FLAC`, `MP3`, etc. |
+| `codec` | TEXT | Normalized inspected codec: `aac`, `alac`, `flac`, `mp3`, `ogg`, `opus`, `vorbis`, `pcm`, or `unknown` |
+| `metadata_complete` | INTEGER | `1` after scan-time metadata resolution has run; `NULL`/`0` marks a legacy row needing one repair pass |
 | `play_count` | INTEGER | Default 0 |
 | `last_played` | INTEGER | Unix timestamp |
 | `genre` | TEXT | |
@@ -335,10 +337,17 @@ Additive only. Runs on every `open()`:
 2. **v2 → v3**: Add `play_count`, `last_played`, `genre` to `scanned`
 3. **v3 → v4**: Add `waveform` and `waveform_hires` to `scanned`
 4. **v4 → v5**: Add `art_available` to `scanned`
-5. **Late additions**: Add `cover_url` and `quality` to `download_history`
-6. **Download jobs and favorites**: Create their tables and lookup indexes when absent
+5. **v5 → v6**: Add `codec` and `metadata_complete` to `scanned`; backfill unambiguous native codecs and repair remaining legacy rows on the next scan
+6. **Late additions**: Add `cover_url` and `quality` to `download_history`
+7. **Download jobs and favorites**: Create their tables and lookup indexes when absent
 
 Pattern: check `PRAGMA table_info()`, `ALTER TABLE ADD COLUMN` if missing. Never destructive.
+
+### Local scan facts
+
+The scanner is the authority for local display metadata and quality. Codec, not container extension or decoded bit depth, decides whether a local file is lossy or lossless. `M4A` may contain AAC or ALAC, so an uninspected M4A remains Unknown.
+
+Metadata resolution order is meaningful embedded tag, then a conservative path fallback relative to a configured root, then Unknown. Path fallback requires `artist/album/file`; it may strip an `<artist> - ` album-folder prefix and replace generic titles such as `Track 05` with a meaningful filename. Resolution updates only `library.db` and never writes audio files.
 
 ### Connection Patterns
 
