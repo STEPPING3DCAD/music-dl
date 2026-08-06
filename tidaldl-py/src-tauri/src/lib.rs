@@ -428,6 +428,58 @@ fn windows_sidecar_kill_args(pid: u32) -> Vec<String> {
     ]
 }
 
+fn parse_process_parent_pairs(output: &str) -> Vec<(u32, u32)> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let pid = fields.next()?.parse::<u32>().ok()?;
+            let parent_pid = fields.next()?.parse::<u32>().ok()?;
+            (pid != 0 && fields.next().is_none()).then_some((pid, parent_pid))
+        })
+        .collect()
+}
+
+fn owned_sidecar_descendants(parent_pairs: &[(u32, u32)], wrapper_pid: u32) -> Vec<u32> {
+    let mut descendants = Vec::new();
+    let mut pending = vec![(wrapper_pid, 0)];
+    let mut seen = std::collections::BTreeSet::new();
+
+    while let Some((parent_pid, depth)) = pending.pop() {
+        for (pid, candidate_parent_pid) in parent_pairs {
+            if *candidate_parent_pid == parent_pid && seen.insert(*pid) {
+                descendants.push((*pid, depth + 1));
+                pending.push((*pid, depth + 1));
+            }
+        }
+    }
+
+    descendants.sort_by(|(left_pid, left_depth), (right_pid, right_depth)| {
+        right_depth
+            .cmp(left_depth)
+            .then_with(|| left_pid.cmp(right_pid))
+    });
+    descendants.into_iter().map(|(pid, _)| pid).collect()
+}
+
+#[cfg(not(windows))]
+fn owned_sidecar_descendants_from_ps(wrapper_pid: u32) -> Vec<u32> {
+    let output = std::process::Command::new("ps")
+        .args(["-axo", "pid=,ppid="])
+        .output();
+    let Ok(output) = output else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+
+    owned_sidecar_descendants(
+        &parse_process_parent_pairs(&String::from_utf8_lossy(&output.stdout)),
+        wrapper_pid,
+    )
+}
+
 fn kill_owned_sidecar(child: CommandChild) -> Result<(), String> {
     #[cfg(windows)]
     {
@@ -439,7 +491,29 @@ fn kill_owned_sidecar(child: CommandChild) -> Result<(), String> {
         }
     }
 
+    #[cfg(not(windows))]
+    for pid in owned_sidecar_descendants_from_ps(child.pid()) {
+        let _ = std::process::Command::new("kill")
+            .args(["-TERM", &pid.to_string()])
+            .status();
+    }
+
     child.kill().map_err(|error| error.to_string())
+}
+
+pub(crate) fn shutdown_owned_sidecar(state: &mut SidecarState) -> Result<(), String> {
+    if !state.owns_child {
+        return Ok(());
+    }
+
+    state.base_url = None;
+    state.health_url = None;
+    state.owns_child = false;
+
+    match state.child.take() {
+        Some(child) => kill_owned_sidecar(child),
+        None => Ok(()),
+    }
 }
 
 fn spawn_and_wait_for_sidecar(app: &tauri::AppHandle) -> Result<SidecarState, String> {
@@ -597,15 +671,11 @@ fn stop_sidecar(sidecar: tauri::State<'_, Sidecar>) -> Result<(), String> {
         return Err("Daemon is external".into());
     }
 
-    match guard.child.take() {
-        Some(child) if guard.owns_child => {
-            guard.base_url = None;
-            guard.health_url = None;
-            guard.owns_child = false;
-            kill_owned_sidecar(child)
-        }
-        _ => Err("Sidecar is not running".into()),
+    if !guard.owns_child || guard.child.is_none() {
+        return Err("Sidecar is not running".into());
     }
+
+    shutdown_owned_sidecar(&mut guard)
 }
 
 #[tauri::command]
@@ -900,6 +970,53 @@ mod tests {
             windows_sidecar_kill_args(123),
             vec!["/PID", "123", "/T", "/F"]
         );
+    }
+
+    #[test]
+    fn parse_process_parent_pairs_reads_numeric_ps_lines() {
+        assert_eq!(
+            parse_process_parent_pairs("  42     1\n  43    42\n"),
+            vec![(42, 1), (43, 42)]
+        );
+    }
+
+    #[test]
+    fn parse_process_parent_pairs_ignores_malformed_ps_lines() {
+        assert_eq!(
+            parse_process_parent_pairs("42 1\ninvalid\n43 nope\n0 1\n44 1 extra\n"),
+            vec![(42, 1)]
+        );
+    }
+
+    #[test]
+    fn owned_sidecar_descendants_are_recursive_and_deepest_first() {
+        let descendants = owned_sidecar_descendants(
+            &[(40, 10), (41, 40), (42, 40), (43, 41), (44, 43), (90, 1)],
+            10,
+        );
+
+        assert_eq!(descendants, vec![44, 43, 41, 42, 40]);
+    }
+
+    #[test]
+    fn updater_shutdown_uses_shared_owned_sidecar_cleanup() {
+        let mut state = SidecarState {
+            child: None,
+            base_url: Some("http://127.0.0.1:8766".to_string()),
+            health_url: Some("http://127.0.0.1:8766/api/server/health".to_string()),
+            owns_child: true,
+        };
+
+        shutdown_owned_sidecar(&mut state).unwrap();
+
+        assert!(state.child.is_none());
+        assert!(state.base_url.is_none());
+        assert!(state.health_url.is_none());
+        assert!(!state.owns_child);
+
+        let updater_source = include_str!("updater.rs");
+        assert!(updater_source.contains("shutdown_owned_sidecar(&mut guard)"));
+        assert!(!updater_source.contains("child.kill()"));
     }
 
     #[test]

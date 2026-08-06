@@ -17,6 +17,16 @@ STATIC_DIR = Path(__file__).resolve().parents[1] / "tidal_dl" / "gui" / "static"
 REQUIRED_FILES = ["index.html", "favicon.ico", "routes.js", *GUI_JS_FILES, "style.css"]
 
 
+class TestPlaybackStatusAssets:
+    def test_credential_ready_status_uses_neutral_copy_and_style(self):
+        js = read_gui_js()
+        css = (STATIC_DIR / "style.css").read_text()
+
+        assert "credentials saved" in js
+        assert "_tidalStatusPresentation(data)" in js
+        assert ".connection-dot.neutral" in css
+
+
 class TestStaticAssetsExist:
     """Static files required by the GUI are present on disk."""
 
@@ -62,6 +72,17 @@ class TestStaticDirResolution:
 
 class TestAppJsFeatureMarkers:
     """app.js contains expected feature markers — catches stale bundle issues."""
+
+    def test_artist_gallery_eager_loads_first_six_covers_and_keeps_fallback(self):
+        js = read_gui_js()
+        gallery_source = js.split("async function renderArtistGallery(container, artistName) {")[1].split(
+            "// ---- LOCAL ALBUM DETAIL"
+        )[0]
+
+        assert "data.albums.forEach((album, index) => {" in gallery_source
+        assert "loading: index < 6 ? 'eager' : 'lazy'" in gallery_source
+        assert "img.onerror = function() {" in gallery_source
+        assert "artWrap.style.background = artGradient(album.name);" in gallery_source
 
     def test_has_csrf_token_handling(self):
         js = read_gui_js()

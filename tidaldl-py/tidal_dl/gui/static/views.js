@@ -1473,12 +1473,12 @@ function renderTrackRow(track, num, allTracks) {
   row.appendChild(textEl('div', formatTime(track.duration), 'track-time'));
 
   // Actions
-  const actions = h('div', { className: 'track-actions' + (track.is_local ? ' visible' : '') });
-  if (track.is_local) {
-    const dot = h('span', { className: 'local-dot' });
-    const tag = h('span', { className: 'local-tag' }, dot, ' local');
-    actions.appendChild(tag);
-  } else {
+  const actions = h('div', { className: 'track-actions visible' });
+  const sourceTag = h('span', {
+    className: 'source-tag ' + (track.is_local ? 'local-tag' : 'tidal-tag'),
+  }, track.is_local ? 'local' : 'tidal');
+  actions.appendChild(sourceTag);
+  if (!track.is_local) {
     const btn = h('button', { className: 'dl-btn', title: 'Download' });
     btn.appendChild(svgIcon(ICONS.download));
     btn.addEventListener('click', (e) => {
@@ -1661,12 +1661,12 @@ async function renderArtistGallery(container, artistName) {
     const titleRow = header.querySelector('.artist-gallery-title-row');
     if (titleRow) titleRow.appendChild(textEl('span', data.albums.length + ' albums', 'artist-gallery-count'));
 
-    data.albums.forEach(album => {
+    data.albums.forEach((album, index) => {
       const card = h('div', { className: 'album-card' });
 
       const artWrap = h('div', { className: 'album-card-art-wrap' });
       if (album.cover_url) {
-        const img = h('img', { className: 'album-card-art', src: album.cover_url, alt: '', loading: 'lazy' });
+        const img = h('img', { className: 'album-card-art', src: album.cover_url, alt: '', loading: index < 6 ? 'eager' : 'lazy' });
         img.onerror = function() {
           this.style.display = 'none';
           artWrap.style.background = artGradient(album.name);
@@ -2777,11 +2777,6 @@ async function loadLibrary(resultsArea, append) {
     const trackList = document.getElementById('library-tracks') ||
       resultsArea.querySelector('.tracks');
 
-    // Check if all tracks are local — hide redundant "local" tags
-    const allLocal = tracks.every(t => t.is_local);
-    if (allLocal) trackList.classList.add('all-local');
-    else trackList.classList.remove('all-local');
-
     tracks.forEach((track, i) => {
       track.local_path = track.path;
       trackList.appendChild(renderTrackRow(track, libraryOffset + i + 1, tracks));
@@ -2925,10 +2920,7 @@ async function loadLibraryArtistGrouped(resultsArea, query, append) {
     const countEl = resultsArea.querySelector('.results-count');
     if (countEl) countEl.textContent = groups.length + ' artists \u00b7 ' + (data.total || 0) + ' tracks';
 
-    // Check if all tracks are local
-    const allLocal = tracks.every(t => t.is_local);
-
-    const wrapper = h('div', { className: 'library-artist-groups' + (allLocal ? ' all-local' : '') });
+    const wrapper = h('div', { className: 'library-artist-groups' });
 
     let globalNum = 0;
     groups.forEach(g => {
@@ -2940,7 +2932,7 @@ async function loadLibraryArtistGrouped(resultsArea, query, append) {
       wrapper.appendChild(header);
 
       // Track list for this group
-      const trackList = h('div', { className: 'tracks' + (allLocal ? ' all-local' : '') });
+      const trackList = h('div', { className: 'tracks' });
       g.tracks.forEach(t => {
         globalNum++;
         trackList.appendChild(renderTrackRow(t, globalNum, tracks));
@@ -4060,7 +4052,7 @@ function renderSettings(container) {
 }
 
 function _authStateCanReset(authState) {
-  return ['connected', 'expired', 'unavailable'].includes(authState);
+  return ['connected', 'credentials_ready', 'expired', 'unavailable'].includes(authState);
 }
 
 async function _resetTidalConnection(container) {
@@ -4068,6 +4060,7 @@ async function _resetTidalConnection(container) {
 
   try {
     await api('/auth/reset', { method: 'POST' });
+    _setRemotePlaybackUnavailable(false);
     if (_loginPoll) {
       clearInterval(_loginPoll);
       _loginPoll = null;
@@ -4089,17 +4082,15 @@ async function loadAuthStatus(container) {
     while (container.firstChild) container.removeChild(container.firstChild);
     container.appendChild(textEl('div', 'Tidal Account', 'settings-section-header'));
     const row = h('div', { className: 'connection', style: { padding: '0 0 16px', gap: '12px' } });
+    const presentation = _tidalStatusPresentation(data);
     if (data.logged_in) {
-      const dot = h('span', { className: 'connection-dot' });
+      const dot = h('span', { className: 'connection-dot' + (presentation.dot ? ' ' + presentation.dot : '') });
       row.appendChild(dot);
-      row.appendChild(document.createTextNode('Connected' + (data.username ? ' as ' + data.username : '')));
+      row.appendChild(document.createTextNode(presentation.label));
     } else {
-      const dot = h('span', { className: 'connection-dot disconnected' });
-      const statusText = data.auth_state === 'expired'
-        ? 'Tidal connection expired'
-        : data.auth_state === 'unavailable' ? 'Tidal connection unavailable' : 'Not logged in to Tidal';
+      const dot = h('span', { className: 'connection-dot' + (presentation.dot ? ' ' + presentation.dot : '') });
       row.appendChild(dot);
-      row.appendChild(document.createTextNode(statusText));
+      row.appendChild(document.createTextNode(presentation.label));
       const loginBtn = textEl('button', 'Log in to Tidal', 'banner-action');
       loginBtn.addEventListener('click', () => { triggerLogin(); });
       row.appendChild(loginBtn);

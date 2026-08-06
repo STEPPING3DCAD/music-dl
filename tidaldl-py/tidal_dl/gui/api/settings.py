@@ -163,7 +163,7 @@ def _local_auth_status(tidal: Tidal) -> dict:
 
     user = getattr(tidal.session, "user", None)
     username = getattr(user, "name", "") or ""
-    return {"logged_in": True, "username": username, "auth_state": "connected"}
+    return {"logged_in": True, "username": username, "auth_state": "credentials_ready"}
 
 
 _login_lock = threading.Lock()
