@@ -7,6 +7,7 @@ PYINSTALLER_SPEC="$ROOT/tidaldl-py/build/pyinstaller/music-dl-server.spec"
 CONTRIBUTING="$ROOT/CONTRIBUTING.md"
 README="$ROOT/README.md"
 INSTALL_DOC="$ROOT/docs/release/install-instructions.md"
+GUI_JS_HELPER="$ROOT/tidaldl-py/tests/gui_js_source.py"
 
 [ -f "$WORKFLOW" ] || {
   echo "missing workflow: $WORKFLOW"
@@ -29,6 +30,7 @@ pyinstaller_spec_contents="$(<"$PYINSTALLER_SPEC")"
 contributing_contents="$(<"$CONTRIBUTING")"
 readme_contents="$(<"$README")"
 install_doc_contents="$(<"$INSTALL_DOC")"
+gui_js_helper_contents="$(<"$GUI_JS_HELPER")"
 
 assert_contains "$workflow_contents" "macos-14" "stable workflow builds macOS on arm64 runner"
 assert_contains "$workflow_contents" "--bundles app,dmg" "stable workflow creates macOS updater archive and DMG"
@@ -37,7 +39,8 @@ assert_contains "$workflow_contents" "*.app.tar.gz.sig" "stable workflow uploads
 assert_contains "$workflow_contents" "*.dmg" "stable workflow uploads macOS DMG"
 assert_contains "$workflow_contents" "*.msi.sig" "stable workflow preserves Windows updater signature"
 assert_contains "$workflow_contents" "scripts/edge_channel.py manifest" "stable workflow generates multi-platform latest.json"
-assert_contains "$workflow_contents" "read_text(encoding='utf-8')" "stable workflow reads static assets as UTF-8"
+assert_contains "$workflow_contents" "tests/test_static_assets.py" "stable workflow runs shared static-asset tests"
+assert_contains "$gui_js_helper_contents" 'read_text(encoding="utf-8")' "shared GUI reader uses UTF-8"
 assert_contains "$pyinstaller_spec_contents" "apps\", \"discord-bot" "PyInstaller spec locates Discord bot sources"
 assert_contains "$pyinstaller_spec_contents" "\"discord-bot\"" "PyInstaller spec bundles Discord bot sources"
 
