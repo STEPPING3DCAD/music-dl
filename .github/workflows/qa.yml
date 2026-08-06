@@ -186,6 +186,8 @@ jobs:
         continue-on-error: true
         run: |
           set -euo pipefail
+          uv run --project tidaldl-py --extra test python -m pytest \
+            tests/test_documentation.py -q
           bash tests/test_edge_installers.sh
           bash tests/test_edge_workflow.sh
           bash tests/test_one_line_install_docs.sh

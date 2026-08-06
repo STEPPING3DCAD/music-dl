@@ -51,13 +51,14 @@ Open the GUI's DJAI view to save the bot config and start, restart, or shut
 down the bot service from the browser. When the bot starts, it posts or
 refreshes one DJAI remote panel in the allowed Discord channel so the allowed
 user can search, pick playlists, control playback, and repeat playlists without
-copying Tidal IDs. Terminal onboarding remains available:
+copying Tidal IDs. The compatibility flag only prints a reminder that setup
+stays in the GUI:
 
 ```shell
 music-dl gui --setup-bot
 ```
 
-See [`docs/bot-onboarding.md`](docs/bot-onboarding.md) for the wizard flow
+See [`docs/bot-onboarding.md`](docs/bot-onboarding.md) for the GUI setup flow
 and [`../apps/discord-bot/README.md`](../apps/discord-bot/README.md) for the
 bot itself.
 

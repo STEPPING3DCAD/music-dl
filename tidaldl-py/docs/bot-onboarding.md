@@ -12,8 +12,9 @@ the **Bot Control** API (`/bot-control/*`).
 2. **Single authoritative path for every file.** The GUI and the
    backend both resolve the same env file and shared-token file, so
    there is no way for them to disagree on where state lives.
-3. **Atomic commit.** Both files land or neither does. Configuration
-   failure never leaves a half-written config on disk.
+3. **Private per-file writes.** Input is validated before persistence, and
+   each config file is replaced atomically with mode `0600`. The two files
+   are not committed as one filesystem transaction.
 
 ## Entry points
 
@@ -116,7 +117,7 @@ sequenceDiagram
     G->>FS: write discord-bot.env (0600, atomic, contains MUSIC_DL_BOT_TOKEN)
     BOT->>FS: load getBotEnvPath() env file on startup
     BOT->>B: POST /api/bot/* with Authorization: Bearer <token>
-    B->>B: resolve_bot_shared_token()
+    B->>B: resolve_bot_shared_token() for this request
     alt env MUSIC_DL_BOT_TOKEN non-empty
       B-->>B: use env (ENV source)
     else shared-token file non-empty
@@ -160,14 +161,15 @@ The desktop **Deploy Discord Bot** control launches `bun src/boot.ts`
 directly from `discord-bot-runtime/` so the recorded PID belongs to the
 long-running bot process.
 
-### Rotating the shared token
+### Changing the shared token
 
-A shared-token rotation happens only when the user explicitly chooses
-to rotate in the GUI. The backend resolves the token **once at
-startup** (via `resolve_bot_shared_token` → `bot_token_source`) —
-there is no reload hook. After a rotation you must **restart
-`music-dl gui`** for the new token to take effect, or every
-authenticated bot request will return `401`.
+The GUI creates a shared token when none exists and reuses it on later saves;
+there is no separate Rotate control. The backend resolves the environment or
+token-file value for each authenticated bot request. The bot loads
+`discord-bot.env` only when its process starts, so restart the bot from the
+DJAI panel after manually recreating the shared token. If the backend uses the
+`MUSIC_DL_BOT_TOKEN` environment override, restart `music-dl gui` after
+changing that process environment.
 
 ## Logging safety
 
@@ -182,12 +184,15 @@ authenticated bot request will return `401`.
 ```
 <config-dir>/
 ├── discord-bot.env      ← 7 required vars, 0600
-└── bot-shared-token     ← 32 random bytes hex, 0600
+└── bot-shared-token     ← URL-safe token generated from 32 random bytes, 0600
 ```
 
 Where `<config-dir>` resolves to the first non-empty of
 `$MUSIC_DL_CONFIG_DIR`, `$XDG_CONFIG_HOME/music-dl`,
 `$HOME/.config/music-dl`.
+
+Deploying the bot can also provision `discord-bot-runtime/` and creates
+`discord-bot.pid` while the managed process is running.
 
 ## Related
 

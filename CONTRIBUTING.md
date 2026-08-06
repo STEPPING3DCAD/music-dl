@@ -6,7 +6,7 @@
 git clone git@github.com:alfdav/music-dl.git
 cd music-dl/tidaldl-py
 uv sync
-music-dl gui          # launches at http://localhost:8765
+uv run music-dl gui   # launches at http://localhost:8765
 ```
 
 ## Branch Conventions
@@ -38,16 +38,16 @@ merge decision yet.
 
 ### Python
 
-- **Python 3.12+** — use modern syntax (`match`, `type X = ...`, `|` unions)
+- **Python 3.12 or 3.13** — use modern syntax (`match`, `type X = ...`, `|` unions)
 - **uv** over pip — always
-- **No frameworks for the frontend** — vanilla JS, single `app.js` file
-- **Singletons** — `Settings()`, `Tidal()`, `LibraryDB()` are shared across CLI and GUI
+- **No frameworks for the frontend** — vanilla JS split across `api.js`, `views.js`, `player.js`, and `routes.js`
+- **Shared configuration** — `Settings()` and `Tidal()` are singletons; each `LibraryDB()` instance owns its connection
 - **Path validation** — any endpoint that touches the filesystem must use `validate_audio_path()` or equivalent
 
 ### Frontend
 
 - **bun** over npm — always
-- **No build step** — `app.js`, `style.css`, and `index.html` are served directly
+- **No build step** — split JavaScript, `style.css`, and `index.html` are served directly
 - **No Web Audio API** — the `<audio>` element plays files from source, untouched. Quality is non-negotiable.
 - **CSS variables** for theming — keep the tracked [design system](tidaldl-py/docs/design-system.md) and `style.css` aligned
 
@@ -131,7 +131,7 @@ Use `bump minor`, `bump major`, or `set X.Y.Z` when needed. The helper updates P
 ## Security
 
 - Server binds `127.0.0.1` by default. `0.0.0.0` only via `MUSIC_DL_BIND_ALL=1`.
-- CSRF token required for POST/PUT/DELETE.
+- CSRF token required for POST/PATCH/PUT/DELETE.
 - Path traversal is blocked: `resolve(strict=True)` + `is_relative_to()` + extension whitelist.
 - Never hardcode secrets. Never log tokens.
 - Docker runs as non-root (UID 1000).

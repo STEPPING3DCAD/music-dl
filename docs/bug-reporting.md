@@ -68,7 +68,7 @@ Windows PowerShell:
 ```powershell
 music-dl --version
 [System.Environment]::OSVersion.VersionString
-Get-ChildItem "$env:APPDATA\music-dl" -Force -ErrorAction SilentlyContinue
+Get-ChildItem "$HOME\.config\music-dl" -Force -ErrorAction SilentlyContinue
 ```
 
 These commands list file names and system version information. Review output

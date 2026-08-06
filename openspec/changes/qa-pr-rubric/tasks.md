@@ -643,11 +643,19 @@ uv build --project tidaldl-py
 
 - [x] 7.8 Confirm `git status --short` contains only known user-owned untracked files or intended implementation changes before publishing.
 
+## 7A. Repair documentation drift before merge
+
+- [x] 7A.1 Merge current `origin/master` into the QA branch and audit the combined tree rather than the stale PR merge base.
+- [x] 7A.2 Restore the tracked-Markdown local-link guard and add focused assertions for retired `DESIGN.md`, `app.js`, and terminal bot-onboarding guidance.
+- [x] 7A.3 Repair public, contributor, backend, bot, design-system, bug-reporting, and QA rollout documentation against current source, configuration, tests, and GitHub state.
+- [x] 7A.4 Replace the obsolete stable-workflow asset assertion with the current split-bundle test contract, then wire the tracked-doc guard into `qa`.
+- [x] 7A.5 Run documentation guards, installer/release contracts, focused QA tests, Ruff, OpenSpec validation, and final diff review before publishing.
+
 ## 8. Calibrate on five PRs, then enforce
 
 Do not execute this group in the initial implementation session. Five completed GitHub Actions runs and human approval are required.
 
-- [ ] 8.1 Publish advisory workflow through normal SSH Git workflow and open a PR.
+- [x] 8.1 Publish advisory workflow through normal SSH Git workflow and open PR [#112](https://github.com/alfdav/music-dl/pull/112).
 - [ ] 8.2 Re-run the native GitHub secret-scanning/push-protection check from Step 5.9, then configure protected `qa-live` environment with required reviewer. Add secrets only through GitHub environment secret controls; never copy them into repository files, commands, logs, or task notes.
 - [ ] 8.3 Record five representative advisory runs below. Every row requires a GitHub run URL, score, maximum deterministic job seconds, and three performance p95 values.
 - [ ] 8.4 Confirm all five runs finish with every deterministic job at or below 10 minutes. Fix gate infrastructure before proceeding if any healthy PR is blocked.
@@ -667,3 +675,7 @@ Do not execute this group in the initial implementation session. Five completed 
 | 3 |  |  |  |  |  |  |  |
 | 4 |  |  |  |  |  |  |  |
 | 5 |  |  |  |  |  |  |  |
+
+PR #112's initial green run used an older `master` merge base. It is not a
+calibration row; record a fresh run only after the branch is synchronized and
+the combined-tree documentation contracts pass.

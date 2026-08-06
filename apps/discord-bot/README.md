@@ -219,8 +219,10 @@ Discord gateway, a real filesystem, or the real user config directory.
   `@snazzah/davey` dependencies are present.
 - **Backend returns `401` to every bot request** — the bot and backend
   are using different shared tokens. `MUSIC_DL_BOT_TOKEN` takes
-  precedence over the shared-token file; unset it or restart
-  `music-dl gui` after rotating the token in the GUI.
+  precedence over the shared-token file. After manually recreating the token
+  file, restart the Discord bot from the DJAI panel so it reloads
+  `discord-bot.env`. Restart `music-dl gui` only when changing its
+  `MUSIC_DL_BOT_TOKEN` process environment.
 
 ## Related docs
 

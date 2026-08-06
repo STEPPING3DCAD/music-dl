@@ -1,7 +1,7 @@
-# music-dl Backend Reference
+# music-dl Backend Orientation
 
-> Single source of truth for backend architecture. Every module, pattern, and data flow lives here.
-> If it's not in this document, it's not a decision — it's a bug.
+> Start here for backend entry points and invariants. Source and tests remain
+> authoritative for exhaustive modules, routes, and schema details.
 
 ## 1. System Overview
 
@@ -14,18 +14,20 @@
        └────────┬───────────┘                     │
                 │                                 │
         ┌───────▼────────┐               ┌────────▼────────┐
-        │  config.py     │               │  download.py    │
+        │  config.py     │               │  download/      │
         │  Settings()    │◄──────────────│  Download class │
         │  Tidal()       │               └────────┬────────┘
         └───────┬────────┘                        │
                 │                          ┌──────▼──────┐
         ┌───────▼────────┐                 │  mutagen    │
-        │  library_db.py │                 │  (tagging)  │
+        │ library_db/    │                 │  (tagging)  │
         │  SQLite + WAL  │                 └─────────────┘
         └────────────────┘
 ```
 
-**Three entry points, one shared core.** CLI and GUI both use the same `Settings`, `Tidal`, and `LibraryDB` singletons. The download pipeline is identical regardless of entry point.
+**Two local entry points, one shared core.** CLI and GUI share `Settings` and
+`Tidal` singleton state. Each `LibraryDB` instance owns one SQLite connection.
+The optional Discord bot calls the GUI API instead of importing backend state.
 
 ---
 
@@ -35,7 +37,7 @@
 |------|---------|
 | `cli.py` | Typer CLI — subcommands: `gui`, `dl`, `cfg`, `login`, `logout`, `sync`, `import`, `isrc-tag`, `source`, `scan`, `dl_fav` |
 | `config.py` | Singleton config: `Settings`, `Tidal`, `HandlingApp`. Token management, key rotation |
-| `download.py` | Download orchestrator: stream fetch → segment merge → decrypt → tag → register |
+| `download/` | Download pipeline: stream fetch → segment merge → decrypt → tag → register |
 | `api.py` | Authenticated tidalapi client key handling |
 | `dash.py` | DASH manifest parser for `dash+xml` stream manifests |
 | `hifi_api.py` | Legacy stream-source client retained for compatibility; tracker discovery is cached for 60 seconds, status checks are passive, requests are serialized, and each host is tried once per operation |
@@ -43,26 +45,22 @@
 | `constants.py` | Enums (`DownloadSource`, `MediaType`), quality maps, chunk sizes |
 | `gui/__init__.py` | FastAPI app factory: middleware stack, static files, CSRF injection |
 | `gui/daemon.py` | Local daemon metadata, port selection, stale metadata cleanup, structured readiness |
-| `gui/server.py` | Uvicorn launcher. Binds `127.0.0.1` only |
+| `gui/server.py` | Uvicorn launcher. Defaults to `127.0.0.1`; Docker sets `MUSIC_DL_BIND_ALL=1` for container reachability |
 | `gui/security.py` | CSRF, host validation, path validation, stream URL validation, bot bearer auth, signed bot stream tokens |
-| `gui/api/` | API routers: home, search, library, downloads, playlists, settings, setup, duplicates, upgrade, albums, playback, bot |
+| `gui/api/` | API routers. Inspect `gui/api/__init__.py` or `/api/docs` for the current complete surface |
 | `gui/bot_onboarding.py` | Canonical Discord bot config paths and shared-token discovery |
-| `gui/bot_first_run.py` | `music-dl gui --setup-bot` dispatch and first-run hint |
 | `gui/services/` | Persisted download/upgrade job lifecycle primitives and worker service |
-| `helper/library_db.py` | SQLite wrapper: schema, migrations, CRUD, WAL mode |
+| `helper/library_db/` | SQLite connection lifecycle, schema migrations, and focused query mixins |
 | `helper/path.py` | Config paths, download path templates, filename sanitization |
 | `helper/cache.py` | `TTLCache` — thread-safe in-memory cache with TTL expiry |
 | `helper/library_scanner.py` | Walk directories, extract ISRC from audio tags via mutagen |
 | `helper/checkpoint.py` | `DownloadCheckpoint` — resume interrupted downloads |
-| `helper/decorator.py` | `SingletonMeta` metaclass |
 | `helper/tidal.py` | Tidal URL parsing, media instantiation, name formatting |
 | `helper/camelot.py` | Camelot wheel notation helpers for harmonic mixing |
 | `helper/cli.py` | Helper functions for CLI operations (formatting, dates) |
 | `helper/decryption.py` | AES decryption for encrypted TIDAL streams |
 | `helper/exceptions.py` | Custom exception classes (`LoginError`, etc.) |
-| `helper/isrc_index.py` | Persistent thread-safe ISRC-to-path index for deduplication |
 | `helper/playlist_import.py` | Cross-platform playlist import (CSV/JSON) |
-| `helper/wrapper.py` | Logger wrapper with optional debug traceback output |
 | `model/cfg.py` | `ModelSettings`, `ModelToken` dataclasses |
 | `model/downloader.py` | Download-related data models and state |
 | `model/meta.py` | Metadata dataclasses for tag writing |
@@ -71,7 +69,8 @@
 
 ## 3. Singletons
 
-Three singletons via `SingletonMeta`. Call the class — you always get the same instance.
+Three process-wide objects implement their own locked `__new__` lifecycle. Call
+the class and you get the same instance.
 
 ### Settings()
 
@@ -214,7 +213,8 @@ TIDAL_CDN_HOSTS  = {"audio.tidal.com", "sp-ad-cf.audio.tidal.com", ...}
 
 ## 7. Database Schema
 
-SQLite at `~/.config/music-dl/library.db`. WAL mode. 5-second busy timeout.
+SQLite at `~/.config/music-dl/library.db`. Schema version 5, WAL mode, and a
+5-second busy timeout.
 
 ### Tables
 
@@ -234,6 +234,9 @@ SQLite at `~/.config/music-dl/library.db`. WAL mode. 5-second busy timeout.
 | `play_count` | INTEGER | Default 0 |
 | `last_played` | INTEGER | Unix timestamp |
 | `genre` | TEXT | |
+| `waveform` | TEXT | Cached standard-resolution waveform JSON |
+| `waveform_hires` | TEXT | Cached high-resolution waveform JSON |
+| `art_available` | INTEGER | Local artwork availability; `NULL` until checked |
 | `scanned_at` | INTEGER | Unix timestamp |
 
 Indexes: `idx_scanned_status`, `idx_scanned_isrc`
@@ -311,6 +314,9 @@ Normal downloads, playlist sync, bot download requests, and upgrade requests all
 | `artist` | TEXT | |
 | `title` | TEXT | |
 | `album` | TEXT | |
+| `isrc` | TEXT | Recording identifier |
+| `cover_url` | TEXT | Artwork URL |
+| `favorited_at` | INTEGER NOT NULL | Unix timestamp |
 
 **Caches:**
 
@@ -327,14 +333,16 @@ Additive only. Runs on every `open()`:
 
 1. **v1 → v2**: Add `album`, `duration`, `quality`, `format` columns to `scanned`
 2. **v2 → v3**: Add `play_count`, `last_played`, `genre` to `scanned`
-3. **Late additions**: `cover_url`, `quality` columns on `download_history`
-4. **Download jobs**: Add `download_jobs` table and job lookup indexes
+3. **v3 → v4**: Add `waveform` and `waveform_hires` to `scanned`
+4. **v4 → v5**: Add `art_available` to `scanned`
+5. **Late additions**: Add `cover_url` and `quality` to `download_history`
+6. **Download jobs and favorites**: Create their tables and lookup indexes when absent
 
 Pattern: check `PRAGMA table_info()`, `ALTER TABLE ADD COLUMN` if missing. Never destructive.
 
 ### Connection Patterns
 
-**LibraryDB class** (`helper/library_db.py`):
+**LibraryDB class** (`helper/library_db/`):
 ```python
 db = LibraryDB(path)
 db.open()                    # PRAGMA journal_mode=WAL, busy_timeout=5000
@@ -430,7 +438,8 @@ migration, but it is not a public product path and should not be advertised.
 
 ## 9. API Routes
 
-All routes prefixed `/api`.
+All API routes are prefixed `/api`. This section lists primary product routes;
+use FastAPI's `/api/docs` or `gui/api/__init__.py` for the complete current set.
 
 ### Core
 
@@ -483,12 +492,14 @@ than activating stale hard-coded fallback hosts.
 | Method | Path | Purpose |
 |--------|------|---------|
 | `GET` | `/playlists` | Tidal playlists with local match info |
-| `GET` | `/albums/{id}` | Album detail with track list |
+| `GET` | `/albums/{album_id}/tracks` | Album detail with track list |
+| `GET` | `/albums/lookup` | Resolve album metadata by artist and album name |
 | `GET` | `/home` | Dashboard stats (top artists, genres, play counts) |
 | `GET` | `/duplicates/preview` | Find ISRC-based duplicates |
 | `POST` | `/duplicates/clean` | Remove duplicate files |
 | `GET` | `/upgrade/scan` | Find tracks upgradable to higher quality |
 | `POST` | `/upgrade/start` | Queue upgrade jobs through the persisted job service |
+| `GET` | `/lyrics/local` | Read sidecar or embedded lyrics for an allowed local file |
 
 ### Bot
 
@@ -513,7 +524,8 @@ than activating stale hard-coded fallback hosts.
 | `discord-bot.env` | `$MUSIC_DL_BOT_ENV_PATH` or config dir | `~/.config/music-dl/discord-bot.env` |
 | `bot-shared-token` | `$MUSIC_DL_BOT_TOKEN_PATH` or config dir | `~/.config/music-dl/bot-shared-token` |
 
-`MUSIC_DL_CONFIG_DIR` is checked first in `path_config_base()`. This is how Docker overrides config location to `/config`.
+`MUSIC_DL_CONFIG_DIR` is checked first in `path_config_base()`. Docker sets it
+to `/home/musicdl/.config/music-dl`.
 
 ### BaseConfig Pattern
 
@@ -536,7 +548,7 @@ class BaseConfig(Generic[ConfigModelT]):
 | `quality_audio` | str | `HI_RES_LOSSLESS` | Preferred quality |
 | `skip_existing` | bool | `true` | Skip if file exists at path |
 | `skip_duplicate_isrc` | bool | `true` | Skip if ISRC already in library |
-| `downloads_simultaneous_per_track_max` | int | `3` | Parallel segment downloads |
+| `downloads_simultaneous_per_track_max` | int | `20` | Parallel segment downloads |
 | `format_album` | str | template | Download path template for albums |
 | `format_track` | str | template | Download path template for tracks |
 
@@ -605,7 +617,9 @@ except (json.JSONDecodeError, KeyError):
 2. **SQLite is the cache, not the source.** The filesystem is truth. The DB is a fast index over it. If the DB is lost, a scan rebuilds it.
 3. **Downloads never fail silently.** Every error broadcasts via SSE and logs. DB persistence failure must not prevent the broadcast.
 4. **Token refresh is opportunistic.** Middleware checks local expiry before explicit Tidal-facing requests. The browser does not run a background keepalive, and failure is not fatal — the request will surface the real error.
-5. **Localhost only.** Server binds `127.0.0.1`. Host validation rejects everything else. No exceptions.
+5. **Localhost request boundary.** Browser mode binds `127.0.0.1`. Docker binds
+   the container listener to `0.0.0.0`, but Host and CORS validation still
+   accept localhost origins only; direct LAN use is unsupported.
 6. **Migrations are additive.** `ALTER TABLE ADD COLUMN`. Never drop, rename, or restructure. Schema grows forward.
 7. **Config corruption is recoverable.** `.bak` fallback, tolerant deserialization, defaults for missing fields.
 8. **NAS mounts are unreliable.** Reconnect on staleness, run I/O off the event loop, use WAL + busy timeout.

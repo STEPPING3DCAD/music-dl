@@ -348,6 +348,7 @@ def test_bot_contract_and_performance_jobs_run_required_checks():
         "tests/test_edge_workflow.sh",
         "tests/test_one_line_install_docs.sh",
         "tests/test_stable_release_workflow.sh",
+        "tests/test_documentation.py",
     ):
         assert path in contracts
     assert "git diff --check" in contracts

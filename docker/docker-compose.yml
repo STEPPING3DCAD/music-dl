@@ -7,7 +7,7 @@ services:
     image: music-dl
     ports:
       # Localhost only by default — safe on shared networks.
-      # To expose on LAN: MUSIC_DL_HOST=0.0.0.0 docker compose up
+      # Keep localhost: application Host/CORS validation does not support direct LAN use.
       - "${MUSIC_DL_HOST:-127.0.0.1}:${MUSIC_DL_PORT:-8765}:8765"
     volumes:
       - ${MUSIC_DL_CONFIG:-~/.config/music-dl}:/home/musicdl/.config/music-dl
