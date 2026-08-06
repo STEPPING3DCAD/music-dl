@@ -6,7 +6,7 @@
 git clone git@github.com:alfdav/music-dl.git
 cd music-dl/tidaldl-py
 uv sync
-music-dl gui          # launches at http://localhost:8765
+uv run music-dl gui   # launches at http://localhost:8765
 ```
 
 ## Branch Conventions
@@ -23,25 +23,33 @@ Create a branch, make your changes, open a PR against `master`.
 1. One logical change per PR. Split unrelated work into separate PRs.
 2. Write a clear title: `fix: ...`, `feat: ...`, `docs: ...`, `security: ...`
 3. The PR description should explain *what* and *why*. Code explains *how*.
-4. CI must pass (gui-smoke tests run automatically on PRs).
+4. Review the final `qa` summary:
+   - 90–100: ready
+   - 80–89: ready with visible debt
+   - Below 80: would be blocked after enforcement
+   - Any hard blocker: would be blocked after enforcement
 5. If you touch the GUI, test in a browser. If you touch Docker, build and run the image.
+
+The `qa` workflow is advisory for its first five representative PRs. During
+this calibration period it reports what would block, but does not enforce the
+merge decision yet.
 
 ## Code Conventions
 
 ### Python
 
-- **Python 3.12+** — use modern syntax (`match`, `type X = ...`, `|` unions)
+- **Python 3.12 or 3.13** — use modern syntax (`match`, `type X = ...`, `|` unions)
 - **uv** over pip — always
-- **No frameworks for the frontend** — vanilla JS, single `app.js` file
-- **Singletons** — `Settings()`, `Tidal()`, `LibraryDB()` are shared across CLI and GUI
+- **No frameworks for the frontend** — vanilla JS split across `api.js`, `views.js`, `player.js`, and `routes.js`
+- **Shared configuration** — `Settings()` and `Tidal()` are singletons; each `LibraryDB()` instance owns its connection
 - **Path validation** — any endpoint that touches the filesystem must use `validate_audio_path()` or equivalent
 
 ### Frontend
 
 - **bun** over npm — always
-- **No build step** — `app.js`, `style.css`, and `index.html` are served directly
+- **No build step** — split JavaScript, `style.css`, and `index.html` are served directly
 - **No Web Audio API** — the `<audio>` element plays files from source, untouched. Quality is non-negotiable.
-- **CSS variables** for theming — keep [DESIGN.md](DESIGN.md), [design-system.md](tidaldl-py/docs/design-system.md), and `style.css` aligned
+- **CSS variables** for theming — keep the tracked [design system](tidaldl-py/docs/design-system.md) and `style.css` aligned
 
 ### Packaging
 
@@ -123,7 +131,7 @@ Use `bump minor`, `bump major`, or `set X.Y.Z` when needed. The helper updates P
 ## Security
 
 - Server binds `127.0.0.1` by default. `0.0.0.0` only via `MUSIC_DL_BIND_ALL=1`.
-- CSRF token required for POST/PUT/DELETE.
+- CSRF token required for POST/PATCH/PUT/DELETE.
 - Path traversal is blocked: `resolve(strict=True)` + `is_relative_to()` + extension whitelist.
 - Never hardcode secrets. Never log tokens.
 - Docker runs as non-root (UID 1000).

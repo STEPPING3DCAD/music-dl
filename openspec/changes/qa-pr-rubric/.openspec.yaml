@@ -1,0 +1,4 @@
+schema: spec-driven
+created: 2026-08-05
+goal: PRs score at least 80/100, clear all critical gates, and return
+  deterministic feedback within 10 minutes.

@@ -67,7 +67,8 @@
 
 - Columns: `repeat(var(--cols), 1fr)` — cols set dynamically via ResizeObserver: `Math.max(2, Math.min(6, Math.floor(width / 280)))`
 - Gap: `12px`
-- Density classes on `.home-wrap`: `home-sparse` (≤4), `home-moderate` (5-6), `home-dense` (7+)
+- Compact mode: `density-compact` is applied to `.home-grid` at two columns
+  and hides lower-priority tiered tiles
 
 ### Tile Size Classes
 
@@ -278,7 +279,7 @@ padding: 0;
 - Background: `rgba(22, 20, 19, 0.95)` + blur(40px)
 
 ### Track List
-- Grid: `40px 44px 1fr 1fr 72px 52px 52px 40px 32px`
+- Grid: `40px 44px 1fr 1fr 72px 52px 44px 52px 40px 32px`
 - Playing state: `--accent-glow` bg, gold left bar, accent track name
 - Min height: 44px per row
 

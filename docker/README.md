@@ -37,15 +37,12 @@ MUSIC_DL_DOWNLOADS=/mnt/nas/music \
   docker compose -f docker/docker-compose.yml up gui -d
 ```
 
-### Exposing on LAN
+### LAN access
 
-By default, the GUI is only reachable from `localhost`. To access it from other devices on your network:
-
-```shell
-MUSIC_DL_HOST=0.0.0.0 docker compose -f docker/docker-compose.yml up gui -d
-```
-
-> **Security note:** There is no authentication. Anyone on your network can browse your library and stream your music. Only do this on a trusted network.
+Direct LAN access is not supported. `MUSIC_DL_HOST=0.0.0.0` can publish the
+Docker port on every host interface, but application Host and CORS validation
+still accept localhost origins only. Keep the default bind unless you add and
+validate an authenticated reverse-proxy deployment.
 
 ### Logs, restart, stop
 
@@ -125,7 +122,7 @@ Optional:
 
 | Variable | Default | What it does |
 | --- | --- | --- |
-| `MUSIC_DL_HOST` | `127.0.0.1` | Host-side bind address. Set to `0.0.0.0` for LAN access |
+| `MUSIC_DL_HOST` | `127.0.0.1` | Host-side published address; changing it alone does not enable supported LAN access |
 | `MUSIC_DL_PORT` | `8765` | Host-side port |
 | `MUSIC_DL_CONFIG` | `~/.config/music-dl` | Config volume source path |
 | `MUSIC_DL_DOWNLOADS` | `~/Music` | Downloads volume source path |

@@ -4,7 +4,7 @@
   <a href="https://github.com/alfdav/music-dl/blob/master/LICENSE">
     <img src="https://img.shields.io/github/license/alfdav/music-dl.svg?style=flat-square" alt="License">
   </a>
-  <img src="https://img.shields.io/badge/python-3.12%2B-blue?style=flat-square" alt="Python 3.12+">
+  <img src="https://img.shields.io/badge/python-3.12--3.13-blue?style=flat-square" alt="Python 3.12–3.13">
 </div>
 
 <br>
@@ -32,11 +32,11 @@
     irm https://raw.githubusercontent.com/alfdav/music-dl/master/scripts/install-windows-local.ps1 | iex
 
   DEV SETUP:
-    cd tidaldl-py && uv sync && music-dl gui   # opens http://localhost:8765
+    cd tidaldl-py && uv sync && uv run music-dl gui   # opens http://localhost:8765
 
   DESIGN:
-    Read DESIGN.md before UI work. Keep DESIGN.md, tidaldl-py/docs/design-system.md,
-    and tidaldl-py/tidal_dl/gui/static/style.css aligned.
+    Read tidaldl-py/docs/design-system.md before UI work and keep it aligned
+    with tidaldl-py/tidal_dl/gui/static/style.css.
 
   Repository: https://github.com/alfdav/music-dl
   License: Apache-2.0
@@ -64,17 +64,17 @@ INTERNAL LATEST (macOS):
 INTERNAL LATEST (Windows 10/11):
   irm https://raw.githubusercontent.com/alfdav/music-dl/master/scripts/install-windows-local.ps1 | iex
 
-DEV:   cd tidaldl-py && uv sync && music-dl gui          # http://localhost:8765
+DEV:   cd tidaldl-py && uv sync && uv run music-dl gui   # http://localhost:8765
 TEST:  cd tidaldl-py && PYTHONNOUSERSITE=1 uv run --extra test python -m pytest
 BUILD: cd tidaldl-py && uv sync --extra build && bun install && bunx tauri build --bundles dmg
 
-STACK: Python 3.12+, FastAPI, vanilla JS, Tauri v2, Bun/discord.js for the optional bot.
+STACK: Python 3.12–3.13, FastAPI, vanilla JS, Tauri v2, Bun/discord.js for the optional bot.
 REPO:  monorepo — Python app under tidaldl-py/, Discord bot under apps/discord-bot/.
 
 KEY PATHS:
-  DESIGN.md                         — agent-readable design tokens and visual identity contract
-  tidaldl-py/docs/design-system.md  — detailed UI component/layout/animation rules
-  tidaldl-py/tidal_dl/gui/static/{app.js,style.css,index.html} — frontend (no framework)
+  tidaldl-py/docs/design-system.md  — design tokens, components, layout, and animation rules
+  tidaldl-py/tidal_dl/gui/static/{api.js,views.js,player.js,routes.js} — frontend logic
+  tidaldl-py/tidal_dl/gui/static/{style.css,index.html} — frontend styles and shell
   tidaldl-py/tidal_dl/gui/__init__.py    — FastAPI app factory
   tidaldl-py/tidal_dl/gui/api/           — all API routes
   tidaldl-py/tidal_dl/gui/security.py    — CSRF, path validation, host validation
@@ -83,7 +83,7 @@ KEY PATHS:
 
 RULES:
   - Audio: direct <audio src="..."> only. NO Web Audio API. Non-negotiable.
-  - Design: read DESIGN.md before UI work; keep it aligned with design-system.md and style.css.
+  - Design: read tidaldl-py/docs/design-system.md before UI work; keep it aligned with style.css.
   - Security: localhost-only, CSRF on writes, path validation on file ops.
   - Tooling: uv over pip, bun over npm.
 ```
@@ -212,7 +212,7 @@ bunx tauri build --bundles dmg
 
 ### CLI / uv
 
-Requires Python 3.12+ and [ffmpeg](https://ffmpeg.org/).
+Requires Python 3.12 or 3.13 and [ffmpeg](https://ffmpeg.org/).
 
 ```shell
 uv tool install --from git+https://github.com/alfdav/music-dl.git#subdirectory=tidaldl-py music-dl
@@ -272,7 +272,7 @@ music-dl import <file>          # import a playlist from CSV/JSON
 music-dl isrc-tag <path>        # write ISRC tags to local audio files
 music-dl scan add <PATH>        # add and scan a local library directory
 music-dl dl_fav tracks --since 2026-01-01  # download favorite tracks incrementally
-music-dl gui --setup-bot        # terminal fallback for Discord bot onboarding
+music-dl gui --setup-bot        # compatibility reminder; bot setup stays in the DJAI panel
 ```
 
 Run `music-dl --help` for the full list.
@@ -303,19 +303,18 @@ graph TD
     GUI["GUI · FastAPI<br/><code>gui/</code>"] --> Core
     Bot["Discord bot · Bun/discord.js<br/><code>apps/discord-bot</code>"] --> BotAPI["Bot API<br/><code>/api/bot/*</code>"]
     BotAPI --> Core
-    Core["config.py<br/>Settings · Tidal"] --> DB["library_db.py<br/>SQLite + WAL"]
-    Core --> DL["download.py<br/>Download class"]
+    Core["config.py<br/>Settings · Tidal"] --> DB["helper/library_db/<br/>SQLite + WAL"]
+    Core --> DL["download/<br/>Download pipeline"]
     Tidal["Tidal API<br/>tidalapi"] --> DL
     DL --> Tag["mutagen<br/>tagging"]
 ```
 
-CLI, GUI, and the optional bot share the same backend core. CLI and GUI use the same singletons (`Settings`, `Tidal`, `LibraryDB`). The Discord bot stays thin: slash commands, queue state, and Discord voice transport live in Bun; source resolution, playable URLs, downloads, and auth stay in `music-dl`. The `<audio>` element plays files directly from source — no Web Audio API, no processing.
+CLI, GUI, and the optional bot share the same backend core. CLI and GUI share the `Settings` and `Tidal` singletons; each `LibraryDB` instance owns its SQLite connection. The Discord bot stays thin: slash commands, queue state, and Discord voice transport live in Bun; source resolution, playable URLs, downloads, and auth stay in `music-dl`. The `<audio>` element plays files directly from source — no Web Audio API, no processing.
 
 For deep dives, see:
 
 - **[Backend Reference](tidaldl-py/docs/backend-guide.md)** — API routes, DB schema, download pipeline, middleware, security model
-- **[DESIGN.md](DESIGN.md)** — agent-readable design tokens and visual identity contract
-- **[Design System](tidaldl-py/docs/design-system.md)** — detailed UI component patterns, layout, and animation rules
+- **[Design System](tidaldl-py/docs/design-system.md)** — design tokens, visual identity, component patterns, layout, and animation rules
 - **[Docker Guide](docker/README.md)** — detailed Docker usage, mounts, CLI commands, headless/cron
 
 ## Environment Variables
@@ -324,7 +323,7 @@ For deep dives, see:
 | --- | --- | --- |
 | `MUSIC_DL_CONFIG_DIR` | `~/.config/music-dl` | Config/credentials directory |
 | `MUSIC_DL_BIND_ALL` | _(unset)_ | Set to `1` to bind server to `0.0.0.0` (Docker sets this automatically) |
-| `MUSIC_DL_HOST` | `127.0.0.1` | Docker compose host binding. Set to `0.0.0.0` for LAN access |
+| `MUSIC_DL_HOST` | `127.0.0.1` | Docker Compose host binding; changing it alone does not bypass localhost Host/CORS validation |
 | `MUSIC_DL_PORT` | `8765` | Docker compose port mapping |
 | `MUSIC_DL_CONFIG` | `~/.config/music-dl` | Docker compose config volume source |
 | `MUSIC_DL_DOWNLOADS` | `~/Music` | Docker compose downloads volume source |
@@ -340,7 +339,7 @@ For deep dives, see:
 git clone git@github.com:alfdav/music-dl.git
 cd music-dl/tidaldl-py
 uv sync
-music-dl gui
+uv run music-dl gui
 ```
 
 Run the Python test suite:
@@ -349,13 +348,25 @@ Run the Python test suite:
 PYTHONNOUSERSITE=1 uv run --extra test python -m pytest
 ```
 
-Run the Discord bot checks:
+Run the fast QA unit/contract, Ruff, and bot checks from the repository root:
 
-```shell
-cd apps/discord-bot
-bun test
-bun run typecheck
+```bash
+uv run --project tidaldl-py --extra test python -m pytest \
+  tests/test_qa_score.py tests/test_qa_performance.py \
+  tests/test_qa_live_smoke.py tests/test_qa_workflow.py -q
+uv run --project tidaldl-py ruff check --no-fix --select E9,F63,F7,F82 \
+  tidaldl-py/tidal_dl tidaldl-py/tests scripts tests
+cd apps/discord-bot && bun test && bun run typecheck
 ```
+
+CI also runs broader smoke, security, build, installer, performance,
+supply-chain, and affected-build checks.
+
+The workflow reserves the optional `qa-live` job for internal, same-repository,
+read-only runs. It MUST NOT be used until rollout Step 8.2 creates and
+configures the `qa-live` environment, required reviewer, and environment-scoped
+secrets. Fork pull requests never run it. Live-service latency is diagnostic
+and is not part of the scored deterministic performance check.
 
 Run the release smoke coverage from the repository root:
 
@@ -384,7 +395,7 @@ rejects non-SemVer stable versions such as `1.6.6.1` and requires an
 
 ### Building the Desktop App
 
-Prerequisites: [Rust](https://rustup.rs/), [Bun](https://bun.sh/), Python 3.12+, and platform-specific dependencies.
+Prerequisites: [Rust](https://rustup.rs/), [Bun](https://bun.sh/), Python 3.12 or 3.13, and platform-specific dependencies.
 
 **macOS:**
 ```shell
