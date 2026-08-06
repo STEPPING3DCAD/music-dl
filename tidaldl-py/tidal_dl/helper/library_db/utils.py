@@ -19,7 +19,7 @@ def _is_sqlite_corruption(exc: sqlite3.DatabaseError) -> bool:
 
 
 def _corrupt_backup_path(path: pathlib.Path) -> pathlib.Path:
-    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    stamp = datetime.datetime.now(datetime.UTC).strftime("%Y%m%d-%H%M%S")
     candidate = path.with_name(f"{path.name}.corrupt-{stamp}")
     index = 1
     while candidate.exists():
@@ -44,12 +44,18 @@ def _normalize_track_text(value: str | None) -> str:
     return (value or "").strip().casefold()
 
 
-def _local_quality_rank(quality: str | None, fmt: str | None) -> int:
-    if not quality:
-        return 0
-
-    if fmt and fmt.upper() in {"MP3", "AAC", "OGG", "M4A"}:
+def _local_quality_rank(
+    quality: str | None,
+    fmt: str | None,
+    codec: str | None = None,
+) -> int:
+    codec_family = (codec or "").casefold()
+    if codec_family in {"aac", "mp3", "ogg", "opus", "vorbis"}:
         return 1
+    if codec_family not in {"flac", "alac", "pcm"}:
+        return 0
+    if not quality:
+        return 2
 
     direct = {
         "LOW": 0,
@@ -92,7 +98,9 @@ def _album_track_key(row: dict) -> tuple[str, str]:
 def _album_track_preference(row: dict) -> tuple[int, int, int, str]:
     path = row.get("path") or ""
     return (
-        -_local_quality_rank(row.get("quality"), row.get("format")),
+        -_local_quality_rank(
+            row.get("quality"), row.get("format"), row.get("codec")
+        ),
         _path_suffix_rank(path),
         len(path),
         path,

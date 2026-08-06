@@ -9,10 +9,10 @@ from typing import Any
 
 import requests
 
+from tidal_dl.constants import QUALITY_STRING_TO_ENUM
 from tidal_dl.gui.services.job_events import JobEventHub
 from tidal_dl.gui.services.job_models import DownloadJob, JobKind, JobStatus, UpgradeJobInput
 from tidal_dl.gui.services.upgrade_jobs import (
-    QUALITY_STRING_TO_ENUM,
     cleanup_replaced_track_files,
     norm,
     resolve_tidal_album,
@@ -31,7 +31,8 @@ register_downloaded_track: Any = None
 def _download_dependencies() -> tuple[Any, Any, Any]:
     global Settings, Tidal, Download
     if Settings is None or Tidal is None:
-        from tidal_dl.config import Settings as _Settings, Tidal as _Tidal
+        from tidal_dl.config import Settings as _Settings
+        from tidal_dl.config import Tidal as _Tidal
 
         Settings = Settings or _Settings
         Tidal = Tidal or _Tidal
@@ -71,7 +72,7 @@ def scan_new_downloads(db, settings) -> None:
         path_str = str(file_path)
         if path_str in known:
             continue
-        meta = _read_metadata(file_path)
+        meta = _read_metadata(file_path, [dl_path])
         if meta:
             db.record(
                 path_str,
@@ -84,9 +85,16 @@ def scan_new_downloads(db, settings) -> None:
                 genre=meta.get("genre"),
                 quality=meta["quality"],
                 fmt=meta["format"],
+                codec=meta["codec"],
+                metadata_complete=True,
             )
         else:
-            db.record(path_str, status="unreadable")
+            db.record(
+                path_str,
+                status="unreadable",
+                codec="unknown",
+                metadata_complete=True,
+            )
         batch += 1
         if batch >= 50:
             db.commit()
@@ -370,7 +378,7 @@ class DownloadJobService:
             job = DownloadJob.from_row(row)
             try:
                 self._execute_job(job)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 current = self.get_job_for_test(job.id) or job
                 self._mark_job_error(current, exc)
                 self._broadcast_error(current, exc)
@@ -733,7 +741,7 @@ class DownloadJobService:
         for size in (320, 160):
             try:
                 url = track.album.image(size)
-            except Exception:
+            except Exception:  # noqa: BLE001, S112
                 continue
             if url:
                 return url

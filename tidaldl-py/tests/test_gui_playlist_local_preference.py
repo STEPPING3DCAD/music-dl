@@ -58,6 +58,7 @@ def test_tidal_search_serializes_live_local_isrc_metadata(monkeypatch, clear_sin
         "path": str(local_path),
         "quality": "44100Hz/24bit",
         "format": "FLAC",
+        "codec": "flac",
     }
     monkeypatch.setattr(search_api, "_get_library_db", lambda: _FakePlaylistDB({"ISRC123": [local_row]}))
 
@@ -68,6 +69,7 @@ def test_tidal_search_serializes_live_local_isrc_metadata(monkeypatch, clear_sin
     assert result["path"] == str(local_path)
     assert result["quality"] == "44100Hz/24bit"
     assert result["format"] == "FLAC"
+    assert result["codec"] == "flac"
 
 
 def test_tidal_search_stays_remote_without_live_local_isrc(monkeypatch, clear_singletons):

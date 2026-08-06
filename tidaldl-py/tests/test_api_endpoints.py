@@ -6,9 +6,8 @@ Uses the shared `client` fixture from conftest.py which provides:
 - Convenience `_headers` dict (host + CSRF) for mutating requests
 """
 
+import wave
 from types import SimpleNamespace
-
-import pytest
 
 from tidal_dl.helper.library_db import LibraryDB
 
@@ -43,6 +42,102 @@ class TestLibraryTracks:
         for sort in ("recent", "artist", "album", "title"):
             resp = client.get(f"/api/library?sort={sort}", headers=client._host_header)
             assert resp.status_code == 200, f"Failed for sort={sort}"
+
+
+class TestLocalMetadataResolution:
+    def test_meaningful_embedded_tags_win_over_folder_names(self, tmp_path):
+        from tidal_dl.gui.api.library import _resolve_local_metadata
+
+        root = tmp_path / "music"
+        track = root / "Wrong Artist" / "Wrong Artist - Wrong Album" / "wrong.wav"
+
+        resolved = _resolve_local_metadata(
+            track,
+            [root],
+            title="Real Title",
+            artist="Real Artist",
+            album="Real Album",
+        )
+
+        assert resolved == {
+            "name": "Real Title",
+            "artist": "Real Artist",
+            "album": "Real Album",
+        }
+
+    def test_structured_path_repairs_generic_title_and_missing_artist(self, tmp_path):
+        from tidal_dl.gui.api.library import _resolve_local_metadata
+
+        root = tmp_path / "music"
+        track = root / "Los Hermanos" / "Los Hermanos - Ya llego" / "Con Cristo.m4a"
+
+        resolved = _resolve_local_metadata(
+            track,
+            [root],
+            title="Track 05",
+            artist="",
+            album="Ya Llego",
+        )
+
+        assert resolved == {
+            "name": "Con Cristo",
+            "artist": "Los Hermanos",
+            "album": "Ya Llego",
+        }
+
+    def test_shallow_path_does_not_invent_artist_or_album(self, tmp_path):
+        from tidal_dl.gui.api.library import _resolve_local_metadata
+
+        root = tmp_path / "music"
+
+        resolved = _resolve_local_metadata(root / "Loose Song.m4a", [root])
+
+        assert resolved == {
+            "name": "Loose Song",
+            "artist": "Unknown Artist",
+            "album": "Unknown Album",
+        }
+
+    def test_legacy_row_is_repaired_once_without_touching_audio(self, tmp_path):
+        from tidal_dl.gui.api.library import _reconcile_library_rows
+
+        root = tmp_path / "music"
+        track = root / "Los Hermanos" / "Los Hermanos - Ya llego" / "Con Cristo.wav"
+        track.parent.mkdir(parents=True)
+        with wave.open(str(track), "wb") as audio:
+            audio.setnchannels(1)
+            audio.setsampwidth(2)
+            audio.setframerate(44100)
+            audio.writeframes(b"\x00\x00" * 100)
+
+        db = LibraryDB(tmp_path / "library.db")
+        db.open()
+        db.record(
+            str(track),
+            status="needs_isrc",
+            artist="Unknown Artist",
+            title="Track 05",
+            album="Ya Llego",
+        )
+        db.commit()
+        before = (track.read_bytes(), track.stat().st_mtime_ns)
+
+        assert _reconcile_library_rows(db, scan_dirs=[root]) == 1
+        row = db.get(str(track))
+        assert row["title"] == "Con Cristo"
+        assert row["artist"] == "Los Hermanos"
+        assert row["album"] == "Ya llego"
+        assert row["codec"] == "pcm"
+        assert row["metadata_complete"] == 1
+        assert db.metadata_repair_worklist() == []
+        assert (track.read_bytes(), track.stat().st_mtime_ns) == before
+        db.close()
+
+    def test_codec_family_distinguishes_aac_and_alac(self):
+        from tidal_dl.gui.api.library import _codec_family
+
+        assert _codec_family(SimpleNamespace(codec="mp4a.40.2", codec_description="AAC LC")) == "aac"
+        assert _codec_family(SimpleNamespace(codec="alac", codec_description="Apple Lossless")) == "alac"
 
 
 class TestLocalArtworkAvailability:
@@ -182,10 +277,11 @@ class TestLocalArtworkAvailability:
         monkeypatch.setattr(
             library_api,
             "_read_metadata",
-            lambda path: {
+            lambda path, scan_dirs=None: {
                 "path": str(path), "name": "Coverless", "artist": "Artist",
                 "album": "Album", "duration": 180, "isrc": "", "genre": None,
-                "quality": "MP3", "format": "MP3", "is_local": True,
+                "quality": "MP3", "format": "MP3", "codec": "mp3",
+                "metadata_complete": True, "is_local": True,
             },
         )
         monkeypatch.setattr("tidal_dl.helper.waveform.extract_both", lambda path: None)
@@ -281,7 +377,7 @@ class TestLocalArtworkAvailability:
         from types import SimpleNamespace
 
         import tidal_dl.gui.api.library as library_api
-        import tidal_dl.gui.security as security
+        from tidal_dl.gui import security
 
         audio_path = tmp_path / "coverless.mp3"
         audio_path.write_bytes(b"not audio")
@@ -655,8 +751,9 @@ class TestCSRFBehavior:
         internal header store, causing the token to be sent on every request.
         For CSRF-rejection tests we need a client with no token baked in.
         """
-        from tidal_dl.gui import create_app
         from fastapi.testclient import TestClient
+
+        from tidal_dl.gui import create_app
         return TestClient(create_app(port=8765))
 
     def test_post_without_csrf_token_rejected(self):

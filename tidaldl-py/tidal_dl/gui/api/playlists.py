@@ -127,6 +127,7 @@ def _serialize_playlist_tracks(session, playlist_id: str) -> list[dict]:
                     data["quality"] = local_row["quality"]
                 if local_row.get("format"):
                     data["format"] = local_row["format"]
+                data["codec"] = local_row.get("codec") or "unknown"
             serialized.append(data)
     finally:
         db.close()
@@ -238,5 +239,5 @@ def sync_playlist(playlist_id: str, request: Request = None) -> dict:
 def _safe_image(obj: Any) -> str:
     try:
         return obj.image(320)
-    except Exception:
+    except Exception:  # noqa: BLE001
         return ""

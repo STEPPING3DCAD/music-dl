@@ -9,8 +9,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-from tidal_dl.constants import QUALITY_STRING_TO_ENUM, TIER_RANK
 from tidal_dl.helper.library_db import LibraryDB
+from tidal_dl.helper.library_db.utils import _local_quality_rank
 
 logger = logging.getLogger("music-dl.upgrade")
 
@@ -19,30 +19,12 @@ def norm(value: str) -> str:
     return re.sub(r"[^a-z0-9]", "", value.lower())
 
 
-def tier_rank_for_quality(q: str | None, fmt: str | None = None) -> int:
-    if not q:
-        return 0
-
-    lossy_formats = {"MP3", "AAC", "OGG", "M4A"}
-    if fmt and fmt.upper() in lossy_formats:
-        return 1
-
-    rank = TIER_RANK.get(q.upper())
-    if rank is not None:
-        return rank
-
-    match = re.match(r"(\d+)Hz/(\d+)bit", q, re.IGNORECASE)
-    if match:
-        sample_rate = int(match.group(1))
-        bit_depth = int(match.group(2))
-        if bit_depth >= 24 and sample_rate > 48000:
-            return 4
-        if bit_depth >= 24:
-            return 3
-        if bit_depth >= 16:
-            return 2
-
-    return 0
+def tier_rank_for_quality(
+    q: str | None,
+    fmt: str | None = None,
+    codec: str | None = None,
+) -> int:
+    return _local_quality_rank(q, fmt, codec)
 
 
 def trash_file(path: str) -> None:
@@ -56,9 +38,10 @@ def trash_file(path: str) -> None:
                 ["osascript", "-e", f'tell application "Finder" to delete POSIX file "{posix}"'],
                 capture_output=True,
                 timeout=10,
+                check=False,
             )
             return
-        except Exception:
+        except Exception:  # noqa: BLE001, S110
             pass
 
     try:
@@ -143,7 +126,7 @@ def resolve_tidal_album(
                 if track_isrc and track_isrc.upper() in isrc_set:
                     return candidate, album_tracks
 
-        except Exception:
+        except Exception:  # noqa: BLE001
             logger.debug("Failed to fetch tracks for album %s", getattr(candidate, "id", "?"))
             continue
 

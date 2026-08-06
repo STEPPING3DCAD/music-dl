@@ -1,6 +1,7 @@
 """Scanned-track ledger CRUD and ISRC helpers."""
 
-from tidal_dl.helper.library_db._common import *  # noqa: F403
+from tidal_dl.helper.library_db._common import *
+
 
 class ScannedMixin:
     def is_known(self, path: str) -> bool:
@@ -24,6 +25,16 @@ class ScannedMixin:
             "SELECT path FROM scanned WHERE album IS NOT NULL AND duration IS NOT NULL"
         ).fetchall()
         return {r["path"] for r in rows}
+
+    def metadata_repair_worklist(self) -> list[dict]:
+        """Return cached rows that need one audio metadata inspection."""
+        assert self._conn
+        rows = self._conn.execute(
+            """SELECT * FROM scanned
+               WHERE COALESCE(metadata_complete, 0) != 1 OR codec IS NULL
+               ORDER BY path ASC"""
+        ).fetchall()
+        return [dict(row) for row in rows]
 
     def get(self, path: str) -> dict | None:
         """Return full cached metadata for a single path, or None."""
@@ -182,15 +193,18 @@ class ScannedMixin:
         waveform: str | None = None,
         waveform_hires: str | None = None,
         art_available: bool | None = None,
-        ) -> None:
+        codec: str | None = None,
+        metadata_complete: bool | None = None,
+    ) -> None:
         """Insert or update a scan result."""
         assert self._conn
         now = time.time()
         self._conn.execute(
             """INSERT INTO scanned (path, isrc, status, artist, title, album,
                                     duration, quality, format, genre, waveform,
-                                    waveform_hires, art_available, scanned_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                    waveform_hires, art_available, codec,
+                                    metadata_complete, scanned_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(path) DO UPDATE SET
                    isrc = excluded.isrc,
                    status = excluded.status,
@@ -204,8 +218,16 @@ class ScannedMixin:
                    waveform = COALESCE(excluded.waveform, scanned.waveform),
                    waveform_hires = COALESCE(excluded.waveform_hires, scanned.waveform_hires),
                    art_available = COALESCE(excluded.art_available, scanned.art_available),
+                   codec = COALESCE(excluded.codec, scanned.codec),
+                   metadata_complete = COALESCE(
+                       excluded.metadata_complete, scanned.metadata_complete
+                   ),
                    scanned_at = excluded.scanned_at""",
-            (path, isrc, status, artist, title, album, duration, quality, fmt, genre, waveform, waveform_hires, art_available, now),
+            (
+                path, isrc, status, artist, title, album, duration, quality, fmt,
+                genre, waveform, waveform_hires, art_available, codec,
+                metadata_complete, now,
+            ),
         )
 
     def remove(self, path: str) -> None:

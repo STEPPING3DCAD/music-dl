@@ -1,6 +1,7 @@
 """Play events and home dashboard stats."""
 
-from tidal_dl.helper.library_db._common import *  # noqa: F403
+from tidal_dl.helper.library_db._common import *
+
 
 class PlaybackMixin:
     def increment_play(self, path: str) -> None:
@@ -36,7 +37,7 @@ class PlaybackMixin:
         safe_offset = max(0, int(offset))
         rows = self._conn.execute(
             """SELECT s.path, s.isrc, s.artist, s.title, s.album, s.duration,
-                      s.quality, s.format, s.genre, s.play_count, s.last_played,
+                      s.quality, s.format, s.codec, s.genre, s.play_count, s.last_played,
                       s.art_available,
                       latest.played_at
                FROM (
@@ -377,7 +378,7 @@ class PlaybackMixin:
         # Total favorites (table may not exist if migration hasn't run)
         try:
             favorites_count = c.execute("SELECT COUNT(*) FROM favorites").fetchone()[0]
-        except Exception:
+        except sqlite3.OperationalError:
             favorites_count = 0
 
         # Best-ever listening streak (longest consecutive-day run)
