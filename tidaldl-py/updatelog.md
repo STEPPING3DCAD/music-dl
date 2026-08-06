@@ -20,6 +20,32 @@ uv tool install --from git+https://github.com/alfdav/music-dl.git#subdirectory=t
 
 ---
 
+## v1.7.1 (2026-08-05)
+- Fixed local Search and Favorites playback so downloaded tracks use their local files instead of requiring a working Tidal session.
+- Added clear local/Tidal source labels and made saved-but-unverified Tidal credentials display neutrally until remote playback is confirmed.
+- Fixed Recently Played grouping when the server returns timestamps in seconds.
+- Loaded visible artist album artwork immediately while keeping later rows lazy.
+- Stopped packaged desktop sidecar descendants when music-dl quits or updates, and isolated tests from the real user library.
+
+## v1.7.0 (2026-08-05)
+- Added quality and content filters for the current cached page of Tidal album results, with independent Max, Atmos, and Explicit badges.
+
+## v1.6.9 (2026-07-13)
+- Fixed update checks incorrectly offering an older published release to newer
+  local or source builds, and made the current version appear without requiring
+  a manual update check.
+- Added a Settings action to reset stale Tidal credentials locally without
+  restarting the app or automatically starting another OAuth request.
+- Removed browser-driven Tidal keepalive polling; token refresh now remains
+  demand-driven before explicit Tidal-facing actions.
+- Made startup and Settings account indicators use local token/expiry state
+  instead of provider-backed login validation requests.
+- Made Hi-Fi discovery and status checks passive, cached tracker results for 60
+  seconds, and removed stale hard-coded fallback instances.
+- Serialized Hi-Fi requests across clients, limited rotation to one attempt per
+  host, and stopped immediately on authentication, authorization, or rate-limit
+  responses.
+
 ## v1.6.8 (2026-06-05)
 
 - Hardened upgrade queue handling by validating direct Tidal upgrade paths

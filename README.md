@@ -102,7 +102,7 @@ music-dl is not a Tidal account bypass. You need an active Tidal account and mus
 
 A **setup wizard** walks you through Tidal login and library configuration on first launch — no config files to edit.
 
-The GUI can also start and recover the Tidal OAuth flow itself from the browser. Use `music-dl login` only if you want to authenticate from the terminal for CLI-first workflows.
+The GUI can also start and recover the Tidal OAuth flow itself from the browser. Settings includes **Reset Tidal connection** for removing stale local credentials without contacting Tidal; login begins only when you explicitly press **Log in to Tidal** afterward. Use `music-dl login` only if you want to authenticate from the terminal for CLI-first workflows.
 
 ## Install
 
@@ -243,7 +243,7 @@ Your browser opens automatically. The wizard handles the rest.
 
 - **Library browser** — your local collection organized by artist or album with page-sized/cached loading, a dedicated Recently Added category, album art, quality badges (24-bit, lossless, MQA), and instant search
 - **Home dashboard** — recent additions, recently played, top artists, genres, repeat listening stats, and Continue Listening resume
-- **Tidal search & download** — search the full Tidal catalog, see which tracks you already own, download what you're missing
+- **Tidal search & download** — search the full Tidal catalog, refine the current cached page of album results by quality or content rating, see independent resolution, Atmos, and Explicit badges, and download what you're missing
 - **Quality upgrades** — re-download existing tracks at higher quality without duplicates
 - **Duplicate cleanup** — ISRC-based deduplication finds exact copies across your collection
 - **In-browser playback** — play anything in your library, bit-perfect to your DAC, with persisted queue, volume, repeat/shuffle preferences, keyboard shortcuts, and queue actions
@@ -467,6 +467,10 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the full development workflow.
 ## Security
 
 The GUI binds to `localhost` only — it is not accessible from other machines. CSRF protection is enabled for all write operations. The Docker image runs as a non-root user (UID 1000) and binds to localhost on the host side by default.
+
+Legacy Hi-Fi compatibility checks use cached uptime-tracker data and do not fetch tracks for health monitoring. Hi-Fi requests run one at a time, try each configured host once, and stop rotation on `401`, `403`, or `429` responses.
+
+The browser does not send background Tidal keepalive or login-validation requests. Account indicators use local token/expiry data; token refresh is attempted only before an explicit Tidal-facing action when the stored expiry is near.
 
 Do not expose port 8765 to untrusted networks without adding your own authentication layer.
 

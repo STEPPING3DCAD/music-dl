@@ -709,6 +709,8 @@ function _renderRecentSearches(recentEl, input, resultsArea) {
           p.classList.toggle('active', p.textContent.toLowerCase() === item.type);
         });
       }
+      const albumFilters = input.closest('.search-area')?.querySelector('.album-search-filters');
+      if (albumFilters) albumFilters.hidden = state.searchType !== 'albums';
     });
     chips.appendChild(chip);
   }
@@ -716,8 +718,83 @@ function _renderRecentSearches(recentEl, input, resultsArea) {
   recentEl.classList.add('visible');
 }
 
+function _filterTidalAlbums(items, qualityFilter, ratingFilter) {
+  return (items || []).filter(item => {
+    const qualityMatches = qualityFilter === 'all'
+      || (qualityFilter === 'max'
+        ? ['HI_RES_LOSSLESS', 'HI_RES'].includes(item.quality)
+        : item.quality === qualityFilter.toUpperCase());
+    const ratingMatches = ratingFilter === 'all'
+      || (ratingFilter === 'explicit' ? item.explicit === true : item.explicit === false);
+    return qualityMatches && ratingMatches;
+  });
+}
+
+function _rerenderCachedSearch(resultsArea) {
+  const cacheMatches = state.searchResults
+    && state.searchResults.query === state.searchQuery.trim()
+    && state.searchResults.type === state.searchType;
+  if (!cacheMatches) return;
+  renderUnifiedSearchResults(
+    resultsArea,
+    state.searchResults.local,
+    state.searchResults.tidal,
+    state.searchResults.tidalAuthRequired
+  );
+}
+
+function _renderAlbumFilterControls(container, resultsArea, focusTarget = null) {
+  while (container.firstChild) container.removeChild(container.firstChild);
+  container.hidden = state.searchType !== 'albums';
+
+  const groups = [
+    ['Quality', 'albumQualityFilter', [['all', 'All'], ['max', 'Max'], ['lossless', 'Lossless'], ['high', 'High']]],
+    ['Rating', 'albumRatingFilter', [['all', 'All'], ['explicit', 'Explicit'], ['clean', 'Clean']]],
+  ];
+  for (const [label, stateKey, options] of groups) {
+    const group = h('div', { className: 'filter-pills', role: 'group', 'aria-label': label + ' filter' });
+    group.appendChild(textEl('span', label, 'results-count'));
+    for (const [value, text] of options) {
+      const selected = state[stateKey] === value;
+      const button = h('button', {
+        className: 'pill' + (selected ? ' active selected' : ''),
+        type: 'button',
+        'aria-pressed': selected ? 'true' : 'false',
+        'data-filter-key': stateKey,
+        'data-filter-value': value,
+      }, text);
+      button.addEventListener('click', () => {
+        state[stateKey] = value;
+        _renderAlbumFilterControls(container, resultsArea, { key: stateKey, value });
+        _rerenderCachedSearch(resultsArea);
+      });
+      group.appendChild(button);
+    }
+    container.appendChild(group);
+  }
+
+  if (state.albumQualityFilter !== 'all' || state.albumRatingFilter !== 'all') {
+    const clearButton = h('button', { className: 'pill', type: 'button' }, 'Clear filters');
+    clearButton.addEventListener('click', () => {
+      state.albumQualityFilter = 'all';
+      state.albumRatingFilter = 'all';
+      _renderAlbumFilterControls(container, resultsArea, { key: 'albumQualityFilter', value: 'all' });
+      _rerenderCachedSearch(resultsArea);
+    });
+    container.appendChild(clearButton);
+  }
+
+  if (focusTarget) {
+    const replacement = container.querySelector(
+      '[data-filter-key="' + focusTarget.key + '"][data-filter-value="' + focusTarget.value + '"]'
+    );
+    if (replacement) replacement.focus();
+  }
+}
+
 function renderSearch(container) {
   const searchArea = h('div', { className: 'search-area' });
+  const resultsArea = h('div', { className: 'results' });
 
   const searchRow = h('div', { className: 'search-row' });
   const searchField = h('div', { className: 'search-field' });
@@ -768,6 +845,7 @@ function renderSearch(container) {
       state.searchType = type;
       pills.querySelectorAll('.pill').forEach(p => p.classList.remove('active'));
       pill.classList.add('active');
+      albumFilters.hidden = state.searchType !== 'albums';
       if (state.searchQuery) doSearch(resultsArea);
       else _renderRecentSearches(recentSearchesEl, input, resultsArea);
     });
@@ -775,13 +853,23 @@ function renderSearch(container) {
     pills.appendChild(pill);
   }
   searchArea.appendChild(pills);
+  const albumFilters = h('div', { className: 'album-search-filters' });
+  _renderAlbumFilterControls(albumFilters, resultsArea);
+  searchArea.appendChild(albumFilters);
   container.appendChild(searchArea);
 
-  const resultsArea = h('div', { className: 'results' });
   container.appendChild(resultsArea);
 
-  if (state.searchResults && state.searchQuery) {
-    renderUnifiedSearchResults(resultsArea, state.searchResults.local, state.searchResults.tidal);
+  const cacheMatches = state.searchResults
+    && state.searchResults.query === state.searchQuery.trim()
+    && state.searchResults.type === state.searchType;
+  if (cacheMatches) {
+    renderUnifiedSearchResults(
+      resultsArea,
+      state.searchResults.local,
+      state.searchResults.tidal,
+      state.searchResults.tidalAuthRequired
+    );
   } else {
     renderSearchEmpty(resultsArea);
   }
@@ -852,34 +940,53 @@ function renderSearchSkeleton(container) {
 }
 
 async function doSearch(resultsArea) {
-  const q = state.searchQuery.trim();
-  if (!q) {
+  const query = state.searchQuery.trim();
+  const type = state.searchType;
+  if (!query) {
     state.searchResults = null;
     renderSearchEmpty(resultsArea);
     return;
   }
 
-  _saveRecentSearch(q, state.searchType);
+  _saveRecentSearch(query, type);
   renderSearchSkeleton(resultsArea);
 
   // Local results first (instant from SQLite)
   let localData = null;
   try {
-    localData = await api('/library/search?q=' + encodeURIComponent(q) + '&type=' + state.searchType + '&limit=20');
+    localData = await api('/library/search?q=' + encodeURIComponent(query) + '&type=' + type + '&limit=20');
   } catch (_) { /* local search optional */ }
 
-  // Tidal results (async, may fail if not logged in)
+  // Tidal results (async, may require a user-initiated login)
   let tidalData = null;
+  let tidalAuthRequired = false;
   try {
-    tidalData = await apiTidal('/search?q=' + encodeURIComponent(q) + '&type=' + state.searchType + '&limit=50');
-  } catch (_) { /* Tidal unavailable is OK */ }
+    tidalData = await api('/search?q=' + encodeURIComponent(query) + '&type=' + type + '&limit=50');
+  } catch (error) {
+    if (_isTidalAuthError(error)) {
+      tidalAuthRequired = true;
+    }
+  }
 
-  state.searchResults = { local: localData, tidal: tidalData };
-  renderUnifiedSearchResults(resultsArea, localData, tidalData);
+  if (state.searchQuery.trim() !== query || state.searchType !== type) return;
+
+  state.searchResults = { query, type, local: localData, tidal: tidalData, tidalAuthRequired };
+  renderUnifiedSearchResults(resultsArea, localData, tidalData, tidalAuthRequired);
   refreshStatusLights();
 }
 
-function renderUnifiedSearchResults(container, localData, tidalData) {
+function renderTidalSearchAuthPanel(container) {
+  const panel = h('div', { className: 'search-tidal-auth-panel' });
+  panel.appendChild(textEl('div', 'Connect Tidal to search, stream, and download', 'search-tidal-auth-message'));
+
+  const connectButton = h('button', { className: 'search-tidal-auth-button', type: 'button' });
+  connectButton.textContent = 'Connect Tidal';
+  connectButton.addEventListener('click', () => triggerLogin());
+  panel.appendChild(connectButton);
+  container.appendChild(panel);
+}
+
+function renderUnifiedSearchResults(container, localData, tidalData, tidalAuthRequired) {
   while (container.firstChild) container.removeChild(container.firstChild);
 
   const type = state.searchType;
@@ -968,8 +1075,16 @@ function renderUnifiedSearchResults(container, localData, tidalData) {
   }
 
   // Divider between local and Tidal sections
-  const tidalItems = tidalData ? (tidalData[type] || []) : [];
-  if (localItems.length > 0 && tidalItems.length > 0) {
+  const originalTidalItems = tidalData ? (tidalData[type] || []) : [];
+  const albumFiltersActive = type === 'albums'
+    && (state.albumQualityFilter !== 'all' || state.albumRatingFilter !== 'all');
+  const tidalItems = type === 'albums'
+    ? _filterTidalAlbums(originalTidalItems, state.albumQualityFilter, state.albumRatingFilter)
+    : originalTidalItems;
+  const tidalResponse = type === 'albums'
+    ? { ...(tidalData || {}), albums: tidalItems, unfiltered_total: originalTidalItems.length }
+    : tidalData;
+  if (type !== 'albums' && localItems.length > 0 && tidalItems.length > 0) {
     const divider = h('div', { className: 'search-divider' });
     divider.appendChild(textEl('span', 'Tidal', 'search-divider-label'));
     container.appendChild(divider);
@@ -977,7 +1092,19 @@ function renderUnifiedSearchResults(container, localData, tidalData) {
 
   // Tidal results section — delegate to existing renderer via a sub-container
   // to prevent it from clearing the local results we just rendered
-  if (tidalItems.length > 0) {
+  if (type === 'albums' && originalTidalItems.length > 0) {
+    const tidalHeader = h('div', { className: 'results-header' });
+    tidalHeader.appendChild(textEl('h3', 'Tidal Albums', 'results-section-title'));
+    const count = albumFiltersActive
+      ? tidalItems.length + ' of ' + originalTidalItems.length + ' albums'
+      : originalTidalItems.length + ' albums';
+    tidalHeader.appendChild(textEl('span', count, 'results-count'));
+    container.appendChild(tidalHeader);
+
+    const tidalWrap = h('div', {});
+    container.appendChild(tidalWrap);
+    renderSearchResults(tidalWrap, tidalResponse, false);
+  } else if (tidalItems.length > 0) {
     if (localItems.length === 0) {
       const tidalHeader = h('div', { className: 'results-header' });
       tidalHeader.appendChild(textEl('h3', 'Tidal', 'results-section-title'));
@@ -998,20 +1125,27 @@ function renderUnifiedSearchResults(container, localData, tidalData) {
     }
   }
 
-  if (localItems.length === 0 && tidalItems.length === 0) {
+  if (tidalAuthRequired) {
+    renderTidalSearchAuthPanel(container);
+  }
+
+  if (localItems.length === 0 && tidalItems.length === 0
+      && originalTidalItems.length === 0 && !tidalAuthRequired) {
     container.appendChild(textEl('div', 'No results found', 'search-empty-text'));
   }
 }
 
-function renderSearchResults(container, data) {
+function renderSearchResults(container, data, showHeader = true) {
   while (container.firstChild) container.removeChild(container.firstChild);
 
   if (state.searchType === 'tracks') {
     const tracks = data.tracks || [];
-    container.appendChild(h('div', { className: 'results-header' },
-      textEl('div', 'Search Results', 'results-title'),
-      textEl('div', tracks.length + ' tracks', 'results-count')
-    ));
+    if (showHeader) {
+      container.appendChild(h('div', { className: 'results-header' },
+        textEl('div', 'Search Results', 'results-title'),
+        textEl('div', tracks.length + ' tracks', 'results-count')
+      ));
+    }
 
     if (tracks.length === 0) {
       container.appendChild(h('div', { className: 'empty-state' },
@@ -1031,12 +1165,21 @@ function renderSearchResults(container, data) {
     container.appendChild(trackList);
   } else {
     const items = data[state.searchType] || [];
-    container.appendChild(h('div', { className: 'results-header' },
-      textEl('div', 'Search Results', 'results-title'),
-      textEl('div', items.length + ' ' + state.searchType, 'results-count')
-    ));
+    if (showHeader) {
+      container.appendChild(h('div', { className: 'results-header' },
+        textEl('div', 'Search Results', 'results-title'),
+        textEl('div', items.length + ' ' + state.searchType, 'results-count')
+      ));
+    }
 
     if (items.length === 0) {
+      if (state.searchType === 'albums' && data.unfiltered_total > 0) {
+        container.appendChild(h('div', { className: 'empty-state' },
+          textEl('div', 'No albums match these filters', 'empty-state-title'),
+          textEl('div', 'Use Clear filters above to see every album.', 'empty-state-sub')
+        ));
+        return;
+      }
       container.appendChild(h('div', { className: 'empty-state' },
         textEl('div', 'Nothing here', 'empty-state-title'),
         textEl('div', 'Try different words or check the spelling.', 'empty-state-sub')
@@ -1057,6 +1200,24 @@ function renderSearchResults(container, data) {
         artDiv.appendChild(img);
       } else {
         artDiv.appendChild(h('div', { className: 'art-gradient', style: { background: artGradient(item.id) } }));
+      }
+      if (state.searchType === 'albums') {
+        const qualityLabel = {
+          HI_RES_LOSSLESS: 'MAX',
+          HI_RES: 'MAX',
+          LOSSLESS: 'LOSSLESS',
+          HIGH: 'HIGH',
+          LOW: 'LOW',
+        }[item.quality] || 'UNKNOWN';
+        const badges = h('div', { className: 'album-search-badges' });
+        badges.appendChild(textEl('span', qualityLabel, 'album-search-badge'));
+        if (item.atmos === true) {
+          badges.appendChild(textEl('span', 'ATMOS', 'album-search-badge'));
+        }
+        if (item.explicit === true) {
+          badges.appendChild(textEl('span', 'E', 'album-search-badge'));
+        }
+        artDiv.appendChild(badges);
       }
       const meta = h('div', { className: 'album-card-meta' });
       meta.appendChild(textEl('div', item.name || '', 'album-card-title'));
@@ -1312,12 +1473,12 @@ function renderTrackRow(track, num, allTracks) {
   row.appendChild(textEl('div', formatTime(track.duration), 'track-time'));
 
   // Actions
-  const actions = h('div', { className: 'track-actions' + (track.is_local ? ' visible' : '') });
-  if (track.is_local) {
-    const dot = h('span', { className: 'local-dot' });
-    const tag = h('span', { className: 'local-tag' }, dot, ' local');
-    actions.appendChild(tag);
-  } else {
+  const actions = h('div', { className: 'track-actions visible' });
+  const sourceTag = h('span', {
+    className: 'source-tag ' + (track.is_local ? 'local-tag' : 'tidal-tag'),
+  }, track.is_local ? 'local' : 'tidal');
+  actions.appendChild(sourceTag);
+  if (!track.is_local) {
     const btn = h('button', { className: 'dl-btn', title: 'Download' });
     btn.appendChild(svgIcon(ICONS.download));
     btn.addEventListener('click', (e) => {
@@ -1500,12 +1661,12 @@ async function renderArtistGallery(container, artistName) {
     const titleRow = header.querySelector('.artist-gallery-title-row');
     if (titleRow) titleRow.appendChild(textEl('span', data.albums.length + ' albums', 'artist-gallery-count'));
 
-    data.albums.forEach(album => {
+    data.albums.forEach((album, index) => {
       const card = h('div', { className: 'album-card' });
 
       const artWrap = h('div', { className: 'album-card-art-wrap' });
       if (album.cover_url) {
-        const img = h('img', { className: 'album-card-art', src: album.cover_url, alt: '', loading: 'lazy' });
+        const img = h('img', { className: 'album-card-art', src: album.cover_url, alt: '', loading: index < 6 ? 'eager' : 'lazy' });
         img.onerror = function() {
           this.style.display = 'none';
           artWrap.style.background = artGradient(album.name);
@@ -2151,6 +2312,7 @@ const LIBRARY_PAGE_SIZE = 50;
 const LIBRARY_ALBUM_BATCH_SIZE = 80;
 let libraryOffset = 0;
 let libraryTotal = 0;
+let libraryArtistTracks = [];
 let _libSearchTimer = null;
 let _libRequestId = 0;
 const _libraryAlbumCache = new Map();
@@ -2615,11 +2777,6 @@ async function loadLibrary(resultsArea, append) {
     const trackList = document.getElementById('library-tracks') ||
       resultsArea.querySelector('.tracks');
 
-    // Check if all tracks are local — hide redundant "local" tags
-    const allLocal = tracks.every(t => t.is_local);
-    if (allLocal) trackList.classList.add('all-local');
-    else trackList.classList.remove('all-local');
-
     tracks.forEach((track, i) => {
       track.local_path = track.path;
       trackList.appendChild(renderTrackRow(track, libraryOffset + i + 1, tracks));
@@ -2694,17 +2851,50 @@ async function loadLibraryAlbums(resultsArea, query) {
   }
 }
 
-async function loadLibraryArtistGrouped(resultsArea, query) {
+function _groupArtistTracks(tracks) {
+  const groups = [];
+  let currentArtist = null;
+  let currentGroup = null;
+
+  tracks.forEach(track => {
+    track.local_path = track.path;
+    const artist = track.artist || 'Unknown Artist';
+    if (artist !== currentArtist) {
+      currentArtist = artist;
+      currentGroup = { artist: artist, tracks: [] };
+      groups.push(currentGroup);
+    }
+    currentGroup.tracks.push(track);
+  });
+
+  groups.forEach(group => {
+    group.tracks.sort((a, b) => {
+      const albumCmp = (a.album || '').localeCompare(b.album || '');
+      if (albumCmp !== 0) return albumCmp;
+      return (a.track_number || 0) - (b.track_number || 0);
+    });
+  });
+
+  return groups;
+}
+
+async function loadLibraryArtistGrouped(resultsArea, query, append) {
   const reqId = ++_libRequestId;
-  while (resultsArea.firstChild) resultsArea.removeChild(resultsArea.firstChild);
-  resultsArea.appendChild(h('div', { className: 'skeleton-row' }));
+  if (!append) {
+    libraryOffset = 0;
+    libraryArtistTracks = [];
+    while (resultsArea.firstChild) resultsArea.removeChild(resultsArea.firstChild);
+    resultsArea.appendChild(h('div', { className: 'skeleton-row' }));
+  }
 
   try {
     // Keep first paint page-sized; rendering many track rows synchronously makes navigation feel stuck.
-    const data = await api('/library?sort=artist&limit=' + LIBRARY_PAGE_SIZE + '&offset=0' +
+    const data = await api('/library?sort=artist&limit=' + LIBRARY_PAGE_SIZE + '&offset=' + libraryOffset +
       (query ? '&q=' + encodeURIComponent(query) : ''));
     if (reqId !== _libRequestId) return;
-    const tracks = data.tracks || [];
+    const pageTracks = data.tracks || [];
+    libraryArtistTracks = append ? libraryArtistTracks.concat(pageTracks) : pageTracks;
+    const tracks = libraryArtistTracks;
 
     while (resultsArea.firstChild) resultsArea.removeChild(resultsArea.firstChild);
 
@@ -2724,38 +2914,13 @@ async function loadLibraryArtistGrouped(resultsArea, query) {
       return;
     }
 
-    // Group tracks by artist
-    const groups = [];
-    let currentArtist = null;
-    let currentGroup = null;
-    tracks.forEach(t => {
-      t.local_path = t.path;
-      const artist = t.artist || 'Unknown Artist';
-      if (artist !== currentArtist) {
-        currentArtist = artist;
-        currentGroup = { artist: artist, tracks: [] };
-        groups.push(currentGroup);
-      }
-      currentGroup.tracks.push(t);
-    });
-
-    // Sort tracks within each group by album, then track number
-    groups.forEach(g => {
-      g.tracks.sort((a, b) => {
-        const albumCmp = (a.album || '').localeCompare(b.album || '');
-        if (albumCmp !== 0) return albumCmp;
-        return (a.track_number || 0) - (b.track_number || 0);
-      });
-    });
+    const groups = _groupArtistTracks(tracks);
 
     // Update header with artist count
     const countEl = resultsArea.querySelector('.results-count');
     if (countEl) countEl.textContent = groups.length + ' artists \u00b7 ' + (data.total || 0) + ' tracks';
 
-    // Check if all tracks are local
-    const allLocal = tracks.every(t => t.is_local);
-
-    const wrapper = h('div', { className: 'library-artist-groups' + (allLocal ? ' all-local' : '') });
+    const wrapper = h('div', { className: 'library-artist-groups' });
 
     let globalNum = 0;
     groups.forEach(g => {
@@ -2767,7 +2932,7 @@ async function loadLibraryArtistGrouped(resultsArea, query) {
       wrapper.appendChild(header);
 
       // Track list for this group
-      const trackList = h('div', { className: 'tracks' + (allLocal ? ' all-local' : '') });
+      const trackList = h('div', { className: 'tracks' });
       g.tracks.forEach(t => {
         globalNum++;
         trackList.appendChild(renderTrackRow(t, globalNum, tracks));
@@ -2783,11 +2948,10 @@ async function loadLibraryArtistGrouped(resultsArea, query) {
         className: 'load-more pill active',
       });
       loadMore.textContent = 'Load more (' + ((data.total || 0) - tracks.length) + ' remaining)';
-      loadMore.addEventListener('click', async () => {
-        // Fall back to flat list for remaining tracks
+      loadMore.addEventListener('click', () => {
+        loadMore.disabled = true;
         libraryOffset = tracks.length;
-        loadMore.remove();
-        loadLibrary(resultsArea, true);
+        loadLibraryArtistGrouped(resultsArea, query, true);
       });
       resultsArea.appendChild(loadMore);
     }
@@ -3887,27 +4051,56 @@ function renderSettings(container) {
   }
 }
 
+function _authStateCanReset(authState) {
+  return ['connected', 'credentials_ready', 'expired', 'unavailable'].includes(authState);
+}
+
+async function _resetTidalConnection(container) {
+  if (!window.confirm('Reset the saved Tidal connection? You will need to log in again.')) return false;
+
+  try {
+    await api('/auth/reset', { method: 'POST' });
+    _setRemotePlaybackUnavailable(false);
+    if (_loginPoll) {
+      clearInterval(_loginPoll);
+      _loginPoll = null;
+    }
+    _dismissDeviceCodeModal();
+    await loadAuthStatus(container);
+    await refreshStatusLights();
+    toast('Tidal connection reset', 'success');
+    return true;
+  } catch (_) {
+    toast('Could not reset Tidal connection', 'error');
+    return false;
+  }
+}
+
 async function loadAuthStatus(container) {
   try {
     const data = await api('/auth/status');
     while (container.firstChild) container.removeChild(container.firstChild);
+    container.appendChild(textEl('div', 'Tidal Account', 'settings-section-header'));
+    const row = h('div', { className: 'connection', style: { padding: '0 0 16px', gap: '12px' } });
+    const presentation = _tidalStatusPresentation(data);
     if (data.logged_in) {
-      const dot = h('span', { className: 'connection-dot' });
-      container.appendChild(h('div', { className: 'connection', style: { padding: '0 0 16px' } },
-        dot,
-        document.createTextNode('Connected' + (data.username ? ' as ' + data.username : ''))
-      ));
+      const dot = h('span', { className: 'connection-dot' + (presentation.dot ? ' ' + presentation.dot : '') });
+      row.appendChild(dot);
+      row.appendChild(document.createTextNode(presentation.label));
     } else {
-      const dot = h('span', { className: 'connection-dot disconnected' });
-      const row = h('div', { className: 'connection', style: { padding: '0 0 16px', gap: '12px' } },
-        dot,
-        document.createTextNode('Not logged in to Tidal')
-      );
+      const dot = h('span', { className: 'connection-dot' + (presentation.dot ? ' ' + presentation.dot : '') });
+      row.appendChild(dot);
+      row.appendChild(document.createTextNode(presentation.label));
       const loginBtn = textEl('button', 'Log in to Tidal', 'banner-action');
       loginBtn.addEventListener('click', () => { triggerLogin(); });
       row.appendChild(loginBtn);
-      container.appendChild(row);
     }
+    if (_authStateCanReset(data.auth_state)) {
+      const resetBtn = textEl('button', 'Reset Tidal connection', 'banner-action');
+      resetBtn.addEventListener('click', () => { _resetTidalConnection(container); });
+      row.appendChild(resetBtn);
+    }
+    container.appendChild(row);
   } catch (_) {
     container.appendChild(textEl('div', 'Could not check auth status', 'track-artist'));
   }
@@ -4188,4 +4381,3 @@ async function saveSetting(key, value) {
     toast('Failed to save: ' + err.message, 'error');
   }
 }
-

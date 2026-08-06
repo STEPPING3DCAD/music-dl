@@ -269,6 +269,11 @@ body {
   animation: pulse 3s ease-in-out infinite;
 }
 
+.connection-dot.neutral {
+  background: var(--text-muted);
+  box-shadow: none;
+}
+
 @keyframes pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }
@@ -392,6 +397,27 @@ body {
   padding: 0 2px;
 }
 
+.album-search-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 18px;
+  max-width: 100%;
+}
+
+.album-search-filters[hidden] {
+  display: none;
+}
+
+.album-search-filters > .filter-pills {
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.album-search-filters .results-count {
+  font-family: var(--mono);
+}
+
 .pill {
   padding: 6px 18px;
   min-height: 36px;
@@ -415,6 +441,17 @@ body {
   color: var(--accent);
   background: var(--accent-dim);
   border-color: rgba(212, 160, 83, 0.15);
+}
+
+.album-search-filters .pill {
+  min-height: 28px;
+  padding: 4px 12px;
+  font-size: 11px;
+}
+
+.album-search-filters .pill:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 /* ---- UNIFIED SEARCH DIVIDER ---- */
@@ -473,6 +510,36 @@ body {
   padding: 48px 0;
   color: var(--text-muted);
   font-size: 14px;
+}
+
+.search-tidal-auth-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  margin: 24px 0;
+  padding: 24px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+  text-align: center;
+}
+
+.search-tidal-auth-message {
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+.search-tidal-auth-button {
+  padding: 8px 16px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  color: var(--bg);
+  background: var(--accent);
+  cursor: pointer;
+}
+
+.search-tidal-auth-button:hover {
+  filter: brightness(1.1);
 }
 
 /* ---- ALBUM DETAIL ---- */
@@ -806,7 +873,7 @@ body {
 }
 .track-actions.visible { opacity: 1; }
 
-.local-tag {
+.source-tag {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -817,15 +884,8 @@ body {
   opacity: 0.7;
 }
 
-.local-dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--green);
-}
+.tidal-tag { color: var(--text-muted); }
 
-/* Hide local tags when every track in the list is local — pure noise */
-.all-local .local-tag { display: none; }
 
 /* ---- Library: Artist grouped view ---- */
 .library-artist-groups {
@@ -2403,6 +2463,31 @@ body {
   object-fit: cover;
   display: block;
 }
+.album-grid > .album-card > .album-card-art {
+  position: relative;
+}
+.album-search-badges {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  left: 8px;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  pointer-events: none;
+}
+.album-search-badge {
+  padding: 3px 6px;
+  border-radius: var(--radius-xs);
+  background: var(--glass);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.05em;
+}
 .album-card-meta {
   padding: 10px 12px 12px;
   min-width: 0;
@@ -2859,6 +2944,15 @@ body {
 .queue-item:hover .queue-item-remove { opacity: 1; }
 
 @media (max-width: 768px) {
+  .album-search-filters {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .album-search-filters > .filter-pills {
+    max-width: 100%;
+  }
+
   .player {
     grid-template-columns: 1fr;
     grid-template-rows: auto auto;

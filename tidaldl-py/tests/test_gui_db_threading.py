@@ -7,6 +7,7 @@ from pathlib import Path
 
 import tidal_dl.gui.api.home as home_api
 import tidal_dl.gui.api.library as library_api
+import tidal_dl.gui.services.db as shared_db_service
 from tidal_dl.helper.library_db import LibraryDB
 
 
@@ -59,7 +60,8 @@ def _concurrent_get_db_error(module, query, attempts: int = 12):
         def worker() -> None:
             try:
                 barrier.wait(timeout=5)
-                db = module._get_db()
+                getter = getattr(module, "_get_db", None) or module.get_library_db
+                db = getter()
                 query(db)
             except BaseException as exc:  # pragma: no cover - failure path only
                 errors.append(exc)
@@ -94,6 +96,18 @@ def test_home_api_get_db_is_thread_safe(tmp_path, monkeypatch):
     _seed_library_db(tmp_path)
 
     error = _concurrent_get_db_error(home_api, lambda db: db.all_tracks())
+
+    assert error is None, repr(error)
+
+
+def test_shared_gui_db_service_is_thread_safe(tmp_path, monkeypatch):
+    monkeypatch.setattr(shared_db_service, "path_config_base", lambda: str(tmp_path))
+    _seed_library_db(tmp_path)
+
+    error = _concurrent_get_db_error(
+        shared_db_service,
+        lambda db: db.has_live_isrc("ISRC123"),
+    )
 
     assert error is None, repr(error)
 

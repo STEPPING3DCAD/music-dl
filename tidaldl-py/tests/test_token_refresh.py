@@ -1,8 +1,12 @@
 """Tests for Tidal._ensure_token_fresh token refresh logic."""
 
 import time
-from unittest.mock import MagicMock, patch, call
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
+
 import pytest
+from tidalapi.media import Quality, VideoQuality
 
 from tidal_dl.config import reset_singletons
 
@@ -223,3 +227,69 @@ class TestDatetimeExpiryHandling:
 
         assert result is False
         tidal.session.token_refresh.assert_not_called()
+
+
+class TestLogoutReset:
+    def _prepare(self, tidal):
+        tidal.data.access_token = "access"
+        tidal.data.refresh_token = "refresh"
+        tidal.data.token_type = "Bearer"
+        tidal.data.expiry_time = time.time() + 3600
+        tidal.token_from_storage = True
+        tidal.is_atmos_session = True
+        tidal.settings = SimpleNamespace(data=SimpleNamespace(quality_audio=Quality.high_lossless))
+        tidal.file_path_obj = Path(tidal.file_path)
+        tidal.file_path_obj.write_text("token", encoding="utf-8")
+        return tidal.session, tidal.data
+
+    def test_logout_rebuilds_usable_unauthenticated_session(self, tidal):
+        import certifi
+
+        old_session, old_data = self._prepare(tidal)
+        key = {"valid": "True", "clientId": "managed-id", "clientSecret": "managed-secret"}
+
+        with patch("tidal_dl.config._api.getItem", return_value=key):
+            assert tidal.logout() is True
+
+        assert tidal.session is not old_session
+        assert tidal.data is not old_data
+        assert tidal.session.check_login() is False
+        assert tidal.session.config.item_limit == 10000
+        assert tidal.session.request_session.verify == certifi.where()
+        assert tidal.session.config.client_id == "managed-id"
+        assert tidal.session.audio_quality == Quality.high_lossless
+        assert tidal.session.video_quality == VideoQuality.high
+        assert tidal.data.access_token is None
+        assert tidal.data.refresh_token is None
+        assert tidal.token_from_storage is False
+        assert tidal.is_atmos_session is False
+        tidal.api_cache.clear.assert_called_once_with()
+        assert not tidal.file_path_obj.exists()
+
+    def test_logout_preserves_state_when_session_construction_fails(self, tidal):
+        old_session, old_data = self._prepare(tidal)
+
+        with patch("tidal_dl.config.Session", side_effect=RuntimeError("construction failed")):
+            with pytest.raises(RuntimeError, match="construction failed"):
+                tidal.logout()
+
+        assert tidal.session is old_session
+        assert tidal.data is old_data
+        assert tidal.token_from_storage is True
+        assert tidal.is_atmos_session is True
+        tidal.api_cache.clear.assert_not_called()
+        assert tidal.file_path_obj.exists()
+
+    def test_logout_preserves_state_when_token_delete_fails(self, tidal):
+        old_session, old_data = self._prepare(tidal)
+
+        with patch("tidal_dl.config.Path.unlink", side_effect=PermissionError("read-only")):
+            with pytest.raises(PermissionError, match="read-only"):
+                tidal.logout()
+
+        assert tidal.session is old_session
+        assert tidal.data is old_data
+        assert tidal.token_from_storage is True
+        assert tidal.is_atmos_session is True
+        tidal.api_cache.clear.assert_not_called()
+        assert tidal.file_path_obj.exists()

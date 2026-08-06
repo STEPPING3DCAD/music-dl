@@ -4,22 +4,21 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+
+from tidal_dl.config import Tidal
+from tidal_dl.gui.api.settings import _local_auth_status, get_tidal_instance
 
 router = APIRouter()
 
 
 @router.get("/setup/status")
-def setup_status() -> dict:
+def setup_status(tidal: Tidal = Depends(get_tidal_instance)) -> dict:
     """Return whether the app is configured: auth and scan paths."""
-    from tidal_dl.config import Settings, Tidal
+    from tidal_dl.config import Settings
 
-    tidal = Tidal()
-    try:
-        logged_in = tidal.session.check_login()
-    except Exception:
-        logged_in = False
+    logged_in = _local_auth_status(tidal)["logged_in"]
 
     s = Settings()
     scan_paths = (s.data.scan_paths or "").strip()

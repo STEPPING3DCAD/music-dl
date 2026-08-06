@@ -63,7 +63,8 @@ class FavoritesMixin:
             """SELECT f.*,
                       s.quality  AS scanned_quality,
                       s.duration AS scanned_duration,
-                      s.format   AS scanned_format
+                      s.format   AS scanned_format,
+                      s.art_available AS scanned_art_available
                FROM favorites f
                LEFT JOIN scanned s ON s.path = f.path
                ORDER BY f.favorited_at DESC"""

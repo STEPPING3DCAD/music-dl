@@ -114,7 +114,7 @@ body:
       placeholder: |
         Config directory checked:
         - macOS/Linux: ~/.config/music-dl/
-        - Windows: %APPDATA%\music-dl\
+        - Windows: %USERPROFILE%\.config\music-dl\
 
         Files present before any cleanup:
         - settings.json: yes/no

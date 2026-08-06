@@ -14,7 +14,17 @@ import sys
 from tests.gui_js_source import GUI_JS_FILES, read_gui_js
 
 STATIC_DIR = Path(__file__).resolve().parents[1] / "tidal_dl" / "gui" / "static"
-REQUIRED_FILES = ["index.html", "routes.js", *GUI_JS_FILES, "style.css"]
+REQUIRED_FILES = ["index.html", "favicon.ico", "routes.js", *GUI_JS_FILES, "style.css"]
+
+
+class TestPlaybackStatusAssets:
+    def test_credential_ready_status_uses_neutral_copy_and_style(self):
+        js = read_gui_js()
+        css = (STATIC_DIR / "style.css").read_text()
+
+        assert "credentials saved" in js
+        assert "_tidalStatusPresentation(data)" in js
+        assert ".connection-dot.neutral" in css
 
 
 class TestStaticAssetsExist:
@@ -63,6 +73,17 @@ class TestStaticDirResolution:
 class TestAppJsFeatureMarkers:
     """app.js contains expected feature markers — catches stale bundle issues."""
 
+    def test_artist_gallery_eager_loads_first_six_covers_and_keeps_fallback(self):
+        js = read_gui_js()
+        gallery_source = js.split("async function renderArtistGallery(container, artistName) {")[1].split(
+            "// ---- LOCAL ALBUM DETAIL"
+        )[0]
+
+        assert "data.albums.forEach((album, index) => {" in gallery_source
+        assert "loading: index < 6 ? 'eager' : 'lazy'" in gallery_source
+        assert "img.onerror = function() {" in gallery_source
+        assert "artWrap.style.background = artGradient(album.name);" in gallery_source
+
     def test_has_csrf_token_handling(self):
         js = read_gui_js()
         assert "X-CSRF-Token" in js
@@ -101,6 +122,109 @@ class TestAppJsFeatureMarkers:
         assert "This Week" in js
         assert "Clear older than 30 days" in js
         assert "_clearRecentOlderThan30Days" in js
+
+    def test_has_accessible_album_search_filters_without_catalog_refetch(self):
+        js = read_gui_js()
+        source = js.split("function _renderAlbumFilterControls(")[1].split(
+            "function renderSearch(container) {"
+        )[0]
+        cached_source = js.split("function _rerenderCachedSearch(")[1].split(
+            "function _renderAlbumFilterControls("
+        )[0]
+        assert "albumQualityFilter: 'all'" in js
+        assert "albumRatingFilter: 'all'" in js
+        assert "aria-pressed" in source
+        assert "data-filter-key" in source
+        assert "data-filter-value" in source
+        assert ".focus()" in source
+        assert "Clear filters" in source
+        assert "_rerenderCachedSearch(resultsArea)" in source
+        assert "doSearch(" not in source
+        assert "doSearch(" not in cached_source
+        assert "api(" not in cached_source
+        assert "querySelector('.album-search-filters')" in js
+        assert "No albums match these filters" in js
+
+    def test_tidal_album_results_have_metadata_badges_and_responsive_styles(self):
+        js = read_gui_js()
+        css = (STATIC_DIR / "style.css").read_text()
+        results_source = js.split("function renderSearchResults(")[1].split(
+            "function _trackKey("
+        )[0]
+        artwork_source = results_source.split(
+            "const artDiv = h('div', { className: 'album-card-art' });"
+        )[1].split("const meta = h('div', { className: 'album-card-meta' });")[0]
+
+        assert "if (state.searchType === 'albums') {" in artwork_source
+        badge_source = artwork_source.split("if (state.searchType === 'albums') {")[1]
+        for quality, label in [
+            ("HI_RES_LOSSLESS", "MAX"),
+            ("HI_RES", "MAX"),
+            ("LOSSLESS", "LOSSLESS"),
+            ("HIGH", "HIGH"),
+            ("LOW", "LOW"),
+        ]:
+            assert f"{quality}: '{label}'" in badge_source
+        assert "[item.quality] || 'UNKNOWN'" in badge_source
+        assert "textEl('span', qualityLabel, 'album-search-badge')" in badge_source
+        assert "item.atmos === true" in badge_source
+        assert "textEl('span', 'ATMOS', 'album-search-badge')" in badge_source
+        assert "item.explicit === true" in badge_source
+        assert "textEl('span', 'E', 'album-search-badge')" in badge_source
+        assert "artDiv.appendChild(badges)" in badge_source
+        assert ".album-search-filters" in css
+        assert ".album-search-filters[hidden]" in css
+        hidden_rule = css.split(".album-search-filters[hidden]")[1].split("}")[0]
+        assert "display: none" in hidden_rule
+        assert ".album-search-badges" in css
+        assert ".album-search-badge" in css
+        badge_rule = css.split(".album-search-badge {")[1].split("}")[0]
+        assert "background: var(--glass)" in badge_rule
+        assert ".album-search-filters .pill:focus-visible" in css
+        assert "outline:" in css.split(
+            ".album-search-filters .pill:focus-visible"
+        )[1].split("}")[0]
+
+    def test_album_results_have_one_header_and_filtered_empty_path(self):
+        js = read_gui_js()
+        source = js.split("function renderUnifiedSearchResults(")[1].split(
+            "function renderSearchResults("
+        )[0]
+        results_source = js.split("function renderSearchResults(")[1].split(
+            "function _trackKey("
+        )[0]
+        filtered_condition = "state.searchType === 'albums' && data.unfiltered_total > 0"
+        assert source.count("'Tidal Albums'") == 1
+        assert "renderSearchResults(tidalWrap, tidalResponse, false)" in source
+        assert "unfiltered_total: originalTidalItems.length" in source
+        assert "originalTidalItems.length === 0" in source
+        assert filtered_condition in results_source
+        filtered_branch = results_source.split(filtered_condition)[1].split(
+            "textEl('div', 'Nothing here', 'empty-state-title')"
+        )[0]
+        assert "No albums match these filters" in filtered_branch
+        assert "Use Clear filters above to see every album." in filtered_branch
+        assert "return;" in filtered_branch
+
+    def test_search_cache_matches_query_and_type_and_drops_stale_results(self):
+        js = read_gui_js()
+        search_source = js.split("async function doSearch(resultsArea) {")[1].split(
+            "function renderTidalSearchAuthPanel("
+        )[0]
+        cached_source = js.split("function _rerenderCachedSearch(")[1].split(
+            "function _renderAlbumFilterControls("
+        )[0]
+        view_source = js.split("function renderSearch(container) {")[1].split(
+            "function _greeting() {"
+        )[0]
+        assert "const query = state.searchQuery.trim();" in search_source
+        assert "const type = state.searchType;" in search_source
+        assert "state.searchQuery.trim() !== query || state.searchType !== type" in search_source
+        assert "state.searchResults = { query, type, local: localData, tidal: tidalData, tidalAuthRequired };" in search_source
+        assert "state.searchResults.query === state.searchQuery.trim()" in cached_source
+        assert "state.searchResults.type === state.searchType" in cached_source
+        assert "state.searchResults.query === state.searchQuery.trim()" in view_source
+        assert "state.searchResults.type === state.searchType" in view_source
 
     def test_has_queue_context_actions(self):
         js = read_gui_js()
@@ -212,6 +336,10 @@ class TestAppJsFeatureMarkers:
         assert html.index('/routes.js') < html.index('/api.js')
         assert html.index('/api.js') < html.index('/views.js')
         assert html.index('/views.js') < html.index('/player.js')
+
+    def test_html_declares_favicon(self):
+        html = (STATIC_DIR / "index.html").read_text()
+        assert '<link rel="icon" href="/favicon.ico"' in html
 
     def test_h_helper_does_not_write_false_boolean_attributes(self):
         js = read_gui_js()

@@ -222,6 +222,12 @@ class Tidal(BaseConfig[ModelToken]):
     api_cache: TTLCache
     _active_key_index: int
 
+    @staticmethod
+    def _new_session() -> Session:
+        session = Session(TidalConfig(item_limit=10000))
+        session.request_session.verify = certifi.where()
+        return session
+
     def __new__(cls) -> Self:
         global _tidal_instance
         with _singleton_lock:
@@ -237,9 +243,7 @@ class Tidal(BaseConfig[ModelToken]):
             return
         self._singleton_ready = True
         super().__init__(ModelToken, path_file_token())
-        tidal_config = TidalConfig(item_limit=10000)
-        self.session = Session(tidal_config)
-        self.session.request_session.verify = certifi.where()
+        self.session = self._new_session()
         self.original_client_id = self.session.config.client_id
         self.original_client_secret = self.session.config.client_secret
         # Serialize all stream-fetch operations to prevent race conditions
@@ -583,7 +587,7 @@ class Tidal(BaseConfig[ModelToken]):
         # Try to auto-open the browser; fall back gracefully on headless systems.
         try:
             typer.launch(url)
-            _console.print(f"[green]Browser opened.[/green] If it did not open, visit:")
+            _console.print("[green]Browser opened.[/green] If it did not open, visit:")
         except Exception:
             _console.print("[yellow]Could not open browser automatically.[/yellow] Visit:")
 
@@ -651,14 +655,32 @@ class Tidal(BaseConfig[ModelToken]):
         self.settings.save()
 
     def logout(self) -> bool:
-        """Remove the stored token and invalidate the current session.
+        """Remove the stored token and replace the current session.
 
         Returns:
             bool: Always True.
         """
+        session = self._new_session()
+        original_client_id = session.config.client_id
+        original_client_secret = session.config.client_secret
+        key = _api.getItem(0)
+        if key.get("valid") == "True" and key.get("clientId"):
+            session.config.client_id = key["clientId"]
+            session.config.client_secret = key["clientSecret"]
+
+        if hasattr(self, "settings"):
+            session.audio_quality = Quality(self.settings.data.quality_audio)
+        session.video_quality = VideoQuality.high
+
         Path(self.file_path).unlink(missing_ok=True)
+        self.session = session
+        self.original_client_id = original_client_id
+        self.original_client_secret = original_client_secret
+        self.data = ModelToken()
         self.token_from_storage = False
-        del self.session
+        self.is_atmos_session = False
+        self._active_key_index = 0
+        self.api_cache.clear()
         return True
 
 

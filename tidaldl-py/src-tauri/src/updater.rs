@@ -5,7 +5,7 @@ use log::info;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 
-use crate::Sidecar;
+use crate::{shutdown_owned_sidecar, Sidecar};
 
 // ---------------------------------------------------------------------------
 // State machine
@@ -146,18 +146,7 @@ pub async fn install_update(
     info!("updater: shutting down sidecar before install");
     {
         let mut guard = sidecar.0.lock().unwrap();
-        let child = if guard.owns_child {
-            guard.base_url = None;
-            guard.health_url = None;
-            guard.owns_child = false;
-            guard.child.take()
-        } else {
-            None
-        };
-
-        if let Some(child) = child {
-            let _ = child.kill();
-        }
+        let _ = shutdown_owned_sidecar(&mut guard);
     }
     // Give sidecar time to die (brief blocking sleep is acceptable here)
     std::thread::sleep(Duration::from_secs(2));

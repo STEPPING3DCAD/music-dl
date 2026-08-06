@@ -101,6 +101,7 @@ fn reusable_local_metadata(meta: &DaemonMetadata, health_ready: bool) -> bool {
         && reusable_metadata(meta, health_ready)
 }
 
+#[cfg(not(windows))]
 fn process_parent_pid(pid: u32) -> Option<u32> {
     let output = std::process::Command::new("ps")
         .args(["-o", "ppid=", "-p", &pid.to_string()])
@@ -113,6 +114,7 @@ fn process_parent_pid(pid: u32) -> Option<u32> {
     String::from_utf8_lossy(&output.stdout).trim().parse().ok()
 }
 
+#[cfg(not(windows))]
 fn process_has_ancestor(mut pid: u32, ancestor: u32) -> bool {
     for _ in 0..16 {
         let Some(parent) = process_parent_pid(pid) else {
@@ -130,8 +132,38 @@ fn process_has_ancestor(mut pid: u32, ancestor: u32) -> bool {
     false
 }
 
-fn sidecar_metadata_matches(meta: &DaemonMetadata, pid: u32) -> bool {
-    meta.mode == SIDECAR_MODE && (meta.pid == pid || process_has_ancestor(meta.pid, pid))
+fn sidecar_metadata_matches(meta: &DaemonMetadata, spawned_pid: u32) -> bool {
+    if meta.mode != SIDECAR_MODE {
+        return false;
+    }
+
+    #[cfg(windows)]
+    {
+        let _ = spawned_pid;
+        true
+    }
+
+    #[cfg(not(windows))]
+    {
+        meta.pid == spawned_pid || process_has_ancestor(meta.pid, spawned_pid)
+    }
+}
+
+fn resolve_daemon_home(
+    home: Option<String>,
+    home_drive: Option<String>,
+    home_path: Option<String>,
+) -> Result<PathBuf, String> {
+    if let Some(home) = home.filter(|value| !value.trim().is_empty()) {
+        return Ok(PathBuf::from(home));
+    }
+
+    match (home_drive, home_path) {
+        (Some(drive), Some(path)) if !drive.trim().is_empty() && !path.trim().is_empty() => {
+            Ok(PathBuf::from(format!("{drive}{path}")))
+        }
+        _ => Err("HOME is not set".to_string()),
+    }
 }
 
 fn daemon_metadata_path() -> Result<PathBuf, String> {
@@ -141,11 +173,16 @@ fn daemon_metadata_path() -> Result<PathBuf, String> {
         }
     }
 
-    let home = std::env::var("HOME").map_err(|_| "HOME is not set".to_string())?;
-    Ok(PathBuf::from(home)
-        .join(".config")
-        .join(APP_NAME)
-        .join("daemon.json"))
+    #[cfg(windows)]
+    let (home_drive, home_path) = (
+        std::env::var("HOMEDRIVE").ok(),
+        std::env::var("HOMEPATH").ok(),
+    );
+    #[cfg(not(windows))]
+    let (home_drive, home_path) = (None, None);
+
+    let home = resolve_daemon_home(std::env::var("HOME").ok(), home_drive, home_path)?;
+    Ok(home.join(".config").join(APP_NAME).join("daemon.json"))
 }
 
 fn read_daemon_metadata() -> Option<DaemonMetadata> {
@@ -381,6 +418,104 @@ fn spawn_sidecar(app: &tauri::AppHandle) -> Result<CommandChild, String> {
     Ok(child)
 }
 
+#[cfg(windows)]
+fn windows_sidecar_kill_args(pid: u32) -> Vec<String> {
+    vec![
+        "/PID".to_string(),
+        pid.to_string(),
+        "/T".to_string(),
+        "/F".to_string(),
+    ]
+}
+
+fn parse_process_parent_pairs(output: &str) -> Vec<(u32, u32)> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let pid = fields.next()?.parse::<u32>().ok()?;
+            let parent_pid = fields.next()?.parse::<u32>().ok()?;
+            (pid != 0 && fields.next().is_none()).then_some((pid, parent_pid))
+        })
+        .collect()
+}
+
+fn owned_sidecar_descendants(parent_pairs: &[(u32, u32)], wrapper_pid: u32) -> Vec<u32> {
+    let mut descendants = Vec::new();
+    let mut pending = vec![(wrapper_pid, 0)];
+    let mut seen = std::collections::BTreeSet::new();
+
+    while let Some((parent_pid, depth)) = pending.pop() {
+        for (pid, candidate_parent_pid) in parent_pairs {
+            if *candidate_parent_pid == parent_pid && seen.insert(*pid) {
+                descendants.push((*pid, depth + 1));
+                pending.push((*pid, depth + 1));
+            }
+        }
+    }
+
+    descendants.sort_by(|(left_pid, left_depth), (right_pid, right_depth)| {
+        right_depth
+            .cmp(left_depth)
+            .then_with(|| left_pid.cmp(right_pid))
+    });
+    descendants.into_iter().map(|(pid, _)| pid).collect()
+}
+
+#[cfg(not(windows))]
+fn owned_sidecar_descendants_from_ps(wrapper_pid: u32) -> Vec<u32> {
+    let output = std::process::Command::new("ps")
+        .args(["-axo", "pid=,ppid="])
+        .output();
+    let Ok(output) = output else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+
+    owned_sidecar_descendants(
+        &parse_process_parent_pairs(&String::from_utf8_lossy(&output.stdout)),
+        wrapper_pid,
+    )
+}
+
+fn kill_owned_sidecar(child: CommandChild) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        let status = std::process::Command::new("taskkill")
+            .args(windows_sidecar_kill_args(child.pid()))
+            .status();
+        if matches!(status, Ok(status) if status.success()) {
+            return Ok(());
+        }
+    }
+
+    #[cfg(not(windows))]
+    for pid in owned_sidecar_descendants_from_ps(child.pid()) {
+        let _ = std::process::Command::new("kill")
+            .args(["-TERM", &pid.to_string()])
+            .status();
+    }
+
+    child.kill().map_err(|error| error.to_string())
+}
+
+pub(crate) fn shutdown_owned_sidecar(state: &mut SidecarState) -> Result<(), String> {
+    if !state.owns_child {
+        return Ok(());
+    }
+
+    state.base_url = None;
+    state.health_url = None;
+    state.owns_child = false;
+
+    match state.child.take() {
+        Some(child) => kill_owned_sidecar(child),
+        None => Ok(()),
+    }
+}
+
 fn spawn_and_wait_for_sidecar(app: &tauri::AppHandle) -> Result<SidecarState, String> {
     let child = spawn_sidecar(app)?;
     let pid = child.pid();
@@ -388,7 +523,7 @@ fn spawn_and_wait_for_sidecar(app: &tauri::AppHandle) -> Result<SidecarState, St
     match wait_for_ready_metadata(Some(pid)) {
         Ok(meta) => state_from_owned_child(child, meta),
         Err(err) => {
-            let _ = child.kill();
+            let _ = kill_owned_sidecar(child);
             Err(err)
         }
     }
@@ -459,7 +594,7 @@ fn launch_initial_sidecar(handle: tauri::AppHandle) {
         if let Some(sidecar) = handle.try_state::<Sidecar>() {
             let mut guard = sidecar.0.lock().unwrap();
             if guard.child.is_some() || guard.health_url.is_some() {
-                let _ = child.kill();
+                let _ = kill_owned_sidecar(child);
                 return;
             }
 
@@ -470,7 +605,7 @@ fn launch_initial_sidecar(handle: tauri::AppHandle) {
                 owns_child: true,
             };
         } else {
-            let _ = child.kill();
+            let _ = kill_owned_sidecar(child);
             return;
         }
 
@@ -506,7 +641,7 @@ fn launch_initial_sidecar(handle: tauri::AppHandle) {
                     let current_pid = guard.child.as_ref().map(|child| child.pid());
                     if guard.owns_child && current_pid == Some(pid) {
                         if let Some(child) = guard.child.take() {
-                            let _ = child.kill();
+                            let _ = kill_owned_sidecar(child);
                         }
                         guard.base_url = None;
                         guard.health_url = None;
@@ -536,15 +671,11 @@ fn stop_sidecar(sidecar: tauri::State<'_, Sidecar>) -> Result<(), String> {
         return Err("Daemon is external".into());
     }
 
-    match guard.child.take() {
-        Some(child) if guard.owns_child => {
-            guard.base_url = None;
-            guard.health_url = None;
-            guard.owns_child = false;
-            child.kill().map_err(|e| e.to_string())
-        }
-        _ => Err("Sidecar is not running".into()),
+    if !guard.owns_child || guard.child.is_none() {
+        return Err("Sidecar is not running".into());
     }
+
+    shutdown_owned_sidecar(&mut guard)
 }
 
 #[tauri::command]
@@ -567,7 +698,7 @@ fn start_sidecar(app: tauri::AppHandle, sidecar: tauri::State<'_, Sidecar>) -> R
     };
 
     if let Some(child) = child {
-        let _ = child.kill();
+        let _ = kill_owned_sidecar(child);
         thread::sleep(Duration::from_millis(500));
     }
 
@@ -597,7 +728,7 @@ fn restart_sidecar(
     };
 
     if let Some(child) = child {
-        let _ = child.kill();
+        let _ = kill_owned_sidecar(child);
     }
 
     // Brief pause so the port is freed before we respawn
@@ -693,7 +824,7 @@ pub fn run() {
                         }
 
                         if let Some(child) = guard.child.take() {
-                            let _ = child.kill();
+                            let _ = kill_owned_sidecar(child);
                         }
                     }
                 }
@@ -800,24 +931,115 @@ mod tests {
         assert!(reusable_local_metadata(&browser_meta, true));
     }
 
-    #[test]
-    fn sidecar_metadata_requires_sidecar_mode_and_matching_pid() {
-        let meta = DaemonMetadata {
+    fn sample_sidecar_metadata(pid: u32, mode: &str) -> DaemonMetadata {
+        DaemonMetadata {
             app: APP_NAME.to_string(),
             status: READY_STATUS.to_string(),
-            pid: 123,
+            pid,
             base_url: "http://127.0.0.1:8766".to_string(),
             health_url: "http://127.0.0.1:8766/api/server/health".to_string(),
-            mode: "tauri-sidecar".to_string(),
-        };
+            mode: mode.to_string(),
+        }
+    }
 
+    #[test]
+    fn sidecar_metadata_rejects_wrong_mode() {
+        let meta = sample_sidecar_metadata(123, BROWSER_MODE);
+        assert!(!sidecar_metadata_matches(&meta, 123));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn sidecar_metadata_requires_matching_pid_on_unix() {
+        let meta = sample_sidecar_metadata(123, SIDECAR_MODE);
         assert!(sidecar_metadata_matches(&meta, 123));
         assert!(!sidecar_metadata_matches(&meta, 456));
+    }
 
-        let browser_meta = DaemonMetadata {
-            mode: BROWSER_MODE.to_string(),
-            ..meta
+    #[cfg(windows)]
+    #[test]
+    fn sidecar_metadata_accepts_pyinstaller_child_pid_on_windows() {
+        let meta = sample_sidecar_metadata(123, SIDECAR_MODE);
+        assert!(sidecar_metadata_matches(&meta, 456));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_sidecar_kill_targets_process_tree() {
+        assert_eq!(
+            windows_sidecar_kill_args(123),
+            vec!["/PID", "123", "/T", "/F"]
+        );
+    }
+
+    #[test]
+    fn parse_process_parent_pairs_reads_numeric_ps_lines() {
+        assert_eq!(
+            parse_process_parent_pairs("  42     1\n  43    42\n"),
+            vec![(42, 1), (43, 42)]
+        );
+    }
+
+    #[test]
+    fn parse_process_parent_pairs_ignores_malformed_ps_lines() {
+        assert_eq!(
+            parse_process_parent_pairs("42 1\ninvalid\n43 nope\n0 1\n44 1 extra\n"),
+            vec![(42, 1)]
+        );
+    }
+
+    #[test]
+    fn owned_sidecar_descendants_are_recursive_and_deepest_first() {
+        let descendants = owned_sidecar_descendants(
+            &[(40, 10), (41, 40), (42, 40), (43, 41), (44, 43), (90, 1)],
+            10,
+        );
+
+        assert_eq!(descendants, vec![44, 43, 41, 42, 40]);
+    }
+
+    #[test]
+    fn updater_shutdown_uses_shared_owned_sidecar_cleanup() {
+        let mut state = SidecarState {
+            child: None,
+            base_url: Some("http://127.0.0.1:8766".to_string()),
+            health_url: Some("http://127.0.0.1:8766/api/server/health".to_string()),
+            owns_child: true,
         };
-        assert!(!sidecar_metadata_matches(&browser_meta, 123));
+
+        shutdown_owned_sidecar(&mut state).unwrap();
+
+        assert!(state.child.is_none());
+        assert!(state.base_url.is_none());
+        assert!(state.health_url.is_none());
+        assert!(!state.owns_child);
+
+        let updater_source = include_str!("updater.rs");
+        assert!(updater_source.contains("shutdown_owned_sidecar(&mut guard)"));
+        assert!(!updater_source.contains("child.kill()"));
+    }
+
+    #[test]
+    fn daemon_home_prefers_home() {
+        let path = resolve_daemon_home(
+            Some("C:\\primary".to_string()),
+            Some("D:".to_string()),
+            Some("\\fallback".to_string()),
+        )
+        .unwrap();
+
+        assert_eq!(path, PathBuf::from("C:\\primary"));
+    }
+
+    #[test]
+    fn daemon_home_uses_windows_parts_without_home() {
+        let path = resolve_daemon_home(
+            None,
+            Some("C:".to_string()),
+            Some("\\Users\\tester".to_string()),
+        )
+        .unwrap();
+
+        assert_eq!(path, PathBuf::from("C:\\Users\\tester"));
     }
 }
