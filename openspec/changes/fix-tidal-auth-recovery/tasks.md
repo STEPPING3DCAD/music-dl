@@ -22,3 +22,12 @@
 - [ ] 3.4 From the repository root run `rtk uv sync --project tidaldl-py --extra build`; then from `tidaldl-py/` run `rtk bun install` and `rtk bunx tauri build --bundles app --config '{"bundle":{"createUpdaterArtifacts":false}}'`. Launch the unsigned app with an isolated temporary config containing only fake future-dated credentials, verify Reset Tidal connection opens the in-app confirmation, cancel preserves the fixture, Continue removes only the fixture token, and quit removes the packaged process tree.
 - [ ] 3.5 Record source, test, and packaged-app evidence in `openspec/changes/fix-tidal-auth-recovery/verification.md`, then run `rtk openspec validate fix-tidal-auth-recovery --strict`.
 - [ ] 3.6 Review the final diff for unnecessary complexity with Ponytail and for correctness against every scenario; remove any speculative code and rerun affected checks.
+
+## 4. Stable v1.7.2 deployment
+
+- [ ] 4.1 Use `scripts/release_version.py bump patch` to update all tracked release metadata and turn the pending changelog entry into v1.7.2; run the focused release-version and edge-channel tests plus `scripts/release_version.py check`.
+- [ ] 4.2 Commit the verified implementation and release metadata, push the SSH-backed hotfix branch, open a ready pull request, and require the current commit's CI checks to pass before merge.
+- [ ] 4.3 Merge the hotfix, create annotated tag `v1.7.2` from the merged `master` commit, push the tag, and wait for every `build-desktop` platform job and manifest-publishing job to succeed.
+- [ ] 4.4 Verify the v1.7.2 GitHub release contains `latest.json`, signed macOS, Linux, and Windows updater artifacts, and matching signature files; verify `latest.json` advertises `1.7.2`.
+- [ ] 4.5 Launch the installed v1.7.1 app, use its Check for Updates control, and verify it shows the v1.7.2 update notification without installing the update.
+- [ ] 4.6 Append release-workflow, asset, manifest, and updater-notification evidence to `verification.md`; run strict OpenSpec validation and close GitHub issue #115 with the verified release link.

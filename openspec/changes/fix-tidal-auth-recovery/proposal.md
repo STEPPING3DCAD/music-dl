@@ -8,6 +8,7 @@ Desktop users on v1.7.1 can be trapped in an expired Tidal state: the packaged T
 - Persist naive Tidal expiry datetimes as UTC so local timezone offsets cannot shorten token lifetime.
 - Re-persist a still-valid session during reconnect so credentials written by affected releases repair themselves without another OAuth grant.
 - Add focused frontend and backend regressions for reset confirmation, UTC serialization, and reconnect repair.
+- Publish the repair as stable v1.7.2 and verify that an installed v1.7.1 app receives its update notification.
 
 ## Capabilities
 
@@ -24,4 +25,5 @@ None.
 - Frontend: `tidaldl-py/tidal_dl/gui/static/views.js` and its Bun decision tests.
 - Backend: `tidaldl-py/tidal_dl/config.py`, `tidaldl-py/tidal_dl/gui/api/settings.py`, and focused Python tests.
 - API shape and dependencies remain unchanged.
+- Release: patch-version metadata, signed updater artifacts for all supported desktop platforms, and live updater-discovery verification.
 - User report: GitHub issue #115.

@@ -10,6 +10,7 @@ Tidal authentication crosses three existing boundaries: browser controls in `vie
 - Persist Tidal's naive expiry as UTC on every new login or refresh.
 - Repair a valid credential file written with the old timezone-shifted timestamp when the user reconnects.
 - Preserve current API response shapes and authentication safety.
+- Publish a stable signed patch release and prove update discovery from v1.7.1.
 
 **Non-Goals:**
 
@@ -27,15 +28,18 @@ Tidal authentication crosses three existing boundaries: browser controls in `vie
 
 4. **Use focused regression tests.** Bun tests cover real reset-button wiring to `inlineConfirm`; Python tests cover UTC serialization and the reconnect repair call. No broad refactor is needed.
 
+5. **Release through the existing stable updater pipeline.** After source and packaged-app verification, the repository release helper will bump all tracked metadata to v1.7.2. The hotfix merges before an annotated `v1.7.2` tag is pushed from the merged commit. The existing tag-triggered GitHub workflow owns signed macOS, Linux, and Windows artifacts plus `latest.json`; local packaging remains unsigned with updater artifacts disabled.
+
 ## Risks / Trade-offs
 
 - **A legacy token is already invalid remotely** → `check_login()` returns false and the normal OAuth flow remains available.
 - **A third-party future release returns an aware datetime** → preserve its timezone-aware instant rather than forcing UTC fields.
 - **The in-page dialog callback fails** → existing reset error toast and unchanged rendered state remain in force.
+- **A platform release job or updater manifest fails** → v1.7.2 is not considered deployed until every signed asset, signature, and `latest.json` is present and a v1.7.1 app reports the update.
 
 ## Migration Plan
 
-No eager migration. New and refreshed tokens serialize correctly. Existing affected credentials repair when Re-connect confirms the remote session is still valid; otherwise the user can reset and complete OAuth again. Rollback is the normal code rollback because token JSON shape is unchanged.
+No eager token migration. New and refreshed tokens serialize correctly. Existing affected credentials repair when Re-connect confirms the remote session is still valid; otherwise the user can reset and complete OAuth again. Release rollback follows the existing stable-release process because token JSON shape is unchanged.
 
 ## Open Questions
 

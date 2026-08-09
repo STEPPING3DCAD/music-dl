@@ -32,3 +32,14 @@ The system SHALL rewrite saved Tidal credentials through the corrected serialize
 #### Scenario: Remote session is invalid
 - **WHEN** Re-connect checks credentials that are invalid remotely
 - **THEN** the system SHALL continue into the existing OAuth device-login flow instead of treating them as repaired
+
+### Requirement: Published hotfix update discovery
+The system SHALL publish the repair as stable v1.7.2 through the existing signed desktop updater pipeline.
+
+#### Scenario: Stable release artifacts are complete
+- **WHEN** the merged hotfix is tagged `v1.7.2`
+- **THEN** the release SHALL contain signed updater artifacts for macOS, Linux, and Windows plus a `latest.json` manifest that advertises version `1.7.2`
+
+#### Scenario: Existing app discovers the hotfix
+- **WHEN** an installed v1.7.1 app checks the stable updater endpoint after v1.7.2 is published
+- **THEN** the app SHALL show that version `1.7.2` is available
