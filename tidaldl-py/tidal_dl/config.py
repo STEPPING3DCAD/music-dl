@@ -11,7 +11,7 @@ import json
 import os
 import shutil
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 from json import JSONDecodeError
 from pathlib import Path
 from threading import Event, Lock
@@ -427,9 +427,9 @@ class Tidal(BaseConfig[ModelToken]):
                 refresh_token: str = self.data.refresh_token or ""
                 _raw_exp = self.data.expiry_time
                 if isinstance(_raw_exp, datetime):
-                    expiry_time = _raw_exp
+                    expiry_time = _raw_exp if _raw_exp.tzinfo is not None else _raw_exp.replace(tzinfo=UTC)
                 elif _raw_exp and _raw_exp > 0:
-                    expiry_time = datetime.fromtimestamp(_raw_exp)
+                    expiry_time = datetime.fromtimestamp(_raw_exp, tz=UTC)
                 else:
                     expiry_time = None
 
@@ -476,6 +476,8 @@ class Tidal(BaseConfig[ModelToken]):
         self.set_option("access_token", self.session.access_token)
         self.set_option("refresh_token", self.session.refresh_token)
         _exp = self.session.expiry_time
+        if isinstance(_exp, datetime) and _exp.tzinfo is None:
+            _exp = _exp.replace(tzinfo=UTC)
         self.set_option("expiry_time", _exp.timestamp() if hasattr(_exp, "timestamp") else _exp)
         self.save()
 

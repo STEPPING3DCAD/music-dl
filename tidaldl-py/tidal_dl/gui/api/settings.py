@@ -200,14 +200,20 @@ def _wait_for_login(tidal: Tidal, future, generation: int) -> None:
 
 
 @router.post("/auth/login")
-def auth_login() -> dict:
+def auth_login(tidal: Tidal = Depends(get_tidal_instance)) -> dict:  # noqa: B008
     """Start OAuth login. Opens a Tidal link, polls in background until confirmed."""
     global _login_generation
-    tidal = get_tidal_instance()
     with _login_lock:
         if tidal.session.check_login():
-            _login_state["status"] = "success"
-            return {"status": "already_logged_in"}
+            refresh_token = getattr(tidal.session, "refresh_token", None)
+            try:
+                refreshed = bool(refresh_token) and tidal.session.token_refresh(refresh_token)
+                if refreshed:
+                    tidal.token_persist()
+                    _login_state["status"] = "success"
+                    return {"status": "already_logged_in"}
+            except Exception:
+                pass
 
         if _login_state["status"] == "pending":
             return _login_state.copy()

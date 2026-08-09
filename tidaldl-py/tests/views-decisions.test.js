@@ -27,7 +27,6 @@ function loadTidalResetHelpers(deps = {}) {
   if (!helperSource) throw new Error('Tidal reset helpers not found');
 
   return new Function(
-    'window',
     'api',
     'clearInterval',
     '_dismissDeviceCodeModal',
@@ -40,7 +39,6 @@ function loadTidalResetHelpers(deps = {}) {
 ${helperSource[0]}
 return { _authStateCanReset, _resetTidalConnection, getLoginPoll: () => _loginPoll };`,
   )(
-    deps.window || { confirm: () => true },
     deps.api || (async () => ({})),
     deps.clearInterval || (() => {}),
     deps.dismiss || (() => {}),
@@ -50,6 +48,45 @@ return { _authStateCanReset, _resetTidalConnection, getLoginPoll: () => _loginPo
     deps.clearRemote || (() => {}),
     deps.initialPoll === undefined ? 42 : deps.initialPoll,
   );
+}
+
+function wireTidalResetButton(deps = {}) {
+  const block = viewsSource.match(
+    /if \(_authStateCanReset\(data\.auth_state\)\) \{[\s\S]*?row\.appendChild\(resetBtn\);\n    \}/,
+  );
+  if (!block) throw new Error('Tidal reset button wiring not found');
+
+  const listeners = [];
+  const button = {
+    addEventListener(type, listener) {
+      if (type === 'click') listeners.push(listener);
+    },
+    click() {
+      listeners.forEach(listener => listener());
+    },
+  };
+  const row = { appendChild() {} };
+
+  new Function(
+    'data',
+    '_authStateCanReset',
+    'textEl',
+    'inlineConfirm',
+    '_resetTidalConnection',
+    'container',
+    'row',
+    block[0],
+  )(
+    { auth_state: 'expired' },
+    () => true,
+    () => button,
+    deps.inlineConfirm,
+    deps.reset,
+    {},
+    row,
+  );
+
+  return button;
 }
 
 function loadAlbumFilterHelper() {
@@ -143,18 +180,23 @@ describe('Tidal connection reset decisions', () => {
     expect(_authStateCanReset('not_configured')).toBe(false);
   });
 
-  test('cancel sends no request and preserves login polling', async () => {
-    let requests = 0;
-    const helpers = loadTidalResetHelpers({
-      window: { confirm: () => false },
-      api: async () => { requests += 1; },
+  test('waits for in-page confirmation before invoking reset', () => {
+    let resetCalls = 0;
+    let confirmation;
+    const button = wireTidalResetButton({
+      inlineConfirm: (message, onYes) => { confirmation = { message, onYes }; },
+      reset: () => { resetCalls += 1; },
     });
 
-    const result = await helpers._resetTidalConnection({ marker: 'connected' });
+    button.click();
 
-    expect(result).toBe(false);
-    expect(requests).toBe(0);
-    expect(helpers.getLoginPoll()).toBe(42);
+    expect(resetCalls).toBe(0);
+    expect(confirmation.message).toBe(
+      'Reset the saved Tidal connection? You will need to log in again.',
+    );
+    confirmation.onYes();
+    expect(resetCalls).toBe(1);
+    expect(viewsSource).not.toContain("window.confirm('Reset the saved Tidal connection?");
   });
 
   test('confirm resets once without starting login and refreshes both auth surfaces', async () => {

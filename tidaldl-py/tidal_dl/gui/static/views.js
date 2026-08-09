@@ -4056,8 +4056,6 @@ function _authStateCanReset(authState) {
 }
 
 async function _resetTidalConnection(container) {
-  if (!window.confirm('Reset the saved Tidal connection? You will need to log in again.')) return false;
-
   try {
     await api('/auth/reset', { method: 'POST' });
     _setRemotePlaybackUnavailable(false);
@@ -4097,7 +4095,9 @@ async function loadAuthStatus(container) {
     }
     if (_authStateCanReset(data.auth_state)) {
       const resetBtn = textEl('button', 'Reset Tidal connection', 'banner-action');
-      resetBtn.addEventListener('click', () => { _resetTidalConnection(container); });
+      resetBtn.addEventListener('click', () => {
+        inlineConfirm('Reset the saved Tidal connection? You will need to log in again.', () => { _resetTidalConnection(container); });
+      });
       row.appendChild(resetBtn);
     }
     container.appendChild(row);

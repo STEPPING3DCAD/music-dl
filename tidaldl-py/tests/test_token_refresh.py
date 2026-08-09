@@ -1,6 +1,7 @@
 """Tests for Tidal._ensure_token_fresh token refresh logic."""
 
 import time
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -9,7 +10,6 @@ import pytest
 from tidalapi.media import Quality, VideoQuality
 
 from tidal_dl.config import reset_singletons
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -203,6 +203,55 @@ class TestEnsureTokenFreshErrorHandling:
 # ---------------------------------------------------------------------------
 
 class TestDatetimeExpiryHandling:
+    def test_token_persist_treats_naive_expiry_as_utc(self, tidal):
+        class NaiveExpiry(datetime):
+            def timestamp(self):
+                assert self.tzinfo is UTC
+                return super().timestamp()
+
+        expiry = NaiveExpiry.fromisoformat("2026-01-02T03:04:05")
+        tidal.session.token_type = "Bearer"
+        tidal.session.access_token = "access"
+        tidal.session.refresh_token = "refresh"
+        tidal.session.expiry_time = expiry
+
+        tidal.token_persist()
+
+        assert tidal.data.expiry_time == expiry.replace(tzinfo=UTC).timestamp()
+
+    def test_token_persist_preserves_aware_expiry_instant(self, tidal):
+        expiry = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone(timedelta(hours=9)))
+        tidal.session.token_type = "Bearer"
+        tidal.session.access_token = "access"
+        tidal.session.refresh_token = "refresh"
+        tidal.session.expiry_time = expiry
+
+        tidal.token_persist()
+
+        assert tidal.data.expiry_time == expiry.timestamp()
+
+    def test_stored_epoch_round_trips_without_timezone_shift(self, tidal):
+        stored_epoch = 1_800_000_000.0
+        tidal.token_from_storage = True
+        tidal.data.token_type = "Bearer"
+        tidal.data.access_token = "access"
+        tidal.data.refresh_token = "refresh"
+        tidal.data.expiry_time = stored_epoch
+        tidal.session.load_oauth_session.return_value = True
+
+        assert tidal.login_token() is True
+
+        loaded_expiry = tidal.session.load_oauth_session.call_args.args[3]
+        assert loaded_expiry.tzinfo is UTC
+        tidal.session.token_type = "Bearer"
+        tidal.session.access_token = "access"
+        tidal.session.refresh_token = "refresh"
+        tidal.session.expiry_time = loaded_expiry
+
+        tidal.token_persist()
+
+        assert tidal.data.expiry_time == stored_epoch
+
     def test_datetime_expiry_near_triggers_refresh(self, tidal):
         """expiry_time as a datetime object within the refresh window fires refresh."""
         from datetime import datetime
