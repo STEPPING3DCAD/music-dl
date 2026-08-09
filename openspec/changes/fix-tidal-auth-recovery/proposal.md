@@ -6,7 +6,7 @@ Desktop users on v1.7.1 can be trapped in an expired Tidal state: the packaged T
 
 - Show the existing in-app confirmation before resetting saved Tidal credentials, including in the packaged desktop WebView.
 - Persist naive Tidal expiry datetimes as UTC so local timezone offsets cannot shorten token lifetime.
-- Re-persist a still-valid session during reconnect so credentials written by affected releases repair themselves without another OAuth grant.
+- Refresh and persist a still-valid session during reconnect so credentials written by affected releases receive a new correct expiry without another OAuth grant.
 - Add focused frontend and backend regressions for reset confirmation, UTC serialization, and reconnect repair.
 - Publish the repair as stable v1.7.2 and verify that an installed v1.7.1 app receives its update notification.
 

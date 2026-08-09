@@ -10,7 +10,7 @@ class _NeverCompletes:
         threading.Event().wait(60)
 
 
-def test_gui_auth_login_refreshes_api_keys_before_oauth(monkeypatch):
+def test_gui_auth_login_refreshes_api_keys_before_oauth():
     from tidal_dl.gui.api import settings as settings_api
 
     calls = []
@@ -41,12 +41,80 @@ def test_gui_auth_login_refreshes_api_keys_before_oauth(monkeypatch):
 
     settings_api._login_state.clear()
     settings_api._login_state.update({"status": "idle"})
-    monkeypatch.setattr(settings_api, "get_tidal_instance", lambda: Tidal())
-
-    result = settings_api.auth_login()
+    result = settings_api.auth_login(Tidal())
 
     assert result["status"] == "pending"
     assert calls == ["refresh_api_keys", "login_oauth"]
+
+
+def test_gui_auth_login_repairs_valid_existing_session():
+    from tidal_dl.gui.api import settings as settings_api
+
+    calls = []
+
+    class Session:
+        refresh_token = "legacy-refresh"
+
+        def check_login(self):
+            calls.append("check_login")
+            return True
+
+        def token_refresh(self, refresh_token):
+            calls.append(("token_refresh", refresh_token))
+            return True
+
+    class Tidal:
+        session = Session()
+
+        def token_persist(self):
+            calls.append("token_persist")
+
+    tidal = Tidal()
+    settings_api._login_state.clear()
+    settings_api._login_state.update({"status": "idle"})
+
+    result = settings_api.auth_login(tidal)
+
+    assert result == {"status": "already_logged_in"}
+    assert settings_api._login_state == {"status": "success"}
+    assert calls == ["check_login", ("token_refresh", "legacy-refresh"), "token_persist"]
+
+
+def test_gui_auth_login_uses_oauth_when_refresh_cannot_repair():
+    from tidal_dl.gui.api import settings as settings_api
+
+    calls = []
+
+    class Session:
+        refresh_token = "expired-refresh"
+
+        def check_login(self):
+            return True
+
+        def token_refresh(self, refresh_token):
+            calls.append(("token_refresh", refresh_token))
+            return False
+
+        def login_oauth(self):
+            calls.append("login_oauth")
+            return (
+                SimpleNamespace(verification_uri_complete="", user_code="ABCD", expires_in=300),
+                _NeverCompletes(),
+            )
+
+    class Tidal:
+        session = Session()
+
+        def refresh_api_keys(self):
+            calls.append("refresh_api_keys")
+
+    settings_api._login_state.clear()
+    settings_api._login_state.update({"status": "idle"})
+
+    result = settings_api.auth_login(Tidal())
+
+    assert result["status"] == "pending"
+    assert calls == [("token_refresh", "expired-refresh"), "refresh_api_keys", "login_oauth"]
 
 
 class _ImmediateFuture:

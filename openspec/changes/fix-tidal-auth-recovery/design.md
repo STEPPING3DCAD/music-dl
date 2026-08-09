@@ -22,9 +22,9 @@ Tidal authentication crosses three existing boundaries: browser controls in `vie
 
 1. **Reuse `inlineConfirm` for reset.** The existing accessible in-page dialog already works in browser and Tauri modes. The reset action remains unchanged and runs only from the dialog's Continue callback. A new Tauri dialog dependency would duplicate an existing capability; removing confirmation would risk accidental credential deletion.
 
-2. **Normalize at serialization.** When `session.expiry_time` is a naive datetime, `token_persist` will attach `timezone.utc` before calling `timestamp()`. Aware datetimes and numeric values retain their represented instant. This fixes the shared persistence seam for OAuth login and token refresh without parsing JWT internals.
+2. **Normalize at the persistence boundary.** When `session.expiry_time` is a naive datetime, `token_persist` will attach UTC before calling `timestamp()`. Stored numeric epochs are reconstructed as UTC-aware datetimes so a correct token round-trips without another timezone shift. Aware datetimes and numeric values retain their represented instant. This fixes the shared persistence seam for OAuth login, stored-session loading, and token refresh without parsing JWT internals.
 
-3. **Repair through the existing reconnect path.** If `/auth/login` finds that the current Tidal session still passes `check_login()`, it will persist that session before returning `already_logged_in`. This rewrites legacy shifted timestamps using the corrected serializer; genuinely invalid sessions continue into the existing OAuth flow.
+3. **Repair through the existing reconnect path.** If `/auth/login` finds that the current Tidal session still passes `check_login()`, it will use the existing refresh token to obtain a fresh provider expiry, persist it through the corrected serializer, and then return `already_logged_in`. A missing or failed refresh continues into the existing OAuth flow instead of claiming repair succeeded.
 
 4. **Use focused regression tests.** Bun tests cover real reset-button wiring to `inlineConfirm`; Python tests cover UTC serialization and the reconnect repair call. No broad refactor is needed.
 

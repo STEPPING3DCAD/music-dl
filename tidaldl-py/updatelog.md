@@ -20,6 +20,10 @@ uv tool install --from git+https://github.com/alfdav/music-dl.git#subdirectory=t
 
 ---
 
+## v1.7.2 (2026-08-08)
+- Fixed Reset Tidal connection in the desktop app by using its in-app confirmation dialog.
+- Fixed Tidal token expiry persistence outside UTC and repaired valid affected credentials during reconnect ([#115](https://github.com/alfdav/music-dl/issues/115)).
+
 ## v1.7.1 (2026-08-05)
 - Fixed local Search and Favorites playback so downloaded tracks use their local files instead of requiring a working Tidal session.
 - Added clear local/Tidal source labels and made saved-but-unverified Tidal credentials display neutrally until remote playback is confirmed.
