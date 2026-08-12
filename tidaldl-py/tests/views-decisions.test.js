@@ -7,6 +7,34 @@ const viewsSource = readFileSync(
   'utf8',
 );
 
+function loadGroupingDecisionPayload() {
+  const helperSource = viewsSource.match(
+    /function _groupingDecisionPayload\(assessment, decision, canonicalTitle\) \{[\s\S]*?\n\}/,
+  );
+  if (!helperSource) throw new Error('grouping decision helper not found');
+  return new Function(`${helperSource[0]}\nreturn _groupingDecisionPayload;`)();
+}
+
+describe('album grouping review decisions', () => {
+  test('keeps signatures and includes title only when grouping', () => {
+    const payload = loadGroupingDecisionPayload();
+    const assessment = { left_signature: 'left', right_signature: 'right' };
+
+    expect(payload(assessment, 'group_together', 'Album')).toEqual({
+      left_signature: 'left',
+      right_signature: 'right',
+      decision: 'group_together',
+      canonical_title: 'Album',
+    });
+    expect(payload(assessment, 'keep_separate', 'Album')).toEqual({
+      left_signature: 'left',
+      right_signature: 'right',
+      decision: 'keep_separate',
+      canonical_title: null,
+    });
+  });
+});
+
 function loadArtistGroupingHelper() {
   const functionBody = viewsSource
     .split('function _groupArtistTracks(tracks) {')[1]

@@ -181,6 +181,25 @@ def test_static_js_contains_recently_added_expanded_states():
     assert "Could not load recently added albums" in js
 
 
+def test_static_assets_include_album_grouping_review_hooks():
+    client = _make_client()
+    js = _fetch_gui_js(client)
+    css = client.get("/style.css", headers=_HOST_HEADER).text
+
+    assert "possible-duplicate-badge" in js
+    assert "_openGroupingReview" in js
+    assert "Group together" in js
+    assert "Keep separate" in js
+    assert "localrelease:" in js
+    assert "const previousFocus = document.activeElement;" in js
+    assert "event.key === 'Tab'" in js
+    assert "previousFocus.focus()" in js
+    assert "user_decision_superseded" in js
+    assert "Cannot group" in js
+    assert ".possible-duplicate-badge" in css
+    assert ".grouping-review" in css
+
+
 def test_static_js_leads_onboarding_with_local_music_folders():
     client = _make_client()
     js = _fetch_gui_js(client)

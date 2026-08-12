@@ -6,7 +6,7 @@ from tidal_dl.helper.library_db._common import *
 class LibraryDBCore:
     """Thin wrapper around a SQLite scan ledger."""
 
-    _SCHEMA_VERSION = 6
+    _SCHEMA_VERSION = 8
 
     def __init__(self, db_path: pathlib.Path) -> None:
         self._path = db_path
@@ -47,6 +47,17 @@ class LibraryDBCore:
                     artist     TEXT,
                     title      TEXT,
                     album      TEXT,
+                    album_artist TEXT,
+                    release_date TEXT,
+                    track_number INTEGER,
+                    track_total INTEGER,
+                    disc_number INTEGER,
+                    disc_total INTEGER,
+                    musicbrainz_release_id TEXT,
+                    musicbrainz_release_group_id TEXT,
+                    provider_namespace TEXT,
+                    provider_album_id TEXT,
+                    barcode TEXT,
                     duration   INTEGER,
                     quality    TEXT,
                     format     TEXT,
@@ -113,6 +124,29 @@ class LibraryDBCore:
             if "metadata_complete" not in cols:
                 self._conn.execute(
                     "ALTER TABLE scanned ADD COLUMN metadata_complete INTEGER"
+                )
+
+            # v6 -> v7: release identity fields used by album grouping.
+            release_columns_added = False
+            for col, coltype in [
+                ("album_artist", "TEXT"),
+                ("release_date", "TEXT"),
+                ("track_number", "INTEGER"),
+                ("track_total", "INTEGER"),
+                ("disc_number", "INTEGER"),
+                ("disc_total", "INTEGER"),
+                ("musicbrainz_release_id", "TEXT"),
+                ("musicbrainz_release_group_id", "TEXT"),
+                ("provider_namespace", "TEXT"),
+                ("provider_album_id", "TEXT"),
+                ("barcode", "TEXT"),
+            ]:
+                if col not in cols:
+                    self._conn.execute(f"ALTER TABLE scanned ADD COLUMN {col} {coltype}")
+                    release_columns_added = True
+            if release_columns_added:
+                self._conn.execute(
+                    "UPDATE scanned SET metadata_complete = 0 WHERE status != 'unreadable'"
                 )
 
         # Backfill codecs that are unambiguous from their native file type.
@@ -269,6 +303,28 @@ class LibraryDBCore:
         )
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_favorites_at ON favorites(favorited_at)"
+        )
+
+        # Explainable album-release assessments and current user choices.
+        self._conn.execute(
+            """CREATE TABLE IF NOT EXISTS album_grouping_assessments (
+                pair_key TEXT PRIMARY KEY,
+                left_signature TEXT NOT NULL,
+                right_signature TEXT NOT NULL,
+                score INTEGER NOT NULL,
+                outcome TEXT NOT NULL,
+                evidence_json TEXT NOT NULL,
+                vetoes_json TEXT NOT NULL,
+                contradictions_json TEXT NOT NULL,
+                user_decision TEXT,
+                canonical_title TEXT,
+                catalog_json TEXT NOT NULL DEFAULT '{}',
+                evaluated_at REAL NOT NULL
+            )"""
+        )
+        self._conn.execute(
+            """CREATE INDEX IF NOT EXISTS idx_album_grouping_signatures
+               ON album_grouping_assessments(left_signature, right_signature)"""
         )
 
     def close(self) -> None:

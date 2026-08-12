@@ -213,7 +213,7 @@ TIDAL_CDN_HOSTS  = {"audio.tidal.com", "sp-ad-cf.audio.tidal.com", ...}
 
 ## 7. Database Schema
 
-SQLite at `~/.config/music-dl/library.db`. Schema version 6, WAL mode, and a
+SQLite at `~/.config/music-dl/library.db`. Schema version 8, WAL mode, and a
 5-second busy timeout.
 
 ### Tables
@@ -228,6 +228,14 @@ SQLite at `~/.config/music-dl/library.db`. Schema version 6, WAL mode, and a
 | `artist` | TEXT | |
 | `title` | TEXT | |
 | `album` | TEXT | |
+| `album_artist` | TEXT | Embedded album artist used for release grouping |
+| `release_date` | TEXT | Embedded release date or year |
+| `track_number`, `track_total` | INTEGER | Embedded track position and trusted release total |
+| `disc_number`, `disc_total` | INTEGER | Embedded disc position and trusted release total |
+| `musicbrainz_release_id` | TEXT | Embedded MusicBrainz Release identity |
+| `musicbrainz_release_group_id` | TEXT | Embedded MusicBrainz Release Group identity |
+| `provider_namespace`, `provider_album_id` | TEXT | Embedded source identity such as `tidal` plus album ID |
+| `barcode` | TEXT | Embedded UPC, EAN, or barcode |
 | `duration` | INTEGER | Seconds |
 | `quality` | TEXT | `HI_RES_LOSSLESS`, `LOSSLESS`, etc. |
 | `format` | TEXT | `FLAC`, `MP3`, etc. |
@@ -242,6 +250,20 @@ SQLite at `~/.config/music-dl/library.db`. Schema version 6, WAL mode, and a
 | `scanned_at` | INTEGER | Unix timestamp |
 
 Indexes: `idx_scanned_status`, `idx_scanned_isrc`
+
+**`album_grouping_assessments`** — explainable release-card decisions
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `pair_key` | TEXT PK | SHA-256 over the sorted current group signatures |
+| `left_signature`, `right_signature` | TEXT | Versioned local group identities |
+| `score`, `outcome` | INTEGER, TEXT | Current rubric result |
+| `evidence_json`, `vetoes_json`, `contradictions_json` | TEXT | Explainable assessment payloads |
+| `user_decision`, `canonical_title` | TEXT | Optional current local choice |
+| `catalog_json` | TEXT | Independent TIDAL/MusicBrainz attempt and result state |
+| `evaluated_at` | REAL | Unix timestamp |
+
+The album API groups only complete accepted cliques. Review and rejected pairs stay as separate cards. Optional catalog work runs after scanning; TIDAL is used only with existing credentials and MusicBrainz requests use an identifying User-Agent with a process-wide one-request-per-second limit.
 
 **`play_events`** — time-series for activity charts
 
@@ -338,8 +360,10 @@ Additive only. Runs on every `open()`:
 3. **v3 → v4**: Add `waveform` and `waveform_hires` to `scanned`
 4. **v4 → v5**: Add `art_available` to `scanned`
 5. **v5 → v6**: Add `codec` and `metadata_complete` to `scanned`; backfill unambiguous native codecs and repair remaining legacy rows on the next scan
-6. **Late additions**: Add `cover_url` and `quality` to `download_history`
-7. **Download jobs and favorites**: Create their tables and lookup indexes when absent
+6. **v6 → v7**: Add nullable release identity, position, and total fields to `scanned`; queue existing readable rows for one metadata repair pass
+7. **v7 → v8**: Add `album_grouping_assessments` for explainable scores, catalog state, and current user choices
+8. **Late additions**: Add `cover_url` and `quality` to `download_history`
+9. **Download jobs and favorites**: Create their tables and lookup indexes when absent
 
 Pattern: check `PRAGMA table_info()`, `ALTER TABLE ADD COLUMN` if missing. Never destructive.
 
@@ -347,7 +371,7 @@ Pattern: check `PRAGMA table_info()`, `ALTER TABLE ADD COLUMN` if missing. Never
 
 The scanner is the authority for local display metadata and quality. Codec, not container extension or decoded bit depth, decides whether a local file is lossy or lossless. `M4A` may contain AAC or ALAC, so an uninspected M4A remains Unknown.
 
-Metadata resolution order is meaningful embedded tag, then a conservative path fallback relative to a configured root, then Unknown. Path fallback requires `artist/album/file`; it may strip an `<artist> - ` album-folder prefix and replace generic titles such as `Track 05` with a meaningful filename. Resolution updates only `library.db` and never writes audio files.
+Metadata resolution order is meaningful embedded tag, then a conservative path fallback relative to a configured root, then Unknown. Path fallback requires `artist/album/file`; it may strip an `<artist> - ` album-folder prefix and replace generic titles such as `Track 05` with a meaningful filename. The same pass reads release identity from Vorbis comments, ID3 frames, and MP4 atoms. Missing release fields stay null. Resolution updates only `library.db` and never writes audio files.
 
 ### Connection Patterns
 

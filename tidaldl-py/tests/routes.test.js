@@ -3,6 +3,7 @@ const {
   buildAlbumView,
   buildArtistView,
   buildLocalAlbumView,
+  buildLocalReleaseView,
   normalizeLaunchView,
   normalizeView,
 } = require('../tidal_dl/gui/static/routes.js');
@@ -19,6 +20,7 @@ describe('routes', () => {
       'localalbum:A%20Tribe%20Called%20Quest:Midnight%20Marauders',
     );
     expect(normalizeView(buildAlbumView(12345))).toBe('album:12345');
+    expect(normalizeView(buildLocalReleaseView('release:abc123'))).toBe('localrelease:abc123');
   });
 
   test('falls back to home for invalid or external-looking values', () => {
@@ -26,6 +28,7 @@ describe('routes', () => {
     expect(normalizeView('artist:../../etc/passwd')).toBe('home');
     expect(normalizeView('localalbum:ok:bad/path')).toBe('home');
     expect(normalizeView('album:not-a-number')).toBe('home');
+    expect(normalizeView('localrelease:../../secret')).toBe('home');
     expect(normalizeView('')).toBe('home');
   });
 

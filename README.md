@@ -277,6 +277,12 @@ music-dl gui --setup-bot        # compatibility reminder; bot setup stays in the
 
 Run `music-dl --help` for the full list.
 
+### Duplicate album cards
+
+The local library compares exact-title album groups with a deterministic evidence rubric. Strong agreement across recording identifiers, release tags, decoded duration, and optional TIDAL/MusicBrainz results can present partial or duplicate copies as one album card. Distinct editions remain separate. Ambiguous cards show a **Possible duplicate** badge with the score, evidence sources, conflicts, and explicit **Group together** / **Keep separate** actions.
+
+Grouping changes presentation only. music-dl does not delete files or rewrite tags, library rendering works offline, and saved choices remain local. Optional catalog checks run after scanning and never block the library view.
+
 ## Bug Reports
 
 If music-dl breaks, open a GitHub issue with the bug template. The [bug reporting guide](docs/bug-reporting.md) lists the local state, logs, and safe commands that help us avoid generic follow-up questions. If you use an AI assistant, point it at that guide and ask it to fill the issue from real evidence on your machine.

@@ -27,7 +27,7 @@ function navigate(view) {
   // Deep-linked views: highlight parent nav item
   if (!document.querySelector('.nav-item.active')) {
     const parent = safeView.startsWith('artist:') ? 'home'
-      : safeView.startsWith('localalbum:') ? 'library'
+      : (safeView.startsWith('localalbum:') || safeView.startsWith('localrelease:')) ? 'library'
       : safeView.startsWith('album:') ? 'search'
       : null;
     if (parent) {
@@ -57,6 +57,8 @@ function navigate(view) {
       if (safeView.startsWith('localalbum:')) {
         const parts = safeView.substring(11).split(':');
         renderLocalAlbumDetail(container, decodeURIComponent(parts[0]), decodeURIComponent(parts.slice(1).join(':')));
+      } else if (safeView.startsWith('localrelease:')) {
+        renderLocalReleaseDetail(container, safeView.substring(13));
       } else if (safeView.startsWith('artist:')) {
         renderArtistGallery(container, decodeURIComponent(safeView.substring(7)));
       } else if (safeView.startsWith('album:')) {
@@ -1044,9 +1046,10 @@ function renderUnifiedSearchResults(container, localData, tidalData, tidalAuthRe
         const meta = h('div', { className: 'album-card-meta' });
         meta.appendChild(textEl('div', a.name || 'Unknown', 'album-card-title'));
         meta.appendChild(textEl('div', a.artist || '', 'album-card-sub'));
+        _appendGroupingBadge(meta, a);
         card.appendChild(meta);
         card.addEventListener('click', () => {
-          navigate('localalbum:' + encodeURIComponent(a.artist) + ':' + encodeURIComponent(a.name));
+          navigate(a.id ? buildLocalReleaseView(a.id) : buildLocalAlbumView(a.artist, a.name));
         });
         a11yClick(card);
         grid.appendChild(card);
@@ -1683,10 +1686,11 @@ async function renderArtistGallery(container, artistName) {
       sub.push(album.track_count + ' track' + (album.track_count !== 1 ? 's' : ''));
       if (album.best_quality) sub.push(album.best_quality);
       meta.appendChild(textEl('div', sub.join(' · '), 'album-card-sub'));
+      _appendGroupingBadge(meta, album);
       card.appendChild(meta);
 
       card.addEventListener('click', () => {
-        navigate(buildLocalAlbumView(artistName, album.name));
+        navigate(album.id ? buildLocalReleaseView(album.id) : buildLocalAlbumView(artistName, album.name));
       });
       a11yClick(card);
 
@@ -1703,7 +1707,19 @@ async function renderArtistGallery(container, artistName) {
 
 
 // ---- LOCAL ALBUM DETAIL (from library click) ----
-async function renderLocalAlbumDetail(container, artistName, albumName) {
+async function renderLocalReleaseDetail(container, releaseHash) {
+  try {
+    const data = await api('/library/releases/' + encodeURIComponent(releaseHash) + '/tracks');
+    renderLocalAlbumDetail(container, data.artist, data.album, data);
+  } catch (err) {
+    container.appendChild(h('div', { className: 'empty-state' },
+      textEl('div', 'Could not load release', 'empty-state-title'),
+      textEl('div', err.message, 'empty-state-sub')
+    ));
+  }
+}
+
+async function renderLocalAlbumDetail(container, artistName, albumName, prefetchedData) {
   const wrapper = h('div', { className: 'album-detail-view' });
   container.appendChild(wrapper);
 
@@ -1777,7 +1793,7 @@ async function renderLocalAlbumDetail(container, artistName, albumName) {
   trackList.appendChild(h('div', { className: 'skeleton-row' }));
 
   try {
-    const data = await api('/library/artist/' + encodeURIComponent(artistName) + '/album/' + encodeURIComponent(albumName) + '/tracks');
+    const data = prefetchedData || await api('/library/artist/' + encodeURIComponent(artistName) + '/album/' + encodeURIComponent(albumName) + '/tracks');
     while (trackList.firstChild) trackList.removeChild(trackList.firstChild);
 
     const tracks = data.tracks || [];
@@ -2330,6 +2346,131 @@ async function _getLibraryAlbums(query) {
   return data;
 }
 
+function _groupingDecisionPayload(assessment, decision, canonicalTitle) {
+  return {
+    left_signature: assessment.left_signature,
+    right_signature: assessment.right_signature,
+    decision,
+    canonical_title: decision === 'group_together' ? canonicalTitle : null,
+  };
+}
+
+function _openGroupingReview(album) {
+  const assessment = (album.assessments || []).find(
+    item => item.outcome === 'review' || item.user_decision_superseded,
+  );
+  if (!assessment) return;
+
+  const superseded = assessment.user_decision_superseded === true;
+  const previousFocus = document.activeElement;
+  const overlay = h('div', { className: 'modal-overlay grouping-review-overlay' });
+  const dialog = h('section', {
+    className: 'modal grouping-review',
+    role: 'dialog',
+    'aria-modal': 'true',
+    'aria-labelledby': 'grouping-review-title',
+  });
+  dialog.appendChild(textEl(
+    'h3',
+    superseded ? 'Albums kept separate' : 'Possible duplicate albums',
+    'grouping-review-title',
+  ));
+  dialog.lastChild.id = 'grouping-review-title';
+  dialog.appendChild(textEl(
+    'p',
+    assessment.left_title + '  ↔  ' + assessment.right_title,
+    'grouping-review-pair',
+  ));
+  dialog.appendChild(textEl(
+    'p',
+    'Confidence ' + assessment.score + '/100 · ' + Math.round((assessment.coverage || 0) * 100) + '% track coverage',
+    'grouping-review-score',
+  ));
+
+  const evidence = h('ul', { className: 'grouping-review-evidence' });
+  (assessment.evidence || []).forEach(item => {
+    evidence.appendChild(textEl(
+      'li',
+      item.explanation + ' (+' + item.points + ', ' + (item.sources || []).join(' + ') + ')',
+    ));
+  });
+  (assessment.vetoes || []).forEach(item => {
+    evidence.appendChild(textEl('li', 'Conflict: ' + item.explanation, 'grouping-review-veto'));
+  });
+  dialog.appendChild(evidence);
+
+  const titleLabel = textEl('label', 'Album title', 'grouping-review-label');
+  const titleSelect = h('select', { className: 'grouping-review-select' });
+  [assessment.left_title, assessment.right_title].filter(Boolean).forEach(title => {
+    titleSelect.appendChild(h('option', { value: title }, title));
+  });
+  titleLabel.appendChild(titleSelect);
+  dialog.appendChild(titleLabel);
+
+  const actions = h('div', { className: 'grouping-review-actions' });
+  const keepButton = textEl('button', 'Keep separate', 'pill');
+  const groupButton = textEl('button', 'Group together', 'pill active');
+  if (superseded) {
+    groupButton.disabled = true;
+    groupButton.textContent = 'Cannot group';
+  }
+  let onKeyDown;
+  const close = () => {
+    if (onKeyDown) document.removeEventListener('keydown', onKeyDown);
+    overlay.remove();
+    if (previousFocus && previousFocus.focus) previousFocus.focus();
+  };
+  async function save(decision) {
+    try {
+      await api('/library/grouping/decision', {
+        method: 'POST',
+        body: _groupingDecisionPayload(assessment, decision, titleSelect.value),
+      });
+      close();
+      navigate('library');
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  }
+  keepButton.addEventListener('click', () => save('keep_separate'));
+  groupButton.addEventListener('click', () => save('group_together'));
+  actions.appendChild(keepButton);
+  actions.appendChild(groupButton);
+  dialog.appendChild(actions);
+  overlay.appendChild(dialog);
+  overlay.addEventListener('click', event => { if (event.target === overlay) close(); });
+  onKeyDown = event => {
+    if (event.key === 'Escape') {
+      close();
+    } else if (event.key === 'Tab') {
+      const focusable = [titleSelect, keepButton, groupButton];
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+  };
+  document.addEventListener('keydown', onKeyDown);
+  document.body.appendChild(overlay);
+  keepButton.focus();
+}
+
+function _appendGroupingBadge(parent, album) {
+  if (!album.possible_duplicate) return;
+  const badge = textEl('button', 'Possible duplicate', 'possible-duplicate-badge');
+  badge.type = 'button';
+  badge.addEventListener('click', event => {
+    event.stopPropagation();
+    _openGroupingReview(album);
+  });
+  parent.appendChild(badge);
+}
+
 function _renderAlbumCard(album) {
   const card = h('div', { className: 'album-card' });
 
@@ -2352,10 +2493,11 @@ function _renderAlbumCard(album) {
   const sub = [album.artist || 'Unknown'];
   sub.push(album.track_count + ' track' + (album.track_count !== 1 ? 's' : ''));
   meta.appendChild(textEl('div', sub.join(' · '), 'album-card-sub'));
+  _appendGroupingBadge(meta, album);
   card.appendChild(meta);
 
   card.addEventListener('click', () => {
-    navigate('localalbum:' + encodeURIComponent(album.artist) + ':' + encodeURIComponent(album.name));
+    navigate(album.id ? buildLocalReleaseView(album.id) : buildLocalAlbumView(album.artist, album.name));
   });
   a11yClick(card);
   return card;
@@ -2397,6 +2539,7 @@ function renderRecentAlbumRow(album) {
   const sub = [album.artist || 'Unknown Artist'];
   sub.push((album.track_count || 0) + ' track' + ((album.track_count || 0) !== 1 ? 's' : ''));
   meta.appendChild(textEl('div', sub.join(' \u00b7 '), 'recent-album-sub'));
+  _appendGroupingBadge(meta, album);
   row.appendChild(meta);
 
   // Relative time (recent_at is epoch seconds)
@@ -2410,7 +2553,7 @@ function renderRecentAlbumRow(album) {
   }
 
   row.addEventListener('click', () => {
-    navigate('localalbum:' + encodeURIComponent(album.artist || 'Unknown Artist') + ':' + encodeURIComponent(album.name || 'Unknown Album'));
+    navigate(album.id ? buildLocalReleaseView(album.id) : buildLocalAlbumView(album.artist || 'Unknown Artist', album.name || 'Unknown Album'));
   });
   row.style.cursor = 'pointer';
   a11yClick(row);
