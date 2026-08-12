@@ -1,6 +1,10 @@
 import asyncio
 from pathlib import Path
 
+import pytest
+
+from tidal_dl.model.downloader import DownloadOutcome
+
 
 def _service(tmp_path):
     from tidal_dl.gui.services.download_job_service import DownloadJobService
@@ -141,7 +145,13 @@ def test_service_initial_events_include_running_jobs_and_queue_summary(tmp_path)
     ]
 
 
-def test_worker_executes_download_job_and_records_history(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "download_outcome",
+    [DownloadOutcome.DOWNLOADED, DownloadOutcome.COPIED, DownloadOutcome.SKIPPED],
+)
+def test_worker_executes_download_job_and_records_history(
+    tmp_path, monkeypatch, download_outcome
+):
     service = _service(tmp_path)
     service.enqueue_download([123])
 
@@ -150,7 +160,7 @@ def test_worker_executes_download_job_and_records_history(tmp_path, monkeypatch)
         name = "Song"
         full_name = "Song"
         duration = 1
-        artists = []
+        artists = ()
         album = None
 
     class FakeSession:
@@ -175,7 +185,7 @@ def test_worker_executes_download_job_and_records_history(tmp_path, monkeypatch)
             pass
 
         def item(self, **kwargs):
-            return None
+            return download_outcome, tmp_path / "Song.flac"
 
     monkeypatch.setattr("tidal_dl.gui.services.download_job_service.Tidal", FakeTidal)
     monkeypatch.setattr("tidal_dl.gui.services.download_job_service.Settings", FakeSettings)
@@ -188,6 +198,63 @@ def test_worker_executes_download_job_and_records_history(tmp_path, monkeypatch)
     history = service.history(limit=10)["downloads"]
     assert history[0]["track_id"] == 123
     assert history[0]["status"] == "done"
+
+
+def test_worker_failed_outcome_records_error_without_complete(tmp_path, monkeypatch):
+    service = _service(tmp_path)
+    service.enqueue_download([123])
+
+    class FakeTrack:
+        id = 123
+        name = "Song"
+        full_name = "Song"
+        duration = 1
+        artists = ()
+        album = None
+
+    class FakeSession:
+        def track(self, track_id):
+            assert track_id == 123
+            return FakeTrack()
+
+    class FakeTidal:
+        session = FakeSession()
+
+    download_path = tmp_path / "downloads"
+
+    class FakeSettingsData:
+        download_base_path = str(download_path)
+        skip_existing = True
+        format_track = "{track_title}"
+        quality_audio = "LOSSLESS"
+
+    class FakeSettings:
+        data = FakeSettingsData()
+
+    class FakeDownload:
+        def __init__(self, **kwargs):
+            pass
+
+        def item(self, **kwargs):
+            return DownloadOutcome.FAILED, ""
+
+    events = []
+    monkeypatch.setattr("tidal_dl.gui.services.download_job_service.Tidal", FakeTidal)
+    monkeypatch.setattr("tidal_dl.gui.services.download_job_service.Settings", FakeSettings)
+    monkeypatch.setattr("tidal_dl.gui.services.download_job_service.Download", FakeDownload)
+    service.events.broadcast = events.append
+
+    job = service.claim_next_for_test()
+    service.execute_job_for_test(job)
+
+    stored = service.get_job_for_test(job.id)
+    history = service.history(limit=10)["downloads"]
+    assert stored.status.value == "error"
+    assert [entry["status"] for entry in history].count("error") == 1
+    assert not any(entry["status"] == "done" for entry in history)
+    assert any(event["type"] == "error" for event in events)
+    assert not any(event["type"] == "complete" for event in events)
+    assert not download_path.exists()
 
 
 def test_worker_terminalizes_cancelled_claimed_job_without_success_history(tmp_path, monkeypatch):
@@ -292,7 +359,7 @@ def test_worker_executes_upgrade_job_and_marks_new_path(tmp_path, monkeypatch):
         id = 123
         name = "Song"
         full_name = "Song"
-        artists = [FakeArtist()]
+        artists = (FakeArtist(),)
         album = FakeAlbum()
 
     class FakeSession:
@@ -425,7 +492,7 @@ def test_worker_upgrade_renames_replacement_to_original_path_after_cleanup(tmp_p
         id = 123
         name = "Song"
         full_name = "Song"
-        artists = [FakeArtist()]
+        artists = (FakeArtist(),)
         album = FakeAlbum()
 
     class FakeSession:
