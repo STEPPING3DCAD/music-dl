@@ -20,6 +20,13 @@ uv tool install --from git+https://github.com/alfdav/music-dl.git#subdirectory=t
 
 ---
 
+## v1.7.3 (2026-08-14)
+- Fixed GUI downloads that could report success without creating a usable file, and now preserve the real failure reason across the worker, Downloads UI, and history ([#118](https://github.com/alfdav/music-dl/issues/118)).
+- Enforced the selected audio quality as an exact tier and codec contract; mismatches fail before media output is created instead of silently saving lower-quality audio.
+- Improved download reliability by isolating per-thread library database connections and committing successful track registration before other writers run.
+- Added deterministic, explainable duplicate-album grouping with safety vetoes and persistent user review decisions.
+- Added repository privacy checks for local hooks and protected-branch CI.
+
 ## v1.7.2 (2026-08-08)
 - Fixed Reset Tidal connection in the desktop app by using its in-app confirmation dialog.
 - Fixed Tidal token expiry persistence outside UTC and repaired valid affected credentials during reconnect ([#115](https://github.com/alfdav/music-dl/issues/115)).
