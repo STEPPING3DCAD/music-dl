@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import sqlite3
 import threading
 from pathlib import Path
+from types import SimpleNamespace
+
+from fastapi import FastAPI, HTTPException
+from fastapi.testclient import TestClient
 
 import tidal_dl.gui.api.home as home_api
 import tidal_dl.gui.api.library as library_api
 import tidal_dl.gui.services.db as shared_db_service
+from tidal_dl.gui.api.search import _serialize_track
 from tidal_dl.helper.library_db import LibraryDB
 
 
@@ -139,3 +145,68 @@ def test_library_api_invalidation_reopens_other_threads_on_next_access(tmp_path,
     rows, total = second.recent_albums_page(limit=1, offset=0)
     assert total == 1
     assert rows[0]["album"] == "Album"
+
+
+def test_search_serializer_skips_current_schema_migration_under_writer_lock(tmp_path):
+    db_path = tmp_path / "library.db"
+    db = LibraryDB(db_path)
+    db.open()
+    assert db._conn is not None
+    db._conn.execute(f"PRAGMA user_version = {LibraryDB._SCHEMA_VERSION}")
+    db.commit()
+    db.close()
+
+    writer_ready = threading.Event()
+    release_writer = threading.Event()
+    writer_errors: list[BaseException] = []
+
+    def hold_writer() -> None:
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            writer_ready.set()
+            assert release_writer.wait(timeout=10)
+        except (sqlite3.Error, AssertionError) as exc:  # pragma: no cover - failure path only
+            writer_errors.append(exc)
+        finally:
+            conn.rollback()
+            conn.close()
+
+    writer = threading.Thread(target=hold_writer)
+    writer.start()
+    assert writer_ready.wait(timeout=5), writer_errors
+
+    try:
+        with sqlite3.connect(db_path) as reader:
+            assert reader.execute("SELECT COUNT(*) FROM scanned").fetchone() == (0,)
+
+        track = SimpleNamespace(
+            id=1,
+            name="Track",
+            full_name="Artist - Track",
+            artists=[SimpleNamespace(name="Artist")],
+            album=SimpleNamespace(id=2, name="Album"),
+            duration=180,
+            isrc="ISRC123",
+            media_metadata_tags=[],
+            audio_quality="HIGH",
+        )
+        app = FastAPI()
+
+        @app.get("/serialize")
+        def serialize_track() -> dict:
+            try:
+                return _serialize_track(track)
+            except sqlite3.OperationalError as exc:
+                raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+        with TestClient(app) as client:
+            response = client.get("/serialize")
+
+        assert response.status_code == 200, response.json()
+        assert response.json()["isrc"] == "ISRC123"
+    finally:
+        release_writer.set()
+        writer.join(timeout=5)
+
+    assert not writer_errors

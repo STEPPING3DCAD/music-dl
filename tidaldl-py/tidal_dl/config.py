@@ -228,7 +228,7 @@ class Tidal(BaseConfig[ModelToken]):
         session.request_session.verify = certifi.where()
         return session
 
-    def __new__(cls) -> Self:
+    def __new__(cls, settings: Settings | None = None) -> Self:
         global _tidal_instance
         with _singleton_lock:
             if _tidal_instance is None:
@@ -292,7 +292,7 @@ class Tidal(BaseConfig[ModelToken]):
             return []
         return [item.strip().rstrip("/") for item in raw.split(",") if item.strip()]
 
-    def resolve_source(self, fn_print: MessagePrinter) -> bool:
+    def resolve_source(self, fn_print: MessagePrinter, allow_interactive_login: bool = True) -> bool:
         """Resolve the active download source.
 
         Hi-Fi API handles audio streaming; OAuth is always needed for metadata
@@ -331,7 +331,11 @@ class Tidal(BaseConfig[ModelToken]):
             fn_print("Hi-Fi API source unavailable. Falling back to OAuth source.")
 
         # OAuth preferred or fallback path
-        is_login = self.login(fn_print=fn_print)
+        is_login = (
+            self.login(fn_print=fn_print)
+            if allow_interactive_login
+            else self._try_login_with_key_rotation(quiet=True)
+        )
         if is_login:
             self.active_source = DownloadSource.OAUTH
         return is_login
@@ -610,13 +614,7 @@ class Tidal(BaseConfig[ModelToken]):
         return False
 
     def _probe_subscription_quality(self) -> None:
-        """Probe the account's actual max audio quality and downgrade if needed.
-
-        Fetches a known Hi-Res track and compares the delivered quality against
-        the configured quality.  If the account's tier cannot satisfy the
-        requested quality, the setting is automatically downgraded and persisted
-        so subsequent downloads use the correct expectation.
-        """
+        """Report the account's observed quality without changing the selection."""
         configured = Quality(self.settings.data.quality_audio)
         configured_rank = QUALITY_RANK.get(quality_name(configured), 0)
 
@@ -638,6 +636,14 @@ class Tidal(BaseConfig[ModelToken]):
         delivered_str = quality_name(delivered)
         configured_str = quality_name(configured)
 
+        if delivered_str not in QUALITY_RANK:
+            _console.print(
+                f"[yellow]Warning:[/yellow] Requested quality [bold]{configured_str}[/bold] "
+                f"but the provider reported unknown delivery quality [bold]{delivered_str}[/bold]. "
+                "Keeping configured quality."
+            )
+            return
+
         if delivered_rank >= configured_rank:
             _console.print(
                 f"[green]Audio quality check passed:[/green] "
@@ -648,13 +654,8 @@ class Tidal(BaseConfig[ModelToken]):
         _console.print(
             f"[yellow]Warning:[/yellow] Requested quality [bold]{configured_str}[/bold] "
             f"but your subscription only delivers [bold]{delivered_str}[/bold]. "
-            f"Auto-downgrading to {delivered_str}."
+            "Keeping configured quality."
         )
-
-        downgraded_quality = Quality(delivered_str)
-        self.settings.data.quality_audio = downgraded_quality
-        self.session.audio_quality = downgraded_quality
-        self.settings.save()
 
     def logout(self) -> bool:
         """Remove the stored token and replace the current session.

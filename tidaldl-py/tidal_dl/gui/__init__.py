@@ -38,8 +38,8 @@ def create_app(
         import asyncio
 
         loop = asyncio.get_running_loop()
-        from tidal_dl.gui.api.upgrade import set_scan_event_loop
         from tidal_dl.gui.api.bot_control import start_configured_bot, stop_running_bot
+        from tidal_dl.gui.api.upgrade import set_scan_event_loop
         from tidal_dl.gui.services.download_job_service import DownloadJobService
 
         service = DownloadJobService(db_path=job_db_path)
@@ -47,13 +47,17 @@ def create_app(
         app.state.download_jobs = service
         set_scan_event_loop(loop)
 
+        app.state.source_restore_attempted = False
+        app.state.source_restored = False
+        app.state.source_restore_error = None
         try:
-            from tidal_dl.config import Tidal
+            from tidal_dl.config import Settings, Tidal
 
-            tidal = Tidal()
-            tidal.login_token(quiet=True)
-        except Exception:
-            pass
+            tidal = Tidal(Settings())
+            app.state.source_restore_attempted = True
+            app.state.source_restored = tidal.resolve_source(lambda _message: None, allow_interactive_login=False)
+        except Exception as exc:
+            app.state.source_restore_error = str(exc)
         app.state.daemon_meta = app.state.daemon_meta.with_status("ready")
         if app.state.write_daemon_metadata:
             write_metadata(app.state.daemon_meta)

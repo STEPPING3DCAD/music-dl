@@ -6,7 +6,7 @@ import pathlib
 import shutil
 import subprocess
 
-from tidal_dl.constants import AudioExtensions
+from tidalapi.media import AudioExtensions
 
 
 def ffmpeg_executable(path_binary_ffmpeg: str | None) -> str:

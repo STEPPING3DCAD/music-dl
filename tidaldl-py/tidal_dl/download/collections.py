@@ -111,12 +111,6 @@ class CollectionMixin:
         if is_playlist or self.settings.data.playlist_create:
             self.playlist_populate(set(result_dirs), list_media_name, is_album, sort_by_track_num)
 
-        # Persist ISRC index after all collection downloads complete
-        if self.settings.data.skip_duplicate_isrc:
-            if self._isrc_pending_commits:
-                self._library_db.commit()
-                self._isrc_pending_commits = 0
-
         self.fn_logger.info(f"Finished list '{list_media_name}'.")
 
         # Print outcome summary

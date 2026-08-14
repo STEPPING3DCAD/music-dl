@@ -9,13 +9,6 @@ from fastapi.testclient import TestClient
 from tidal_dl.gui import create_app
 
 
-class _FakeTidal:
-    calls: list[bool] = []
-
-    def login_token(self, quiet: bool = False) -> None:
-        self.calls.append(quiet)
-
-
 def test_create_app_does_not_emit_on_event_deprecation_warning():
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
@@ -30,25 +23,18 @@ def test_create_app_does_not_emit_on_event_deprecation_warning():
     assert on_event_deprecations == []
 
 
-def test_create_app_restores_tidal_session_on_startup(monkeypatch):
-    _FakeTidal.calls = []
-    monkeypatch.setattr("tidal_dl.config.Tidal", _FakeTidal)
+def test_gui_lifespan_invokes_noninteractive_source_resolution(tmp_path):
+    assert not (tmp_path / "token.json").exists()
 
-    with TestClient(create_app(port=8765)):
-        pass
+    app = create_app(port=8765, job_db_path=tmp_path / "jobs.db")
+    with TestClient(app) as client:
+        response = client.get("/api/server/health", headers={"host": "localhost:8765"})
 
-    assert _FakeTidal.calls == [True]
-
-
-def test_create_app_ignores_tidal_restore_failures_on_startup(monkeypatch):
-    class _BrokenTidal:
-        def login_token(self, quiet: bool = False) -> None:
-            raise RuntimeError("boom")
-
-    monkeypatch.setattr("tidal_dl.config.Tidal", _BrokenTidal)
-
-    with TestClient(create_app(port=8765)):
-        pass
+    assert response.status_code == 200
+    assert response.json()["status"] == "ready"
+    assert app.state.source_restore_attempted is True
+    assert app.state.source_restored is False
+    assert app.state.source_restore_error is None
 
 
 def test_health_returns_structured_daemon_state():
