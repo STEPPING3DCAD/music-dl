@@ -2,19 +2,379 @@ import base64
 import json
 import threading
 import time
-import unittest.mock as mock
+from unittest import mock
 
 import pytest
 import requests
+from tidalapi import Playlist, Quality, Track
 
-from tidal_dl.constants import DownloadSource, HIFI_QUALITY_MAP, MediaType
+from tidal_dl.config import Settings as ConfigSettings
 from tidal_dl.config import Tidal
+from tidal_dl.constants import HIFI_QUALITY_MAP, DownloadSource, MediaType
 from tidal_dl.helper.checkpoint import DownloadCheckpoint
 from tidal_dl.helper.library_db import LibraryDB
 from tidal_dl.hifi_api import HiFiApiClient
 from tidal_dl.model.cfg import Settings
 from tidal_dl.model.downloader import HiFiStreamManifest
-from tidalapi import Playlist, Quality, Track
+
+
+@pytest.mark.parametrize(
+    ("requested", "delivered", "codec"),
+    [
+        (Quality.low_96k, Quality.low_96k, "mp4a.40.2"),
+        (Quality.low_320k, Quality.low_320k, "aac"),
+        (Quality.high_lossless, Quality.high_lossless, "flac"),
+        (Quality.hi_res_lossless, Quality.hi_res_lossless, "flac"),
+    ],
+)
+def test_exact_quality_accepts_only_matching_compatible_delivery(requested, delivered, codec):
+    from tidal_dl.download.streams import _require_exact_quality
+
+    _require_exact_quality(requested, delivered, codec)
+
+
+@pytest.mark.parametrize(
+    ("requested", "delivered", "codec", "expected"),
+    [
+        (Quality.low_96k, Quality.low_320k, "aac", "requested LOW but received HIGH"),
+        (Quality.low_96k, Quality.high_lossless, "flac", "requested LOW but received LOSSLESS"),
+        (Quality.low_96k, Quality.hi_res_lossless, "flac", "requested LOW but received HI_RES_LOSSLESS"),
+        (Quality.low_320k, Quality.low_96k, "aac", "requested HIGH but received LOW"),
+        (Quality.low_320k, Quality.high_lossless, "flac", "requested HIGH but received LOSSLESS"),
+        (Quality.low_320k, Quality.hi_res_lossless, "flac", "requested HIGH but received HI_RES_LOSSLESS"),
+        (Quality.high_lossless, Quality.low_96k, "aac", "requested LOSSLESS but received LOW"),
+        (Quality.high_lossless, Quality.low_320k, "aac", "requested LOSSLESS but received HIGH"),
+        (Quality.high_lossless, Quality.hi_res_lossless, "flac", "requested LOSSLESS but received HI_RES_LOSSLESS"),
+        (Quality.hi_res_lossless, Quality.low_96k, "aac", "requested HI_RES_LOSSLESS but received LOW"),
+        (Quality.hi_res_lossless, Quality.low_320k, "aac", "requested HI_RES_LOSSLESS but received HIGH"),
+        (Quality.hi_res_lossless, Quality.high_lossless, "flac", "requested HI_RES_LOSSLESS but received LOSSLESS"),
+        (Quality.high_lossless, "UNKNOWN", "flac", "received unknown"),
+        (Quality.high_lossless, Quality.high_lossless, "aac", "received LOSSLESS with codec aac"),
+        (Quality.low_320k, Quality.low_320k, "flac", "received HIGH with codec flac"),
+        (Quality.low_96k, Quality.low_96k, "", "received LOW with codec unknown"),
+    ],
+)
+def test_exact_quality_rejects_different_unknown_or_incompatible_delivery(requested, delivered, codec, expected):
+    from tidal_dl.download.streams import QualityMismatchError, _require_exact_quality
+
+    with pytest.raises(QualityMismatchError, match=expected):
+        _require_exact_quality(requested, delivered, codec)
+
+
+def _oauth_stream_subject():
+    from tidal_dl.download.streams import StreamMixin
+
+    class OAuthStreamSubject(StreamMixin):
+        def __init__(self):
+            self.settings = type(
+                "Settings",
+                (),
+                {"data": type("Data", (), {"download_dolby_atmos": False, "extract_flac": False})()},
+            )()
+            self.session = type("Session", (), {})()
+            self.tidal = type(
+                "Tidal",
+                (),
+                {
+                    "active_source": DownloadSource.OAUTH,
+                    "hifi_client": None,
+                    "stream_lock": threading.Lock(),
+                    "_ensure_token_fresh": lambda self: None,
+                    "restore_normal_session": lambda self: True,
+                },
+            )()
+            self.fn_logger = type(
+                "Logger",
+                (),
+                {
+                    "error": lambda *_args: None,
+                    "exception": lambda *_args: None,
+                    "warning": lambda *_args: None,
+                },
+            )()
+
+        def _on_rate_limit_hit(self):
+            raise AssertionError("quality mismatch must not be treated as rate limiting")
+
+    return OAuthStreamSubject()
+
+
+@pytest.mark.parametrize("codec", ["eac3", "ec-3"])
+def test_explicit_atmos_accepts_high_eac3(codec):
+    from tidal_dl.download.streams import StreamMixin
+
+    manifest = type("Manifest", (), {"codecs": codec, "file_extension": ".mp4"})()
+    stream = type(
+        "Stream",
+        (),
+        {"audio_quality": Quality.low_320k, "get_stream_manifest": lambda self: manifest},
+    )()
+    atmos_track = type("AtmosTrack", (), {"id": 118, "get_stream": lambda self: stream})()
+    media = type("Media", (), {"id": 118, "audio_modes": ["DOLBY_ATMOS"]})()
+
+    class Subject(StreamMixin):
+        def __init__(self):
+            self.atmos_switches = 0
+            self.settings = type(
+                "Settings",
+                (),
+                {"data": type("Data", (), {"download_dolby_atmos": True, "extract_flac": False})()},
+            )()
+            self.session = type(
+                "Session",
+                (), {"audio_quality": Quality.low_320k, "track": lambda _self, _id: atmos_track},
+            )()
+            self.tidal = type(
+                "Tidal",
+                (),
+                {
+                    "switch_to_atmos_session": lambda _self: self._mark_atmos_switch(),
+                    "restore_normal_session": lambda _self: True,
+                },
+            )()
+            self.fn_logger = type("Logger", (), {"error": lambda *_args: None})()
+
+        def _mark_atmos_switch(self):
+            self.atmos_switches += 1
+            return True
+
+    subject = Subject()
+    result = subject._get_track_stream_info(media)
+
+    assert result.stream_manifest is manifest
+    assert subject.atmos_switches == 1
+
+
+@pytest.mark.parametrize("codec", ["eac3", "ec-3"])
+def test_ordinary_high_rejects_atmos_codec(codec):
+    from tidal_dl.download.streams import QualityMismatchError, StreamMixin
+
+    manifest = type("Manifest", (), {"codecs": codec, "file_extension": ".mp4"})()
+    stream = type(
+        "Stream",
+        (),
+        {"audio_quality": Quality.low_320k, "get_stream_manifest": lambda self: manifest},
+    )()
+    media = type("Media", (), {"id": 118, "audio_modes": [], "get_stream": lambda self: stream})()
+
+    class Subject(StreamMixin):
+        def __init__(self):
+            self.settings = type(
+                "Settings",
+                (),
+                {"data": type("Data", (), {"download_dolby_atmos": False, "extract_flac": False})()},
+            )()
+            self.session = type("Session", (), {"audio_quality": Quality.low_320k})()
+            self.tidal = type(
+                "Tidal",
+                (),
+                {"switch_to_atmos_session": lambda _self: True, "restore_normal_session": lambda _self: True},
+            )()
+            self.fn_logger = type("Logger", (), {"error": lambda *_args: None})()
+
+    with pytest.raises(QualityMismatchError, match=f"received HIGH with codec {codec}"):
+        Subject()._get_track_stream_info(media)
+
+
+def _oauth_track(delivered, codec, segment_calls):
+    class Manifest:
+        file_extension = ".flac"
+        codecs = codec
+
+        def get_urls(self):
+            segment_calls.append("oauth")
+            return ["https://example.invalid/segment"]
+
+    manifest = Manifest()
+    stream = type(
+        "Stream",
+        (),
+        {"audio_quality": delivered, "get_stream_manifest": lambda self: manifest},
+    )()
+
+    class LocalTrack(Track):
+        def __init__(self):
+            pass
+
+        @property
+        def id(self):
+            return 118
+
+        @property
+        def audio_modes(self):
+            return []
+
+        def get_stream(self):
+            return stream
+
+    track = LocalTrack()
+    return track, manifest
+
+
+def test_oauth_exact_quality_returns_manifest_before_segment_consumption():
+    subject = _oauth_stream_subject()
+    subject.session.audio_quality = Quality.hi_res_lossless
+    segment_calls = []
+    track, manifest = _oauth_track(Quality.hi_res_lossless, "flac", segment_calls)
+
+    returned_manifest, *_ = subject._get_stream_info(track)
+
+    assert returned_manifest is manifest
+    assert returned_manifest.get_urls() == ["https://example.invalid/segment"]
+    assert segment_calls == ["oauth"]
+
+
+@pytest.mark.parametrize(
+    ("delivered", "codec", "expected"),
+    [
+        (Quality.low_320k, "aac", "requested HI_RES_LOSSLESS but received HIGH with codec aac"),
+        (Quality.hi_res_lossless, "aac", "requested HI_RES_LOSSLESS but received HI_RES_LOSSLESS with codec aac"),
+    ],
+)
+def test_oauth_exact_quality_rejects_before_manifest_reaches_segment_consumption(delivered, codec, expected):
+    from tidal_dl.download.streams import QualityMismatchError
+
+    subject = _oauth_stream_subject()
+    subject.session.audio_quality = Quality.hi_res_lossless
+    segment_calls = []
+    track, manifest = _oauth_track(delivered, codec, segment_calls)
+
+    with pytest.raises(QualityMismatchError, match=expected):
+        subject._get_stream_info(track)
+
+    assert manifest.file_extension == ".flac"
+    assert segment_calls == []
+
+
+def _hifi_stream_subject(result):
+    subject = _oauth_stream_subject()
+    calls = []
+
+    class HiFiClient:
+        def track_stream(self, track_id, quality):
+            calls.append((track_id, quality))
+            return result
+
+    subject.tidal.active_source = DownloadSource.HIFI_API
+    subject.tidal.hifi_client = HiFiClient()
+    subject.tidal.restore_normal_session = lambda: (_ for _ in ()).throw(
+        AssertionError("quality mismatch must not fall back to OAuth")
+    )
+    return subject, calls
+
+
+def _hifi_result(delivered, codec):
+    from tidal_dl.hifi_api import HiFiStreamResult
+
+    return HiFiStreamResult(
+        urls=["https://example.invalid/segment"],
+        file_extension=".flac",
+        codecs=codec,
+        mime_type="audio/flac",
+        audio_quality=delivered,
+    )
+
+
+def test_hifi_exact_quality_returns_manifest_before_urls_reach_consumption():
+    subject, calls = _hifi_stream_subject(_hifi_result("HI_RES_LOSSLESS", "flac"))
+    subject.session.audio_quality = Quality.hi_res_lossless
+    track, _ = _oauth_track(Quality.hi_res_lossless, "flac", [])
+
+    manifest, *_ = subject._get_stream_info(track)
+
+    assert manifest.get_urls() == ["https://example.invalid/segment"]
+    assert calls == [(118, "HI_RES_LOSSLESS")]
+
+
+@pytest.mark.parametrize(
+    ("delivered", "codec", "expected"),
+    [
+        ("HIGH", "aac", "requested HI_RES_LOSSLESS but received HIGH with codec aac"),
+        ("UNKNOWN", "flac", "requested HI_RES_LOSSLESS but received unknown with codec flac"),
+        ("HI_RES_LOSSLESS", "aac", "requested HI_RES_LOSSLESS but received HI_RES_LOSSLESS with codec aac"),
+    ],
+)
+def test_hifi_exact_quality_rejects_without_oauth_fallback(delivered, codec, expected):
+    from tidal_dl.download.streams import QualityMismatchError
+
+    subject, calls = _hifi_stream_subject(_hifi_result(delivered, codec))
+    subject.session.audio_quality = Quality.hi_res_lossless
+    track, _ = _oauth_track(Quality.hi_res_lossless, "flac", [])
+
+    with pytest.raises(QualityMismatchError, match=expected):
+        subject._get_stream_info(track)
+
+    assert calls == [(118, "HI_RES_LOSSLESS")]
+
+
+@pytest.mark.parametrize(
+    "delivered",
+    [Quality.low_320k, "UNKNOWN", Quality.hi_res_lossless, RuntimeError("probe unavailable")],
+)
+def test_subscription_quality_probe_never_mutates_configured_or_session_quality(delivered):
+    class SettingsData:
+        quality_audio = Quality.hi_res_lossless
+
+    class ProbeSettings:
+        data = SettingsData()
+
+        def __init__(self):
+            self.save_calls = 0
+
+        def save(self):
+            self.save_calls += 1
+
+    class ProbeSession:
+        audio_quality = Quality.hi_res_lossless
+
+        def track(self, _track_id):
+            if isinstance(delivered, Exception):
+                raise delivered
+            stream = type("Stream", (), {"audio_quality": delivered})()
+            return type("Track", (), {"get_stream": lambda self: stream})()
+
+    probe = type("Probe", (), {"settings": ProbeSettings(), "session": ProbeSession()})()
+    configured_before = probe.settings.data.quality_audio
+    session_before = probe.session.audio_quality
+
+    Tidal._probe_subscription_quality(probe)
+
+    assert probe.settings.data.quality_audio == configured_before
+    assert probe.session.audio_quality == session_before
+    assert probe.settings.save_calls == 0
+
+
+def test_subscription_quality_probe_unknown_warns_without_pass(capsys):
+    class SettingsData:
+        quality_audio = Quality.low_96k
+
+    class ProbeSettings:
+        data = SettingsData()
+
+        def __init__(self):
+            self.save_calls = 0
+
+        def save(self):
+            self.save_calls += 1
+
+    class ProbeSession:
+        audio_quality = Quality.low_96k
+
+        def track(self, _track_id):
+            stream = type("Stream", (), {"audio_quality": "UNKNOWN"})()
+            return type("Track", (), {"get_stream": lambda self: stream})()
+
+    probe = type("Probe", (), {"settings": ProbeSettings(), "session": ProbeSession()})()
+
+    Tidal._probe_subscription_quality(probe)
+
+    output = capsys.readouterr().out.lower()
+    assert "warning" in output
+    assert "unknown" in output
+    assert "passed" not in output
+    assert probe.settings.data.quality_audio == Quality.low_96k
+    assert probe.session.audio_quality == Quality.low_96k
+    assert probe.settings.save_calls == 0
 
 
 def test_settings_default_download_source():
@@ -22,6 +382,37 @@ def test_settings_default_download_source():
     assert settings.download_source == DownloadSource.OAUTH
     assert settings.download_source_fallback is True
     assert settings.hifi_api_instances == ""
+
+
+def test_tidal_constructor_accepts_settings():
+    settings = ConfigSettings()
+
+    tidal = Tidal(settings)
+
+    assert tidal.settings is settings
+
+
+def test_resolve_source_non_interactive_uses_quiet_restore_without_login():
+    class TidalWithoutCredentials:
+        def __init__(self):
+            self.settings = type(
+                "Settings",
+                (),
+                {"data": type("Data", (), {"download_source": DownloadSource.OAUTH, "download_source_fallback": True})()},
+            )()
+            self.quiet_restore = None
+
+        def _try_login_with_key_rotation(self, quiet: bool = False) -> bool:
+            self.quiet_restore = quiet
+            return False
+
+        def login(self, fn_print):
+            raise AssertionError("non-interactive source resolution must not start OAuth")
+
+    tidal = TidalWithoutCredentials()
+
+    assert Tidal.resolve_source(tidal, lambda _message: None, allow_interactive_login=False) is False
+    assert tidal.quiet_restore is True
 
 
 def test_hifi_client_decodes_bts_manifest():
@@ -367,8 +758,9 @@ def _make_minimal_download():
     """Build a Download instance without a real tidalapi session."""
     from threading import Event, Lock
     from unittest.mock import MagicMock
-    from tidal_dl.download import Download
+
     from tidal_dl.config import Settings
+    from tidal_dl.download import Download
 
     settings = Settings()
     tidal = MagicMock()

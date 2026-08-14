@@ -154,6 +154,7 @@ class FileMixin:
 
         return result
 
+    @staticmethod
     def cover_data(url: str | None = None, path_file: str | None = None) -> bytes:
         """Retrieve cover image data from a URL or file, with up to 3 retry attempts.
 

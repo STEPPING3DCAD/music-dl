@@ -1,5 +1,6 @@
 """Tests for LibraryDB — CRUD, pagination, dedup, migration, pragmas."""
 import sqlite3
+import threading
 
 import pytest
 
@@ -76,6 +77,41 @@ class TestPragmas:
         } <= cols
         assert row is not None
         assert row["status"] == "tagged"
+
+    def test_current_schema_reopens_while_writer_holds_lock(self, tmp_path):
+        db_path = tmp_path / "test.db"
+        db = LibraryDB(db_path)
+        db.open()
+        try:
+            assert db._conn is not None
+            db._conn.execute(f"PRAGMA user_version = {LibraryDB._SCHEMA_VERSION}")
+            db.commit()
+        finally:
+            db.close()
+
+        writer_ready = threading.Event()
+        release_writer = threading.Event()
+
+        def hold_writer() -> None:
+            conn = sqlite3.connect(db_path)
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                writer_ready.set()
+                assert release_writer.wait(timeout=10)
+            finally:
+                conn.rollback()
+                conn.close()
+
+        writer = threading.Thread(target=hold_writer)
+        writer.start()
+        assert writer_ready.wait(timeout=5)
+        try:
+            reopened = LibraryDB(db_path)
+            reopened.open()
+            reopened.close()
+        finally:
+            release_writer.set()
+            writer.join(timeout=5)
 
 
 class TestCRUD:
@@ -673,6 +709,10 @@ class TestMigration:
         assert "provider_album_id" in cols
         assert "barcode" in cols
         assert LibraryDB._SCHEMA_VERSION == 8
+        assert (
+            db._conn.execute("PRAGMA user_version").fetchone()[0]
+            == LibraryDB._SCHEMA_VERSION
+        )
         row = db.get("/a.flac")
         assert row["artist"] == "X"
         assert row["art_available"] is None

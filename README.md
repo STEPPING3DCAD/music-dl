@@ -104,6 +104,12 @@ A **setup wizard** walks you through Tidal login and library configuration on fi
 
 The GUI can also start and recover the Tidal OAuth flow itself from the browser. Settings includes **Reset Tidal connection** for removing stale local credentials without contacting Tidal; login begins only when you explicitly press **Log in to Tidal** afterward. Use `music-dl login` only if you want to authenticate from the terminal for CLI-first workflows.
 
+Selected audio quality is exact: `LOW`, `HIGH`, `LOSSLESS`, and `HI_RES_LOSSLESS` accept only the same delivered tier with a compatible codec. A mismatch creates no media output and is reported with the requested tier, delivered tier, and codec. Login quality probing is advisory; it never changes or saves your selected quality.
+
+Dolby Atmos is a separate opt-in lossy spatial-audio mode delivered as EC-3/EAC3; it is not an ordinary exact lossless tier and does not weaken the ordinary quality contract.
+
+Each download thread owns its `LibraryDB` connection. Successful tracks commit their ISRC registration before download history or other library writers open a second connection. Current-schema opens read SQLite's native `PRAGMA user_version` and skip migration writes; older or unversioned databases migrate and record that version in the same commit. Failed download history visibly shows its stored reason, and each terminal worker error is logged once.
+
 ## Install
 
 > **Using an AI coding agent?** Expand the LLM Quick Reference at the top and paste it into your agent.

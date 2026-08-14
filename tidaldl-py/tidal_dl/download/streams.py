@@ -2,6 +2,36 @@
 
 from tidal_dl.download._common import *  # noqa: F403
 
+
+class QualityMismatchError(ValueError):
+    """The provider cannot satisfy the selected audio-quality contract."""
+
+
+def _require_exact_quality(requested: Quality | str, delivered: Quality | str | None, codec: str | None) -> None:
+    requested_name = quality_name(requested).upper()
+    delivered_name = quality_name(delivered).upper() if delivered else "unknown"
+    codec_name = (codec or "unknown").strip().lower() or "unknown"
+    expected_codecs = {
+        "LOW": ("aac", "mp4a"),
+        "HIGH": ("aac", "mp4a"),
+        "LOSSLESS": ("flac",),
+        "HI_RES_LOSSLESS": ("flac",),
+    }
+    compatible = expected_codecs.get(requested_name)
+
+    if (
+        compatible is None
+        or delivered_name not in expected_codecs
+        or requested_name != delivered_name
+        or not codec_name.startswith(compatible)
+    ):
+        raise QualityMismatchError(
+            f"Quality mismatch: requested {requested_name if compatible else 'unknown'} "
+            f"but received {delivered_name if delivered_name in expected_codecs else 'unknown'} "
+            f"with codec {codec_name}."
+        )
+
+
 class StreamMixin:
     def _get_track_stream_info_hifi(self, media: Track) -> TrackStreamInfo:
         """Fetch stream info via the Hi-Fi API client and wrap it in a HiFiStreamManifest.
@@ -21,6 +51,7 @@ class StreamMixin:
         if hifi_client is None:
             raise RuntimeError("Hi-Fi client is not configured")
         result = hifi_client.track_stream(media.id, quality_str)
+        _require_exact_quality(self.session.audio_quality, result.audio_quality, result.codecs)
         manifest = HiFiStreamManifest(
             urls=result.urls,
             file_extension=result.file_extension,
@@ -68,6 +99,8 @@ class StreamMixin:
                         track_info.requires_flac_extraction,
                         track_info.media_stream,
                     )
+            except QualityMismatchError:
+                raise
             except TooManyRequests:
                 self._on_rate_limit_hit()
                 self.fn_logger.exception(
@@ -139,6 +172,8 @@ class StreamMixin:
                 )
                 return None, "", False, None
 
+            except QualityMismatchError:
+                raise
             except Exception:
                 self.fn_logger.exception(f"Something went wrong. Skipping '{name_builder_item(media)}'.")
                 return None, "", False, None
@@ -171,19 +206,9 @@ class StreamMixin:
 
         media_stream = self.session.track(str(media.id)).get_stream() if want_atmos else media.get_stream()
 
-        # Log when the delivered quality differs from the requested quality.
-        requested_quality = self.session.audio_quality
-        delivered_quality = media_stream.audio_quality
-        req_rank = QUALITY_RANK.get(quality_name(requested_quality), -1)
-        del_rank = QUALITY_RANK.get(quality_name(delivered_quality), -1)
-
-        if del_rank < req_rank:
-            self.fn_logger.warning(
-                f"Quality mismatch for '{name_builder_item(media)}': "
-                f"requested {quality_name(requested_quality)} but received {quality_name(delivered_quality)}."
-            )
-
         stream_manifest = media_stream.get_stream_manifest()
+        if not want_atmos:
+            _require_exact_quality(self.session.audio_quality, media_stream.audio_quality, stream_manifest.codecs)
         file_extension = str(stream_manifest.file_extension)
         requires_flac_extraction = False
 

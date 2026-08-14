@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from pathlib import Path
 
 import pytest
@@ -70,6 +71,89 @@ def test_event_hub_rejects_too_many_clients():
             raise AssertionError("expected too_many_clients")
     finally:
         hub.unsubscribe(first)
+
+
+def test_worker_preserves_quality_mismatch_reason(tmp_path, caplog):
+    from tidal_dl.download.streams import QualityMismatchError
+    from tidal_dl.gui.services.download_job_service import DownloadJobService
+
+    reason = "Quality mismatch: requested HI_RES_LOSSLESS but received HIGH with codec aac."
+
+    class LocalTrack:
+        id = 118
+        name = "Song"
+        full_name = "Song"
+        artists = ()
+        album = None
+
+    class LocalTidal:
+        session = type("Session", (), {"track": lambda _self, _track_id: LocalTrack()})()
+
+    class LocalSettings:
+        data = type(
+            "Data",
+            (),
+            {
+                "download_base_path": str(tmp_path / "downloads"),
+                "skip_existing": True,
+                "format_track": "{track_title}",
+                "quality_audio": "HI_RES_LOSSLESS",
+            },
+        )()
+
+    class RaisingDownload:
+        def __init__(self, **_kwargs):
+            pass
+
+        def item(self, **_kwargs):
+            raise QualityMismatchError(reason)
+
+    def dependencies():
+        return LocalSettings, LocalTidal, RaisingDownload
+
+    async def run_worker():
+        service = DownloadJobService(
+            db_path=tmp_path / "library.db",
+            autostart=False,
+            dependency_provider=dependencies,
+        )
+        queue = service.events.subscribe()
+        service.events.set_event_loop(asyncio.get_running_loop())
+        try:
+            assert service.enqueue_download([118]) == {"status": "queued", "count": 1}
+            service.start_worker()
+            events = [await asyncio.wait_for(queue.get(), timeout=1) for _ in range(3)]
+        finally:
+            service.stop_worker()
+            service.events.unsubscribe(queue)
+
+        event = events[-1]
+        history = service.history(limit=10)["downloads"]
+        status = service.job_status_for_track(118)
+        assert event["type"] == "error"
+        assert event["error"] == reason
+        assert status == {
+            "job_id": "118",
+            "status": "error",
+            "progress": 0.0,
+            "title": "Song",
+            "artist": "",
+            "started_at": status["started_at"],
+            "finished_at": status["finished_at"],
+            "error": reason,
+        }
+        assert history[0]["status"] == "error"
+        assert history[0]["error"] == reason
+        assert not any(item["type"] == "complete" for item in events)
+
+    asyncio.run(run_worker())
+
+    matching_records = [
+        record
+        for record in caplog.records
+        if record.name == "music-dl.gui" and record.levelno == logging.ERROR and record.getMessage() == reason
+    ]
+    assert len(matching_records) == 1
 
 
 def test_service_enqueue_suppresses_duplicate_active_jobs(tmp_path):

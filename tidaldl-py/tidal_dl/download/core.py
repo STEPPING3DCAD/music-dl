@@ -1,6 +1,9 @@
 """Download core helpers."""
 
+import threading
+
 from tidal_dl.download._common import *  # noqa: F403
+
 
 class DownloadCore:
     def __init__(
@@ -53,10 +56,10 @@ class DownloadCore:
         else:
             self._api_cache = None
 
-        self._library_db = LibraryDB(pathlib.Path(path_config_base()) / "library.db")
-        self._library_db.open()
+        self._library_db_path = pathlib.Path(path_config_base()) / "library.db"
+        self._library_db_local = threading.local()
+        self._library_db = self._library_db_for_current_thread()
         self._library_db.import_legacy_isrc_index(pathlib.Path(path_config_base()) / "isrc_index.json")
-        self._isrc_pending_commits = 0
         self._cleanup_stale_temp_dirs()
 
         if not self.settings.data.path_binary_ffmpeg and (
@@ -76,6 +79,15 @@ class DownloadCore:
                     "FLAC cannot be extracted from MP4 containers. "
                     "Install FFmpeg and ensure it is in your PATH, or set `path_binary_ffmpeg` in the config."
                 )
+
+    def _library_db_for_current_thread(self) -> LibraryDB:
+        """Return this downloader's SQLite connection for the calling thread."""
+        db = getattr(self._library_db_local, "db", None)
+        if db is None:
+            db = LibraryDB(self._library_db_path)
+            db.open()
+            self._library_db_local.db = db
+        return db
 
     def _cleanup_stale_temp_dirs(self) -> None:
         """Delete UUID-named temp dirs older than 1 hour, left from interrupted downloads."""

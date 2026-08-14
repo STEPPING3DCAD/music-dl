@@ -165,6 +165,7 @@ def _make_download_obj(tmp_path, isrc_data: dict[str, str], duplicate_action: st
 
     dl = MagicMock()
     dl._library_db = db
+    dl._library_db_for_current_thread = lambda: db
     dl.settings = settings
     dl.fn_logger = MagicMock()
 

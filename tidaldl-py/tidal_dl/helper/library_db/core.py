@@ -28,8 +28,11 @@ class LibraryDBCore:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA busy_timeout=5000")
-        self._migrate()
-        self._conn.commit()
+        version = self._conn.execute("PRAGMA user_version").fetchone()[0]
+        if version < self._SCHEMA_VERSION:
+            self._migrate()
+            self._conn.execute(f"PRAGMA user_version = {self._SCHEMA_VERSION}")
+            self._conn.commit()
 
     def _migrate(self) -> None:
         assert self._conn

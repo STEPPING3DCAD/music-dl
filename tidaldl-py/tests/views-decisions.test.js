@@ -15,6 +15,50 @@ function loadGroupingDecisionPayload() {
   return new Function(`${helperSource[0]}\nreturn _groupingDecisionPayload;`)();
 }
 
+function loadDownloadHistoryRenderer(api) {
+  const rendererSource = viewsSource.match(
+    /async function loadDownloadHistory\(container\) \{[\s\S]*?\n\}\n\n\/\/ ---- SETTINGS VIEW ----/,
+  );
+  if (!rendererSource) throw new Error('download history renderer not found');
+
+  function element(tag) {
+    return {
+      tag,
+      children: [],
+      style: {},
+      classList: { add() {}, remove() {} },
+      appendChild(child) { this.children.push(child); return child; },
+      removeChild(child) { this.children.splice(this.children.indexOf(child), 1); },
+      addEventListener() {},
+      set textContent(value) { this._text = String(value); this.children = []; },
+      get textContent() { return (this._text || '') + this.children.map(child => child.textContent).join(''); },
+      get firstChild() { return this.children[0] || null; },
+    };
+  }
+
+  const h = (tag, props = {}) => {
+    const node = element(tag);
+    Object.assign(node, props);
+    return node;
+  };
+  const textEl = (tag, text, className) => {
+    const node = element(tag);
+    node.textContent = text;
+    if (className) node.className = className;
+    return node;
+  };
+
+  return new Function(
+    'api',
+    'h',
+    'textEl',
+    '_dlArtThumb',
+    `const ICONS = {};
+${rendererSource[0]}
+return loadDownloadHistory;`,
+  )(api, h, textEl, () => element('div'));
+}
+
 describe('album grouping review decisions', () => {
   test('keeps signatures and includes title only when grouping', () => {
     const payload = loadGroupingDecisionPayload();
@@ -32,6 +76,33 @@ describe('album grouping review decisions', () => {
       decision: 'keep_separate',
       canonical_title: null,
     });
+  });
+});
+
+describe('download history decisions', () => {
+  test('failed download history visibly renders persisted error reason', async () => {
+    const reason = 'Quality mismatch: requested HI_RES_LOSSLESS but received HIGH with codec aac.';
+    const loadDownloadHistory = loadDownloadHistoryRenderer(async () => ({
+      downloads: [{ track_id: 118, name: 'Song', status: 'error', error: reason }],
+    }));
+    const container = { children: [], appendChild(child) { this.children.push(child); }, get firstChild() { return this.children[0] || null; }, removeChild() {} };
+
+    await loadDownloadHistory(container);
+
+    expect(container.children[0].textContent).toContain(reason);
+    expect(container.children[0].textContent).toContain('Failed');
+    expect(container.children[0].textContent).toContain('Retry');
+  });
+
+  test('failed download history without a reason retains retry controls', async () => {
+    const loadDownloadHistory = loadDownloadHistoryRenderer(async () => ({
+      downloads: [{ track_id: 118, name: 'Song', status: 'error', error: '' }],
+    }));
+    const container = { children: [], appendChild(child) { this.children.push(child); }, get firstChild() { return this.children[0] || null; }, removeChild() {} };
+
+    await loadDownloadHistory(container);
+
+    expect(container.children[0].textContent).toBe('SongFailedRetry');
   });
 });
 

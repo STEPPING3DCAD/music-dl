@@ -106,6 +106,8 @@ t.stream_lock          # Lock — serializes stream ops during Atmos switching
 - `_ensure_token_fresh(refresh_window_sec=300)` — auto-refresh if expiring within 5 min
 - `_try_login_with_key_rotation()` — keeps authenticated tidalapi login resilient across bundled client credentials
 - Token expiry handles both `float` (timestamp) and `datetime` from tidalapi
+- GUI startup passes its current `Settings` to `Tidal` and resolves the configured source non-interactively. It only performs quiet token restoration, so a first-run GUI becomes ready for the user-initiated Connect Tidal flow instead of opening OAuth during lifespan startup.
+- `_probe_subscription_quality()` reports observed provider capability only. Lower or unknown delivery warns; it never mutates or persists configured/session quality.
 
 ### HandlingApp()
 
@@ -326,6 +328,8 @@ Pause rule: global queue pause does not rewrite queued backlog rows to `paused`;
 
 FastAPI lifespan creates `DownloadJobService`, stores it on `app.state.download_jobs`, registers the service event hub with the running event loop, starts the persisted-job worker, and stops that worker during lifespan shutdown. Tests pass `job_db_path` to `create_app()` so API smoke tests use an isolated temporary job database instead of the user's real `library.db`.
 
+Lifespan also constructs `Tidal(Settings())` and uses `resolve_source(..., allow_interactive_login=False)`. This preserves the existing Hi-Fi selection and fallback policy while preventing a browser OAuth flow from blocking server readiness.
+
 Normal downloads, playlist sync, bot download requests, and upgrade requests all enqueue through `DownloadJobService`, so active duplicate suppression is shared across job kinds and enforced by the `download_jobs` table instead of route-local in-memory state. The worker claims both normal download jobs and upgrade jobs. Upgrade cleanup, quality ranking, album resolution, and trash helpers live in `tidal_dl.gui.services.upgrade_jobs`; route modules do not own download or upgrade execution.
 
 **`favorites`** — user-starred tracks
@@ -353,7 +357,7 @@ Normal downloads, playlist sync, bot download requests, and upgrade requests all
 
 ### Migrations
 
-Additive only. Runs on every `open()`:
+Additive only. `open()` reads SQLite's native `PRAGMA user_version`: databases below version 8 run these migrations and record version 8 in the same commit; current-schema opens configure their existing pragmas without rerunning migration writes.
 
 1. **v1 → v2**: Add `album`, `duration`, `quality`, `format` columns to `scanned`
 2. **v2 → v3**: Add `play_count`, `last_played`, `genre` to `scanned`
@@ -416,10 +420,16 @@ POST /api/download {track_ids: [123, 456]}
   │    ├─ Update job display fields
   │    ├─ Broadcast SSE: {"type": "progress", "status": "downloading"}
   │    ├─ Get stream manifest through the authenticated Tidal session
+  │    ├─ Treat explicit Dolby Atmos as separate opt-in lossy spatial audio using EC-3/EAC3, not an ordinary lossless tier
+  │    ├─ Require delivered tier to equal selected `LOW`, `HIGH`, `LOSSLESS`, or `HI_RES_LOSSLESS`
+  │    ├─ Require AAC/MP4A for lossy tiers or FLAC for lossless tiers
+  │    │  └─ Mismatch → error with requested/delivered/codec; URLs never reach segment consumers, and no bytes or output file
   │    ├─ Download segments (parallel, up to N)
   │    ├─ Merge segments → single file
   │    ├─ Decrypt if encrypted
   │    ├─ Write metadata via mutagen (tags, cover, lyrics)
+  │    ├─ Use the calling download thread's LibraryDB connection for ISRC lookup/registration
+  │    ├─ Commit successful track ISRC before any second LibraryDB writer
   │    ├─ Gate on `DownloadOutcome`
   │    │  ├─ `FAILED` → existing error path; never record completion
   │    │  └─ `DOWNLOADED`, `COPIED`, `SKIPPED` → terminal success:
@@ -429,7 +439,7 @@ POST /api/download {track_ids: [123, 456]}
   │    │     └─ Broadcast SSE: {"type": "complete", "status": "done"}
   │
   │  On error:
-  │    ├─ Log exception
+  │    ├─ Log the terminal reason once
   │    ├─ Record error in download_history (nested try/except — never breaks broadcast)
   │    ├─ Mark job "error"
   │    └─ Broadcast SSE: {"type": "error", "message": "..."}
@@ -438,6 +448,8 @@ POST /api/download {track_ids: [123, 456]}
 Upgrade jobs follow the same persisted lifecycle. `/api/upgrade/start` writes `kind='upgrade'` jobs with `old_path` and target quality, the worker downloads with `duplicate_action_override='redownload'`, applies the artist-mismatch safety gate before cleanup, removes stale same-album copies through `upgrade_jobs.cleanup_replaced_track_files()`, records `new_path`, and broadcasts `complete` plus `upgrade_complete`.
 
 The worker lazy-loads Tidal config/download dependencies only when it actually executes a claimed job. That keeps API startup and service tests from triggering network-backed API-key refresh work.
+
+The failed-history renderer shows the stored terminal reason beside `Failed` and Retry; legacy empty-error rows retain those controls without an invented reason. Each terminal worker error is logged once before it is persisted, so the same reason is available in logs, SSE, job state, history, and the card.
 
 ### SSE Broadcasting
 

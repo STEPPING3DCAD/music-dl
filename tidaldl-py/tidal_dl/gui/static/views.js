@@ -4100,6 +4100,7 @@ async function loadDownloadHistory(container) {
         const dot = h('span', { className: 'dl-status-dot dl-status-error' });
         meta.appendChild(dot);
         meta.appendChild(textEl('span', 'Failed', 'dl-status-label dl-status-error-text'));
+        if (dl.error) meta.appendChild(textEl('span', dl.error, 'dl-error-text'));
         // Retry button
         const retryBtn = h('button', { className: 'dl-retry-btn' });
         retryBtn.textContent = 'Retry';

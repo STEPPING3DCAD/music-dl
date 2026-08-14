@@ -2,6 +2,7 @@
 
 from tidal_dl.download._common import *  # noqa: F403
 
+
 class DuplicateMixin:
     def _preflight_isrc_scan(
         self,
@@ -33,7 +34,7 @@ class DuplicateMixin:
             isrc = getattr(item_media, "isrc", None)
             if not isrc:
                 continue
-            path_str = self._library_db.primary_path_for_isrc(isrc)
+            path_str = self._library_db_for_current_thread().primary_path_for_isrc(isrc)
             if path_str is None:
                 continue
             if pathlib.Path(path_str).is_file():

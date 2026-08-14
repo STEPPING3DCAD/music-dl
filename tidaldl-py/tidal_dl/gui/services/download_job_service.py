@@ -4,6 +4,7 @@ import json
 import logging
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -116,8 +117,15 @@ def scan_new_downloads(db, settings) -> None:
 
 
 class DownloadJobService:
-    def __init__(self, db_path: Path | None = None, *, autostart: bool = True) -> None:
+    def __init__(
+        self,
+        db_path: Path | None = None,
+        *,
+        autostart: bool = True,
+        dependency_provider: Callable[[], tuple[Any, Any, Any]] | None = None,
+    ) -> None:
         self._db_path = db_path or Path(path_config_base()) / "library.db"
+        self._download_dependency_provider = dependency_provider or _download_dependencies
         self.events = JobEventHub()
         self._running = threading.Event()
         self._running.set()
@@ -403,7 +411,7 @@ class DownloadJobService:
         raise ValueError(f"Unsupported job kind: {job.kind.value}")
 
     def _execute_download_job(self, job: DownloadJob) -> None:
-        settings_cls, tidal_cls, download_cls = _download_dependencies()
+        settings_cls, tidal_cls, download_cls = self._download_dependency_provider()
         settings = settings_cls()
         started_at = job.started_at or time.time()
 
@@ -832,6 +840,7 @@ class DownloadJobService:
         )
 
     def _mark_job_error(self, job: DownloadJob, exc: Exception) -> None:
+        logger.error("%s", str(exc))
         self._record_error_history(job, exc)
         self._update_job(
             job,

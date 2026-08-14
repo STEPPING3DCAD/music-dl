@@ -35,6 +35,8 @@ tidaldl-py/exe/
 
 # Internal methodology artifacts — not for public repo
 context/
+/.codex/
+/openspec/
 
 # Config / data (local)
 *.ini

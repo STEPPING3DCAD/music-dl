@@ -3,6 +3,7 @@
 from tidal_dl.download._common import *  # noqa: F403
 from tidal_dl.download.registry import register_downloaded_track
 
+
 class ItemMixin:
     def item(
         self,
@@ -63,7 +64,7 @@ class ItemMixin:
         # Handle copy override: copy source file directly to destination.
         if duplicate_action_override == "copy" and isinstance(media, Track):
             isrc = getattr(media, "isrc", None)
-            src_path_str = self._library_db.primary_path_for_isrc(isrc) if isrc else None
+            src_path_str = self._library_db_for_current_thread().primary_path_for_isrc(isrc) if isrc else None
             if src_path_str and pathlib.Path(src_path_str).is_file():
                 src_ext = pathlib.Path(src_path_str).suffix
                 path_copy_dst = path_media_dst.with_suffix(src_ext)
@@ -126,11 +127,7 @@ class ItemMixin:
         if outcome == DownloadOutcome.DOWNLOADED and isinstance(media, Track):
             isrc = getattr(media, "isrc", None)
             if isrc and self.settings.data.skip_duplicate_isrc:
-                self._library_db.register_isrc_path(isrc, path_media_dst)
-                self._isrc_pending_commits += 1
-                if self._isrc_pending_commits >= 25:
-                    self._library_db.commit()
-                    self._isrc_pending_commits = 0
+                self._library_db_for_current_thread().register_isrc_path(isrc, path_media_dst, commit=True)
             self._on_successful_track()
             register_downloaded_track(path_media_dst)
 
@@ -304,7 +301,7 @@ class ItemMixin:
         # bypass_isrc=True is set for redownload overrides decided in pre-flight.
         if not bypass_isrc and not skip_file and self.settings.data.skip_duplicate_isrc and isinstance(media, Track):
             media_isrc = getattr(media, "isrc", None)
-            if media_isrc and self._library_db.has_live_isrc(media_isrc):
+            if media_isrc and self._library_db_for_current_thread().has_live_isrc(media_isrc):
                 skip_file = True
 
         return path_media_dst, file_extension_dummy, skip_file, skip_download
