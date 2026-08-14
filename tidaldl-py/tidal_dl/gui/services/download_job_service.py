@@ -19,12 +19,12 @@ from tidal_dl.gui.services.upgrade_jobs import (
 )
 from tidal_dl.helper.library_db import LibraryDB
 from tidal_dl.helper.path import format_path_media, path_config_base
+from tidal_dl.model.downloader import DownloadOutcome
 
 logger = logging.getLogger("music-dl.gui")
 Settings: Any = None
 Tidal: Any = None
 Download: Any = None
-DownloadOutcome: Any = None
 register_downloaded_track: Any = None
 
 
@@ -44,12 +44,8 @@ def _download_dependencies() -> tuple[Any, Any, Any]:
 
 
 def _upgrade_dependencies() -> tuple[Any, Any, Any, Any, Any]:
-    global DownloadOutcome, register_downloaded_track
+    global register_downloaded_track
     settings_cls, tidal_cls, download_cls = _download_dependencies()
-    if DownloadOutcome is None:
-        from tidal_dl.model.downloader import DownloadOutcome as _DownloadOutcome
-
-        DownloadOutcome = _DownloadOutcome
     if register_downloaded_track is None:
         from tidal_dl.download import register_downloaded_track as _register_downloaded_track
 
@@ -464,7 +460,7 @@ class DownloadJobService:
                 self._mark_cancelled(current)
                 return
             try:
-                dl.item(
+                download_outcome, _output_path = dl.item(
                     file_template=settings.data.format_track,
                     media=track,
                     quality_audio=settings.data.quality_audio,
@@ -493,6 +489,11 @@ class DownloadJobService:
             raise last_exc
         if self._is_cancel_requested(current):
             self._mark_cancelled(current)
+            return
+        if download_outcome == DownloadOutcome.FAILED:
+            error = RuntimeError(f"Download failed for track {job.track_id}")
+            self._mark_job_error(current, error)
+            self._broadcast_error(current, error)
             return
 
         finished_at = time.time()

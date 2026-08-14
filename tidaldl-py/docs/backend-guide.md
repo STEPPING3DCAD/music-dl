@@ -396,10 +396,13 @@ POST /api/download {track_ids: [123, 456]}
   │    ├─ Merge segments → single file
   │    ├─ Decrypt if encrypted
   │    ├─ Write metadata via mutagen (tags, cover, lyrics)
-  │    ├─ Scan new downloads into LibraryDB
-  │    ├─ Record in download_history
-  │    ├─ Mark job "done"
-  │    └─ Broadcast SSE: {"type": "complete", "status": "done"}
+  │    ├─ Gate on `DownloadOutcome`
+  │    │  ├─ `FAILED` → existing error path; never record completion
+  │    │  └─ `DOWNLOADED`, `COPIED`, `SKIPPED` → terminal success:
+  │    │     ├─ Scan new downloads into LibraryDB
+  │    │     ├─ Record in download_history
+  │    │     ├─ Mark job "done"
+  │    │     └─ Broadcast SSE: {"type": "complete", "status": "done"}
   │
   │  On error:
   │    ├─ Log exception
