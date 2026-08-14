@@ -18,6 +18,21 @@ uv run music-dl gui   # launches at http://localhost:8765
 
 Create a branch, make your changes, open a PR against `master`.
 
+## Repository Privacy Gate
+
+Enable the tracked Git hooks once per clone:
+
+```shell
+git config core.hooksPath .githooks
+```
+
+The commit hook checks staged paths. The push hook checks each outgoing commit,
+including commits created with `git commit --no-verify`. A required CI check
+scans the complete tracked tree before changes can merge into `master`.
+
+Local hooks can still be deliberately bypassed with `git push --no-verify`.
+Do not use that option; protected-branch CI is the final merge gate.
+
 ## Pull Request Process
 
 1. One logical change per PR. Split unrelated work into separate PRs.
