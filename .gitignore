@@ -35,8 +35,9 @@ tidaldl-py/exe/
 
 # Internal methodology artifacts — not for public repo
 context/
-/.codex/
-/openspec/
+.codex/
+.agents/
+openspec/
 
 # Config / data (local)
 *.ini
@@ -82,6 +83,7 @@ output/
 !/scripts/install-windows-local.ps1
 !/scripts/edge_channel.py
 !/scripts/release_version.py
+!/scripts/check_repository_privacy.py
 /tidaldl-py/scripts/
 
 # Local MCP config
