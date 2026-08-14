@@ -25,7 +25,7 @@ Tidal sign-in and reconnect can be started directly from the GUI; terminal `musi
 
 The GUI keeps a static **Report bug** link in the app chrome and no-JavaScript fallback. It opens the GitHub bug report template directly without depending on local API calls.
 
-The Home view shows recent additions, recently played items, top artists, genre stats, repeat listening, and a Continue Listening card when playback has a saved queue position. Library artist navigation renders page-sized batches, and album navigation uses an in-memory album cache with batched card rendering to keep large collections responsive. Recently Played supports Today, This Week, and Older filters plus clear-old/history controls. The player persists queue, volume, shuffle, repeat, and Smart Shuffle preferences across reloads.
+The Home view shows recent additions, recently played items, top artists, genre stats, repeat listening, and a Continue Listening card when playback has a saved queue position. Home loads aggregate library statistics without rebuilding every grouped album card, and reports a visible error instead of presenting a failed request as an empty library. Library artist navigation renders page-sized batches, and album navigation uses an in-memory album cache with batched card rendering to keep large collections responsive. Recently Played supports Today, This Week, and Older filters plus clear-old/history controls. The player persists queue, volume, shuffle, repeat, and Smart Shuffle preferences across reloads.
 
 Continue Listening ignores finished tracks and near-end positions so completed songs do not reappear as one-second resume cards.
 

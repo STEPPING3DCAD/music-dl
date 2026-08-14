@@ -196,20 +196,7 @@ def home_stats():
     stats["volume_available"] = _volume_available_cached()
 
     # Convert cover_path to cover_url for artist tiles.
-    from tidal_dl.gui.api.library import _album_cards, _local_cover_url
-
-    stats["recent_albums"] = [
-        {
-            "id": card["id"],
-            "name": card["name"],
-            "artist": card["artist"],
-            "track_count": card["track_count"],
-            "cover_path": card["cover_path"],
-            "possible_duplicate": card["possible_duplicate"],
-            "recent_at": card["recent_at"],
-        }
-        for card in sorted(_album_cards(db), key=lambda card: -card["recent_at"])[:8]
-    ]
+    from tidal_dl.gui.api.library import _local_cover_url
 
     def cover_url(path):
         row = db.get(path) if path else None

@@ -25,6 +25,7 @@ uv tool install --from git+https://github.com/alfdav/music-dl.git#subdirectory=t
 - Enforced the selected audio quality as an exact tier and codec contract; mismatches fail before media output is created instead of silently saving lower-quality audio.
 - Improved download reliability by isolating per-thread library database connections and committing successful track registration before other writers run.
 - Added deterministic, explainable duplicate-album grouping with safety vetoes and persistent user review decisions.
+- Fixed Home failing on duplicate tracks with unknown durations, removed an unused full-library grouping pass from Home loading, and made future Home failures visible instead of showing a false empty-library state.
 - Added repository privacy checks for local hooks and protected-branch CI.
 
 ## v1.7.2 (2026-08-08)

@@ -111,6 +111,20 @@ def test_recording_slots_are_deterministic_and_conflicting_isrc_is_noisy():
     assert forward.slots[0].isrc is None
 
 
+def test_zero_duration_duplicate_copies_share_one_deterministic_slot():
+    rows = [
+        _row("/playlist/a.m4a", duration=0, track=None, disc_number=None),
+        _row("/backup/a.m4a", duration=0, track=None, disc_number=None),
+    ]
+
+    forward = build_local_album_groups(rows)[0]
+    reverse = build_local_album_groups(list(reversed(rows)))[0]
+
+    assert len(forward.slots) == 1
+    assert forward.slots[0].duration is None
+    assert forward.signature == reverse.signature
+
+
 def test_scorer_matches_isrc_first_then_fallback_and_records_sources():
     left = build_local_album_groups([
         _row("/l1.flac", album="Album", track=1, title="One", isrc="USAAA2000001"),

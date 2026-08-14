@@ -7,6 +7,57 @@ const viewsSource = readFileSync(
   'utf8',
 );
 
+function loadHomeRenderer(api) {
+  const functionBody = viewsSource
+    .split('async function renderHome(container) {')[1]
+    ?.split('\nfunction _getContinueListeningState')[0];
+  if (!functionBody) throw new Error('Home renderer not found');
+
+  function element(tag) {
+    return {
+      tag,
+      children: [],
+      isConnected: true,
+      classList: { add() {}, remove() {} },
+      appendChild(child) { this.children.push(child); return child; },
+      remove() {},
+      set textContent(value) { this._text = String(value); this.children = []; },
+      get textContent() { return (this._text || '') + this.children.map(child => child.textContent).join(''); },
+    };
+  }
+  const h = (tag, props = {}, ...children) => {
+    const node = element(tag);
+    Object.assign(node, props);
+    children.forEach(child => node.appendChild(child));
+    return node;
+  };
+  const textEl = (tag, value, className) => h(tag, { textContent: value, className });
+
+  return new Function(
+    'api', 'h', 'textEl', 'document', '_greeting', '_renderContinueListening',
+    '_renderHomeCold', '_renderHomeGrid', '_renderRecentStrip', 'recentlyPlayed',
+    `async function renderHome(container) {${functionBody}\nreturn renderHome;`,
+  )(
+    api, h, textEl, { createTextNode: value => h('span', { textContent: value }) },
+    () => 'Good afternoon,', () => {},
+    () => {}, () => {}, () => {}, [],
+  );
+}
+
+describe('Home view decisions', () => {
+  test('shows an honest error instead of an empty-library state when Home fails', async () => {
+    const renderHome = loadHomeRenderer(async () => { throw new Error('HTTP 500'); });
+    const container = { children: [], appendChild(child) { this.children.push(child); } };
+
+    await renderHome(container);
+
+    const text = container.children[0].textContent;
+    expect(text).toContain('Could not load Home');
+    expect(text).toContain('could not load your library summary');
+    expect(text).not.toContain("I'm feeling lucky");
+  });
+});
+
 function loadGroupingDecisionPayload() {
   const helperSource = viewsSource.match(
     /function _groupingDecisionPayload\(assessment, decision, canonicalTitle\) \{[\s\S]*?\n\}/,
