@@ -34,6 +34,8 @@ gui_js_source_contents="$(<"$GUI_JS_SOURCE")"
 
 assert_contains "$workflow_contents" "macos-14" "stable workflow builds macOS on arm64 runner"
 assert_contains "$workflow_contents" "--bundles app,dmg" "stable workflow creates macOS updater archive and DMG"
+assert_contains "$workflow_contents" 'APPLE_SIGNING_IDENTITY: "-"' "stable workflow ad-hoc signs macOS app bundle"
+assert_contains "$workflow_contents" "codesign --verify --deep --strict" "stable workflow verifies macOS bundle integrity"
 assert_contains "$workflow_contents" "*.app.tar.gz" "stable workflow uploads macOS updater archive"
 assert_contains "$workflow_contents" "*.app.tar.gz.sig" "stable workflow uploads macOS updater signature"
 assert_contains "$workflow_contents" "*.dmg" "stable workflow uploads macOS DMG"
