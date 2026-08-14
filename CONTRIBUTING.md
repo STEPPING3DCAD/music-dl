@@ -134,7 +134,7 @@ bun run typecheck
 
 Blank release notes are a release bug.
 
-macOS DMGs and updater archives are built and attached by GitHub Actions. CI applies and verifies an ad-hoc macOS bundle signature; the app is not Apple Developer ID signed or notarized. Windows MSIs are unsigned, so SmartScreen warnings are expected.
+macOS DMGs and updater archives are built and attached by GitHub Actions. CI applies and verifies an ad-hoc macOS bundle signature with hardened runtime disabled so the bundled PyInstaller runtime remains loadable; the app is not Apple Developer ID signed or notarized. Windows MSIs are unsigned, so SmartScreen warnings are expected.
 
 Prepare stable release metadata from the repository root:
 
