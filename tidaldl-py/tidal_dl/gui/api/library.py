@@ -16,13 +16,18 @@ import sqlite3
 import threading
 import time
 from base64 import b64decode
+from collections import Counter
+from collections.abc import Callable
 from pathlib import Path
+from urllib.parse import urlencode
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 from mutagen import File as MutagenFile
+from pydantic import BaseModel
 
 from tidal_dl.config import Settings
 from tidal_dl.helper.library_db import LibraryDB
+from tidal_dl.helper.library_db.utils import _album_track_key, _album_track_preference
 from tidal_dl.helper.path import path_config_base
 
 router = APIRouter()
@@ -66,6 +71,8 @@ _scan_progress = {"scanned": 0, "total": 0, "done": True}
 _db_local = threading.local()
 _db_generation = 0
 _db_generation_lock = threading.Lock()
+_musicbrainz_rate_lock = threading.Lock()
+_album_enrichment_lock = threading.Lock()
 
 
 def _close_thread_db() -> None:
@@ -269,6 +276,108 @@ def _resolve_local_metadata(
     }
 
 
+def _raw_tag(tags: object, *names: str) -> object | None:
+    if not tags or not hasattr(tags, "items"):
+        return None
+    wanted = {name.casefold() for name in names}
+    for key, value in tags.items():
+        if str(key).casefold() in wanted:
+            return value
+    return None
+
+
+def _tag_scalar(value: object | None) -> str | None:
+    if value is None:
+        return None
+    if hasattr(value, "text"):
+        value = value.text
+    if isinstance(value, (list, tuple)):
+        if not value:
+            return None
+        value = value[0]
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", errors="ignore")
+    cleaned = str(value).strip()
+    return cleaned or None
+
+
+def _tag_position(value: object | None, total: object | None = None) -> tuple[int | None, int | None]:
+    if hasattr(value, "text"):
+        value = value.text
+    if isinstance(value, list) and value:
+        value = value[0]
+    if isinstance(value, tuple):
+        first = value[0] if value else None
+        second = value[1] if len(value) > 1 else None
+    else:
+        parts = (_tag_scalar(value) or "").split("/", 1)
+        first = parts[0] or None
+        second = parts[1] if len(parts) > 1 else None
+    total_value = _tag_scalar(total) or second
+
+    def positive_int(raw: object | None) -> int | None:
+        try:
+            number = int(str(raw))
+        except (TypeError, ValueError):
+            return None
+        return number if number > 0 else None
+
+    return positive_int(first), positive_int(total_value)
+
+
+def _extract_release_metadata(easy_tags: object, raw_tags: object) -> dict:
+    """Normalize release identity fields from Vorbis, ID3, and MP4 tag shapes."""
+    def value(*names: str) -> object | None:
+        return _raw_tag(easy_tags, *names) or _raw_tag(raw_tags, *names)
+
+    track_number, track_total = _tag_position(
+        value("tracknumber", "TRCK", "trkn"),
+        value("tracktotal", "totaltracks", "TRACKTOTAL"),
+    )
+    disc_number, disc_total = _tag_position(
+        value("discnumber", "TPOS", "disk"),
+        value("disctotal", "totaldiscs", "DISCTOTAL"),
+    )
+    tidal_album_id = _tag_scalar(value(
+        "tidal_album_id",
+        "TXXX:TIDAL_ALBUM_ID",
+        "----:com.apple.iTunes:TIDAL_ALBUM_ID",
+    ))
+    provider_namespace = _tag_scalar(value("provider_namespace", "PROVIDER_NAMESPACE"))
+    provider_album_id = _tag_scalar(value("provider_album_id", "PROVIDER_ALBUM_ID"))
+    if tidal_album_id:
+        provider_namespace = "tidal"
+        provider_album_id = tidal_album_id
+
+    return {
+        "album_artist": _tag_scalar(value("albumartist", "ALBUMARTIST", "TPE2", "aART")),
+        "release_date": _tag_scalar(value("date", "DATE", "TDRC", "\xa9day")),
+        "track_number": track_number,
+        "track_total": track_total,
+        "disc_number": disc_number,
+        "disc_total": disc_total,
+        "musicbrainz_release_id": _tag_scalar(value(
+            "musicbrainz_albumid",
+            "MUSICBRAINZ_ALBUMID",
+            "TXXX:MusicBrainz Album Id",
+            "----:com.apple.iTunes:MusicBrainz Album Id",
+        )),
+        "musicbrainz_release_group_id": _tag_scalar(value(
+            "musicbrainz_releasegroupid",
+            "MUSICBRAINZ_RELEASEGROUPID",
+            "TXXX:MusicBrainz Release Group Id",
+            "----:com.apple.iTunes:MusicBrainz Release Group Id",
+        )),
+        "provider_namespace": provider_namespace,
+        "provider_album_id": provider_album_id,
+        "barcode": _tag_scalar(value(
+            "barcode", "upc", "ean", "TXXX:BARCODE", "TXXX:UPC", "TXXX:EAN",
+            "----:com.apple.iTunes:BARCODE", "----:com.apple.iTunes:UPC",
+            "----:com.apple.iTunes:EAN",
+        )),
+    }
+
+
 def _read_metadata(file_path: Path, scan_dirs: list[Path] | None = None) -> dict | None:
     try:
         # easy=True gives uniform tag keys across ID3, MP4, Vorbis, etc.
@@ -287,11 +396,10 @@ def _read_metadata(file_path: Path, scan_dirs: list[Path] | None = None) -> dict
         if audio.info and hasattr(audio.info, "bits_per_sample"):
             quality = f"{audio.info.sample_rate}Hz/{audio.info.bits_per_sample}bit"
 
-        # ISRC: easy mode doesn't map it for MP4/M4A — fall back to raw tags
+        # ISRC and release identities may require raw MP4 or ID3 tags.
+        raw = MutagenFile(file_path)
         isrc = _tag("isrc")
-        if not isrc:
-            raw = MutagenFile(file_path)
-            if raw and raw.tags:
+        if not isrc and raw and raw.tags:
                 # MP4: stored as freeform atom or direct key
                 for key in ("isrc", "----:com.apple.iTunes:isrc", "TSRC"):
                     val = raw.tags.get(key)
@@ -301,6 +409,8 @@ def _read_metadata(file_path: Path, scan_dirs: list[Path] | None = None) -> dict
                         else:
                             isrc = str(val)
                         break
+
+        release_metadata = _extract_release_metadata(audio, raw.tags if raw else {})
 
         resolved = _resolve_local_metadata(
             file_path,
@@ -316,6 +426,7 @@ def _read_metadata(file_path: Path, scan_dirs: list[Path] | None = None) -> dict
         return {
             "path": str(file_path),
             **resolved,
+            **release_metadata,
             "duration": round(audio.info.length) if audio.info else 0,
             "isrc": isrc,
             "genre": _normalize_genre(_tag("genre")),
@@ -346,6 +457,33 @@ def _has_local_art(file_path: Path) -> bool:
     return any((file_path.parent / name).is_file() for name in _COVER_NAMES)
 
 
+def _read_local_art_bytes(file_path: Path) -> tuple[bytes | None, str]:
+    """Read embedded or sibling artwork without mutating the audio file."""
+    try:
+        audio = MutagenFile(str(file_path))
+        if audio is not None:
+            if hasattr(audio, "pictures") and audio.pictures:
+                picture = audio.pictures[0]
+                return picture.data, picture.mime or "image/jpeg"
+            tags = audio.tags or {}
+            for key in tags:
+                if str(key).startswith("APIC"):
+                    picture = tags[key]
+                    return picture.data, picture.mime or "image/jpeg"
+            if tags.get("covr"):
+                return bytes(tags["covr"][0]), "image/jpeg"
+    except Exception:  # noqa: BLE001, S110
+        pass
+    for name in _COVER_NAMES:
+        image_path = file_path.parent / name
+        if image_path.is_file():
+            try:
+                return image_path.read_bytes(), "image/png" if name.endswith(".png") else "image/jpeg"
+            except OSError:
+                return None, "image/jpeg"
+    return None, "image/jpeg"
+
+
 def _local_cover_url(path: str | None, art_available: bool | int | None) -> str:
     if not path or art_available == 0:
         return ""
@@ -371,6 +509,354 @@ def _db_row_to_track(row: dict) -> dict:
         "play_count": row.get("play_count") or 0,
         "is_local": True,
     }
+
+
+def _assessment_payload(assessment, titles: dict[str, str]) -> dict:
+    return {
+        "left_signature": assessment.left_signature,
+        "right_signature": assessment.right_signature,
+        "left_title": titles.get(assessment.left_signature, ""),
+        "right_title": titles.get(assessment.right_signature, ""),
+        "score": assessment.score,
+        "outcome": assessment.outcome,
+        "family_scores": assessment.family_scores,
+        "diversity_bonus": assessment.diversity_bonus,
+        "coverage": assessment.coverage,
+        "evidence": [
+            {
+                "code": item.code,
+                "family": item.family,
+                "points": item.points,
+                "sources": sorted(item.sources),
+                "explanation": item.explanation,
+            }
+            for item in assessment.evidence
+        ],
+        "vetoes": [
+            {"code": veto.code, "explanation": veto.explanation}
+            for veto in assessment.vetoes
+        ],
+        "contradictions": assessment.contradictions,
+        "user_decision": assessment.user_decision,
+        "user_decision_superseded": assessment.user_decision_superseded,
+    }
+
+
+def _catalog_source_eligible(
+    stored: dict | None,
+    source: str,
+    *,
+    now: float,
+    direct_identity: bool = False,
+) -> bool:
+    if direct_identity or (stored and (stored.get("user_decision") or stored.get("vetoes"))):
+        return False
+    state = (stored or {}).get("catalog", {}).get(source)
+    if not state:
+        return True
+    if state.get("status") != "failed":
+        return False
+    return now - float(state.get("attempted_at") or 0) >= 86_400
+
+
+def _musicbrainz_json(
+    url: str,
+    *,
+    request_get=None,
+    clock=time.monotonic,
+    sleeper=time.sleep,
+) -> dict:
+    import requests
+
+    request_get = request_get or requests.get
+    with _musicbrainz_rate_lock:
+        now = clock()
+        wait = max(0.0, float(getattr(_musicbrainz_json, "_last_request", 0.0)) + 1.0 - now)
+        if wait:
+            sleeper(wait)
+        response = request_get(
+            url,
+            headers={"User-Agent": "music-dl/1.7.2 (https://github.com/alfdav/music-dl)"},
+            timeout=10,
+        )
+        _musicbrainz_json._last_request = clock()
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, dict):
+        raise TypeError("MusicBrainz returned malformed JSON")
+    return payload
+
+
+_musicbrainz_json._last_request = 0.0
+
+
+def _catalog_group_matches(group, album_artist: str, track_titles: list[str]) -> bool:
+    from tidal_dl.helper.album_grouping import normalize_text
+
+    if not group.album_artist or group.album_artist != normalize_text(album_artist):
+        return False
+    source_titles = Counter(normalize_text(title) for title in track_titles if normalize_text(title))
+    matches = 0
+    for slot in group.slots:
+        title = slot.key[1]
+        if source_titles[title] > 0:
+            source_titles[title] -= 1
+            matches += 1
+    required = min(3, len(group.slots))
+    return bool(group.slots) and matches >= required and matches / len(group.slots) >= 0.9
+
+
+def _tidal_catalog_lookup(left, right, session) -> dict:
+    from tidalapi.album import Album
+
+    result = session.search(f"{left.album_artist} {left.title}", models=[Album], limit=10)
+    albums = result.get("albums", result) if isinstance(result, dict) else result
+    for album in albums or []:
+        artist = getattr(getattr(album, "artist", None), "name", "")
+        tracks = album.tracks() if hasattr(album, "tracks") else []
+        titles = [str(getattr(track, "name", "")) for track in tracks or []]
+        if _catalog_group_matches(left, artist, titles) and _catalog_group_matches(right, artist, titles):
+            return {
+                "status": "matched",
+                "same_release": True,
+                "release_id": str(getattr(album, "id", "")),
+                "title": str(getattr(album, "name", "") or getattr(album, "title", "")),
+            }
+    return {"status": "no_match", "same_release": False}
+
+
+def _musicbrainz_catalog_lookup(left, right) -> dict:
+    query = urlencode({
+        "query": f'artist:"{left.album_artist}" AND release:"{left.title}"',
+        "fmt": "json",
+        "limit": 3,
+    })
+    search = _musicbrainz_json("https://musicbrainz.org/ws/2/release/?" + query)
+    for release in search.get("releases", [])[:3]:
+        release_id = release.get("id")
+        if not release_id:
+            continue
+        detail = _musicbrainz_json(
+            f"https://musicbrainz.org/ws/2/release/{release_id}?inc=recordings+artist-credits&fmt=json"
+        )
+        artist_credit = detail.get("artist-credit") or []
+        artist = "".join(
+            str(item.get("name") or item.get("artist", {}).get("name") or "")
+            for item in artist_credit if isinstance(item, dict)
+        )
+        titles = [
+            str(track.get("recording", {}).get("title") or track.get("title") or "")
+            for medium in detail.get("media", [])
+            for track in medium.get("tracks", [])
+        ]
+        if _catalog_group_matches(left, artist, titles) and _catalog_group_matches(right, artist, titles):
+            return {
+                "status": "matched",
+                "same_release": True,
+                "release_id": str(release_id),
+                "title": str(detail.get("title") or release.get("title") or ""),
+            }
+    return {"status": "no_match", "same_release": False}
+
+
+def _album_cards(db: LibraryDB, *, include_artwork: bool = False) -> list[dict]:
+    """Build current release cards from cached rows without network access."""
+    from tidal_dl.helper.album_grouping import (
+        accepted_components,
+        assess_pair,
+        base_title,
+        build_local_album_groups,
+        canonical_title,
+        card_id,
+        find_candidates,
+    )
+
+    groups = build_local_album_groups(db.all_tracks())
+    titles = {group.signature: group.title for group in groups}
+    assessments = {}
+    stored_rows = {}
+    for left, right in find_candidates(groups):
+        stored = db.get_grouping_assessment(left.signature, right.signature)
+        stored_rows[frozenset({left.signature, right.signature})] = stored
+        cached_artwork = bool(stored and any(
+            item.get("code") == "artwork" for item in stored.get("evidence", [])
+        ))
+        artwork_digests = None
+        if include_artwork:
+            from tidal_dl.helper.album_grouping import weak_evidence_sets
+
+            artwork_digests = (
+                set(weak_evidence_sets(left.rows, lambda path: _read_local_art_bytes(Path(path))[0])[0]),
+                set(weak_evidence_sets(right.rows, lambda path: _read_local_art_bytes(Path(path))[0])[0]),
+            )
+        elif cached_artwork:
+            artwork_digests = ({"cached"}, {"cached"})
+        assessment = assess_pair(
+            left,
+            right,
+            user_decision=stored.get("user_decision") if stored else None,
+            catalog_results=stored.get("catalog") if stored else None,
+            artwork_digests=artwork_digests,
+            directory_names=(
+                {base_title(Path(row["path"]).parent.name) for row in left.rows},
+                {base_title(Path(row["path"]).parent.name) for row in right.rows},
+            ),
+        )
+        pair = frozenset({left.signature, right.signature})
+        assessments[pair] = assessment
+        payload = _assessment_payload(assessment, titles)
+        db.save_grouping_assessment(
+            left_signature=left.signature,
+            right_signature=right.signature,
+            score=assessment.score,
+            outcome=assessment.outcome,
+            evidence=payload["evidence"],
+            vetoes=payload["vetoes"],
+            contradictions=assessment.contradictions,
+            catalog=stored.get("catalog") if stored else None,
+        )
+    if assessments:
+        db.commit()
+
+    components, clique_review = accepted_components(groups, assessments)
+    cards: list[dict] = []
+    for component in components:
+        signatures = {group.signature for group in component}
+        component_assessments = [
+            assessment
+            for pair, assessment in assessments.items()
+            if pair & signatures
+        ]
+        selected_titles = [
+            stored["canonical_title"]
+            for pair, stored in stored_rows.items()
+            if stored and stored.get("canonical_title") and pair <= signatures
+        ]
+        tracks = [row for group in component for row in group.rows]
+        ordered = sorted(tracks, key=_album_track_preference)
+        distinct: dict[tuple[str, str], dict] = {}
+        for row in ordered:
+            distinct.setdefault(_album_track_key(row), row)
+        presented = sorted(distinct.values(), key=lambda row: (
+            row.get("disc_number") or 0,
+            row.get("track_number") or 0,
+            row.get("path") or "",
+        ))
+        artists = {str(row.get("artist")) for row in tracks if row.get("artist")}
+        cover = min(tracks, key=lambda row: (not bool(row.get("art_available")), row.get("path") or ""))
+        possible_duplicate = bool(
+            signatures & clique_review
+            or any(assessment.outcome == "review" for assessment in component_assessments)
+            or any(assessment.user_decision_superseded for assessment in component_assessments)
+        )
+        cards.append({
+            "id": card_id(component),
+            "name": canonical_title(component, user_titles=selected_titles),
+            "artist": next(iter(artists)) if len(artists) == 1 else "Various Artists",
+            "track_count": len(presented),
+            "cover_path": cover.get("path"),
+            "cover_art_available": cover.get("art_available"),
+            "best_quality": max((str(row.get("quality") or "") for row in tracks), default=""),
+            "members": sorted(group.title for group in component),
+            "possible_duplicate": possible_duplicate,
+            "assessments": [_assessment_payload(assessment, titles) for assessment in component_assessments],
+            "tracks": presented,
+            "recent_at": max((int(row.get("scanned_at") or 0) for row in tracks), default=0),
+            "recent_source": "scan",
+        })
+    return sorted(cards, key=lambda card: (card["name"].casefold(), card["artist"].casefold()))
+
+
+def _enrich_album_candidates(db: LibraryDB) -> None:
+    """Run optional catalog work after scanning, never during rendering."""
+    from tidal_dl.config import Tidal
+    from tidal_dl.gui.api.settings import _local_auth_status
+    from tidal_dl.helper.album_grouping import build_local_album_groups, find_candidates
+
+    groups = build_local_album_groups(db.all_tracks())
+    for left, right in find_candidates(groups):
+        stored = db.get_grouping_assessment(left.signature, right.signature)
+        if stored is None:
+            continue
+        catalog = dict(stored.get("catalog") or {})
+        now = time.time()
+        same_provider = bool(
+            left.values("provider_album_id") & right.values("provider_album_id")
+            and left.values("provider_namespace") & right.values("provider_namespace")
+        )
+        same_musicbrainz = bool(
+            left.values("musicbrainz_release_id") & right.values("musicbrainz_release_id")
+        )
+        sources: list[tuple[str, Callable[[], dict]]] = []
+
+        tidal = Tidal()
+        if _local_auth_status(tidal)["logged_in"] and _catalog_source_eligible(
+            stored, "tidal", now=now, direct_identity=same_provider,
+        ):
+            sources.append((
+                "tidal",
+                lambda left=left, right=right, session=tidal.session: _tidal_catalog_lookup(left, right, session),
+            ))
+        if _catalog_source_eligible(
+            stored, "musicbrainz", now=now, direct_identity=same_musicbrainz,
+        ):
+            sources.append((
+                "musicbrainz",
+                lambda left=left, right=right: _musicbrainz_catalog_lookup(left, right),
+            ))
+
+        for source, lookup in sources:
+            attempted_at = time.time()
+            result = _safe_catalog_lookup(lookup)
+            catalog[source] = {**result, "attempted_at": attempted_at}
+            db.save_grouping_assessment(
+                left_signature=left.signature,
+                right_signature=right.signature,
+                score=stored["score"],
+                outcome=stored["outcome"],
+                evidence=stored["evidence"],
+                vetoes=stored["vetoes"],
+                contradictions=stored["contradictions"],
+                catalog=catalog,
+            )
+            db.commit()
+            _album_cards(db)
+            stored = db.get_grouping_assessment(left.signature, right.signature) or stored
+
+
+def _safe_catalog_lookup(lookup: Callable[[], dict]) -> dict:
+    try:
+        return lookup()
+    except Exception as exc:  # noqa: BLE001
+        return {"status": "failed", "error": type(exc).__name__}
+
+
+def _background_album_enrichment() -> None:
+    """Enrich the latest local assessments without extending scan busy state."""
+    if not _album_enrichment_lock.acquire(blocking=False):
+        return
+    db = None
+    try:
+        db = LibraryDB(Path(path_config_base()) / "library.db")
+        db.open()
+        _enrich_album_candidates(db)
+    finally:
+        if db is not None:
+            db.close()
+        _invalidate_db_cache()
+        _album_enrichment_lock.release()
+
+
+def _schedule_album_enrichment() -> None:
+    threading.Thread(target=_background_album_enrichment, daemon=True).start()
+
+
+def _finish_album_scan(db: LibraryDB) -> None:
+    """Persist local assessments, release scan resources, then enrich."""
+    _album_cards(db, include_artwork=True)
+    db.close()
+    _invalidate_db_cache()
+    _schedule_album_enrichment()
 
 
 def _scan_directories() -> list[Path]:
@@ -504,6 +990,17 @@ def _reconcile_library_rows(db: LibraryDB, *, scan_dirs: list[Path]) -> int:
                 artist=meta["artist"],
                 title=meta["name"],
                 album=meta["album"],
+                album_artist=meta.get("album_artist"),
+                release_date=meta.get("release_date"),
+                track_number=meta.get("track_number"),
+                track_total=meta.get("track_total"),
+                disc_number=meta.get("disc_number"),
+                disc_total=meta.get("disc_total"),
+                musicbrainz_release_id=meta.get("musicbrainz_release_id"),
+                musicbrainz_release_group_id=meta.get("musicbrainz_release_group_id"),
+                provider_namespace=meta.get("provider_namespace"),
+                provider_album_id=meta.get("provider_album_id"),
+                barcode=meta.get("barcode"),
                 duration=meta["duration"],
                 genre=meta.get("genre"),
                 quality=meta["quality"],
@@ -588,7 +1085,7 @@ def _background_scan(rescan: bool) -> None:
                 print("[library] Scan directories unchanged — skipping")
                 with _scan_lock:
                     _scan_progress = {"scanned": 0, "total": 0, "done": True}
-                db.close()
+                _finish_album_scan(db)
                 return
 
         with _scan_lock:
@@ -632,6 +1129,17 @@ def _background_scan(rescan: bool) -> None:
                         artist=meta["artist"],
                         title=meta["name"],
                         album=meta["album"],
+                        album_artist=meta.get("album_artist"),
+                        release_date=meta.get("release_date"),
+                        track_number=meta.get("track_number"),
+                        track_total=meta.get("track_total"),
+                        disc_number=meta.get("disc_number"),
+                        disc_total=meta.get("disc_total"),
+                        musicbrainz_release_id=meta.get("musicbrainz_release_id"),
+                        musicbrainz_release_group_id=meta.get("musicbrainz_release_group_id"),
+                        provider_namespace=meta.get("provider_namespace"),
+                        provider_album_id=meta.get("provider_album_id"),
+                        barcode=meta.get("barcode"),
                         duration=meta["duration"],
                         genre=meta.get("genre"),
                         quality=meta["quality"],
@@ -720,10 +1228,10 @@ def _background_scan(rescan: bool) -> None:
                     pass
             if gfilled:
                 db.commit()
-        db.close()
 
-        # Flag invalidation — request threads reopen on next access
-        _invalidate_db_cache()
+        # Local scoring completes with the scan. Optional network work gets its
+        # own background pass so it cannot extend the scan's busy state.
+        _finish_album_scan(db)
     finally:
         with _scan_lock:
             _scan_running = False
@@ -754,15 +1262,27 @@ def library_artists(
 def all_albums(q: str = Query("", description="Search filter")):
     """Return all albums in the local library as a gallery."""
     db = _get_db()
-    albums = db.all_albums(query=q)
+    albums = _album_cards(db)
+    query = q.strip().casefold()
+    if query:
+        albums = [
+            album for album in albums
+            if query in album["name"].casefold()
+            or query in album["artist"].casefold()
+            or any(query in member.casefold() for member in album["members"])
+        ]
     return {
         "albums": [
             {
-                "name": a["album"],
+                "id": a["id"],
+                "name": a["name"],
                 "artist": a["artist"],
                 "track_count": a["track_count"],
                 "cover_url": _local_cover_url(a.get("cover_path"), a.get("cover_art_available")),
                 "best_quality": a.get("best_quality") or "",
+                "members": a["members"],
+                "possible_duplicate": a["possible_duplicate"],
+                "assessments": a["assessments"],
             }
             for a in albums
         ],
@@ -776,15 +1296,19 @@ def library_recent_albums(
     offset: int = Query(0, ge=0),
 ) -> dict:
     db = _get_db()
-    rows, total = db.recent_albums_page(limit=limit, offset=offset)
+    rows = sorted(_album_cards(db), key=lambda row: -row["recent_at"])
+    total = len(rows)
+    rows = rows[offset:offset + limit]
     albums = [
         {
-            "name": row["album"],
+            "id": row["id"],
+            "name": row["name"],
             "artist": row["artist"],
             "track_count": row["track_count"],
             "cover_url": _local_cover_url(row.get("cover_path"), row.get("cover_art_available")),
             "recent_at": row["recent_at"],
             "recent_source": row["recent_source"],
+            "possible_duplicate": row["possible_duplicate"],
         }
         for row in rows
     ]
@@ -795,16 +1319,23 @@ def library_recent_albums(
 def artist_albums(artist_name: str):
     """Return all albums by an artist from the local library."""
     db = _get_db()
-    albums = db.albums_by_artist(artist_name)
+    albums = [album for album in _album_cards(db) if any(
+        str(row.get("artist") or "").casefold() == artist_name.casefold()
+        for row in album["tracks"]
+    )]
     return {
         "artist": artist_name,
         "albums": [
             {
-                "name": a["album"],
+                "id": a["id"],
+                "name": a["name"],
                 "track_count": a["track_count"],
                 "cover_url": _local_cover_url(a.get("cover_path"), a.get("cover_art_available")),
-                "genres": a.get("genres") or "",
+                "genres": ",".join(sorted({
+                    str(row.get("genre")) for row in a["tracks"] if row.get("genre")
+                })),
                 "best_quality": a.get("best_quality") or "",
+                "possible_duplicate": a["possible_duplicate"],
             }
             for a in albums
         ],
@@ -816,13 +1347,66 @@ def artist_albums(artist_name: str):
 def artist_album_tracks(artist_name: str, album_name: str):
     """Return all tracks for a specific album by an artist."""
     db = _get_db()
-    tracks = db.album_tracks(artist_name, album_name)
+    card = next((
+        card for card in _album_cards(db)
+        if album_name in card["members"]
+        and (card["artist"] == artist_name or artist_name == "Various Artists")
+    ), None)
+    tracks = card["tracks"] if card else db.album_tracks(artist_name, album_name)
     return {
         "artist": artist_name,
         "album": album_name,
         "tracks": [_db_row_to_track(t) for t in tracks],
         "total": len(tracks),
     }
+
+
+@router.get("/library/releases/{release_hash}/tracks")
+def release_tracks(release_hash: str):
+    db = _get_db()
+    release_id = "release:" + release_hash
+    card = next((card for card in _album_cards(db) if card["id"] == release_id), None)
+    if card is None:
+        raise HTTPException(status_code=404, detail="Release not found")
+    return {
+        "id": card["id"],
+        "artist": card["artist"],
+        "album": card["name"],
+        "tracks": [_db_row_to_track(track) for track in card["tracks"]],
+        "total": card["track_count"],
+    }
+
+
+class GroupingDecisionRequest(BaseModel):
+    left_signature: str
+    right_signature: str
+    decision: str
+    canonical_title: str | None = None
+
+
+@router.post("/library/grouping/decision")
+def save_grouping_decision(body: GroupingDecisionRequest):
+    from tidal_dl.helper.album_grouping import build_local_album_groups
+
+    if body.decision not in {"group_together", "keep_separate"}:
+        raise HTTPException(status_code=422, detail="Invalid grouping decision")
+    db = _get_db()
+    groups = {group.signature: group for group in build_local_album_groups(db.all_tracks())}
+    left = groups.get(body.left_signature)
+    right = groups.get(body.right_signature)
+    if left is None or right is None:
+        raise HTTPException(status_code=409, detail="Grouping assessment is stale")
+    if body.decision == "group_together" and body.canonical_title not in {left.title, right.title}:
+        raise HTTPException(status_code=422, detail="Canonical title must be a current member title")
+    if not db.set_grouping_decision(
+        body.left_signature,
+        body.right_signature,
+        decision=body.decision,
+        canonical_title=body.canonical_title,
+    ):
+        raise HTTPException(status_code=409, detail="Grouping assessment is stale")
+    db.commit()
+    return {"status": "saved", "decision": body.decision}
 
 
 def _art_cache_dir() -> Path:
@@ -875,38 +1459,7 @@ def library_art(path: str = Query(..., description="Absolute path to audio file"
             headers={"Cache-Control": "public, max-age=86400"},
         )
 
-    art_data = None
-    art_mime = "image/jpeg"
-
-    try:
-        audio = MutagenFile(str(validated))
-        if audio is not None:
-            # FLAC
-            if hasattr(audio, "pictures") and audio.pictures:
-                pic = audio.pictures[0]
-                art_data = pic.data
-                art_mime = pic.mime or "image/jpeg"
-
-            # MP3 / ID3
-            if not art_data:
-                tags = audio.tags or {}
-                for key in tags:
-                    if key.startswith("APIC"):
-                        apic = tags[key]
-                        art_data = apic.data
-                        art_mime = apic.mime or "image/jpeg"
-                        break
-
-            # M4A / MP4
-            if not art_data:
-                tags = audio.tags or {}
-                if tags.get("covr"):
-                    art_data = bytes(tags["covr"][0])
-
-    except HTTPException:
-        raise
-    except Exception:  # noqa: BLE001, S110
-        pass
+    art_data, art_mime = _read_local_art_bytes(validated)
 
     # Write to disk cache and return
     if art_data:
@@ -920,25 +1473,6 @@ def library_art(path: str = Query(..., description="Absolute path to audio file"
             content=art_data, media_type=art_mime,
             headers={"Cache-Control": "public, max-age=86400"},
         )
-
-    # Fallback: look for cover image in the same directory as the audio file
-    parent = validated.parent
-    for name in _COVER_NAMES:
-        img_path = parent / name
-        if img_path.is_file():
-            # Cache the folder art too
-            import shutil
-            shutil.copyfile(str(img_path), str(cache_file))
-            db = _get_db()
-            row = db.get(path)
-            if row and row.get("art_available") is None:
-                db._conn.execute("UPDATE scanned SET art_available = 1 WHERE path = ?", (path,))
-                db.commit()
-            mime = "image/png" if name.endswith(".png") else "image/jpeg"
-            return FileResponse(
-                img_path, media_type=mime,
-                headers={"Cache-Control": "public, max-age=86400"},
-            )
 
     db = _get_db()
     row = db.get(path)
@@ -976,15 +1510,23 @@ def library_search(
         return {"tracks": [_db_row_to_track(r) for r in rows], "total": total}
 
     if type == "albums":
-        albums = db.all_albums(query=q.strip())
+        query = q.strip().casefold()
+        albums = [
+            album for album in _album_cards(db)
+            if query in album["name"].casefold()
+            or query in album["artist"].casefold()
+            or any(query in member.casefold() for member in album["members"])
+        ]
         return {
             "albums": [
                 {
-                    "name": a["album"],
+                    "id": a["id"],
+                    "name": a["name"],
                     "artist": a["artist"],
                     "track_count": a["track_count"],
                     "cover_url": _local_cover_url(a.get("cover_path"), a.get("cover_art_available")),
                     "is_local": True,
+                    "possible_duplicate": a["possible_duplicate"],
                 }
                 for a in albums[:limit]
             ],
@@ -1044,9 +1586,6 @@ def scan_status() -> dict:
     """Check background scan progress."""
     with _scan_lock:
         return {"scanning": _scan_running, **_scan_progress}
-
-
-from pydantic import BaseModel
 
 
 class FavoriteToggleRequest(BaseModel):

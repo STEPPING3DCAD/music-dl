@@ -4491,6 +4491,67 @@ body {
   color: var(--text-primary);
 }
 
+.possible-duplicate-badge {
+  width: fit-content;
+  margin-top: 7px;
+  padding: 3px 8px;
+  border: 1px solid rgba(214, 174, 82, 0.45);
+  border-radius: 999px;
+  background: rgba(214, 174, 82, 0.08);
+  color: #d9b76b;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.possible-duplicate-badge:focus-visible {
+  outline: 2px solid #d9b76b;
+  outline-offset: 2px;
+}
+
+.grouping-review {
+  width: min(560px, calc(100vw - 32px));
+  max-height: min(680px, calc(100vh - 32px));
+  overflow: auto;
+}
+
+.grouping-review-pair,
+.grouping-review-score {
+  margin: 8px 0;
+  color: var(--text-secondary);
+}
+
+.grouping-review-evidence {
+  margin: 16px 0;
+  padding-left: 20px;
+  color: var(--text-secondary);
+}
+
+.grouping-review-veto {
+  color: var(--red);
+}
+
+.grouping-review-label {
+  display: grid;
+  gap: 6px;
+}
+
+.grouping-review-select {
+  width: 100%;
+  padding: 8px;
+  border: 1px solid var(--glass-border);
+  border-radius: 7px;
+  background: var(--bg-warm);
+  color: var(--text);
+}
+
+.grouping-review-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
+}
+
 .device-code-modal .device-code-value {
   user-select: all;
 }

@@ -67,7 +67,13 @@ class TestPragmas:
         finally:
             migrated.close()
 
-        assert {"isrc", "artist", "title", "scanned_at", "art_available"} <= cols
+        assert {
+            "isrc", "artist", "title", "scanned_at", "art_available",
+            "album_artist", "release_date", "track_number", "track_total",
+            "disc_number", "disc_total", "musicbrainz_release_id",
+            "musicbrainz_release_group_id", "provider_namespace",
+            "provider_album_id", "barcode",
+        } <= cols
         assert row is not None
         assert row["status"] == "tagged"
 
@@ -86,6 +92,61 @@ class TestCRUD:
         assert row["quality"] == "44100Hz/16bit"
         assert row["codec"] == "flac"
         assert row["metadata_complete"] == 1
+
+    def test_record_persists_release_metadata(self, db):
+        db.record(
+            "/music/track.flac",
+            status="tagged",
+            artist="Marcos Witt",
+            title="Song",
+            album="25 Concierto Conmemorativo",
+            album_artist="Marcos Witt",
+            release_date="2011-03-15",
+            track_number=4,
+            track_total=30,
+            disc_number=1,
+            disc_total=2,
+            musicbrainz_release_id="mb-release",
+            musicbrainz_release_group_id="mb-group",
+            provider_namespace="tidal",
+            provider_album_id="12345",
+            barcode="0081000000000",
+        )
+        db.commit()
+
+        row = db.get("/music/track.flac")
+
+        assert row is not None
+        assert {key: row[key] for key in (
+            "album_artist", "release_date", "track_number", "track_total",
+            "disc_number", "disc_total", "musicbrainz_release_id",
+            "musicbrainz_release_group_id", "provider_namespace",
+            "provider_album_id", "barcode",
+        )} == {
+            "album_artist": "Marcos Witt",
+            "release_date": "2011-03-15",
+            "track_number": 4,
+            "track_total": 30,
+            "disc_number": 1,
+            "disc_total": 2,
+            "musicbrainz_release_id": "mb-release",
+            "musicbrainz_release_group_id": "mb-group",
+            "provider_namespace": "tidal",
+            "provider_album_id": "12345",
+            "barcode": "0081000000000",
+        }
+
+    def test_album_without_release_metadata_remains_browsable(self, db):
+        db.record(
+            "/music/legacy.flac",
+            status="tagged",
+            artist="Legacy Artist",
+            title="Legacy Song",
+            album="Legacy Album",
+        )
+        db.commit()
+
+        assert db.all_albums()[0]["album"] == "Legacy Album"
 
     def test_get_nonexistent_returns_none(self, db):
         assert db.get("/nonexistent.flac") is None
@@ -581,7 +642,7 @@ class TestMigration:
                     "quality_probes", "library_meta", "download_history", "favorites"}
         assert expected.issubset(tables)
 
-    def test_v1_to_v6_migration(self, tmp_path):
+    def test_v1_to_v8_migration(self, tmp_path):
         """Create a v1-style DB, then open with LibraryDB to trigger migration."""
         db_path = tmp_path / "legacy.db"
         conn = sqlite3.connect(str(db_path))
@@ -606,12 +667,17 @@ class TestMigration:
         assert "art_available" in cols
         assert "codec" in cols
         assert "metadata_complete" in cols
-        assert LibraryDB._SCHEMA_VERSION == 6
+        assert "album_artist" in cols
+        assert "track_total" in cols
+        assert "musicbrainz_release_id" in cols
+        assert "provider_album_id" in cols
+        assert "barcode" in cols
+        assert LibraryDB._SCHEMA_VERSION == 8
         row = db.get("/a.flac")
         assert row["artist"] == "X"
         assert row["art_available"] is None
         assert row["codec"] == "flac"
-        assert row["metadata_complete"] is None
+        assert row["metadata_complete"] == 0
         db.close()
 
     def test_backup_includes_committed_wal_rows(self, tmp_path):
@@ -635,3 +701,57 @@ class TestMigration:
             db.close()
 
         assert row == ("A",)
+
+
+class TestAlbumGroupingAssessments:
+    def test_table_and_pair_index_exist(self, db):
+        tables = {row["name"] for row in db._conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        )}
+        indexes = {row["name"] for row in db._conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index'"
+        )}
+
+        assert "album_grouping_assessments" in tables
+        assert "idx_album_grouping_signatures" in indexes
+
+    def test_assessment_round_trip_and_current_signature_lookup(self, db):
+        db.save_grouping_assessment(
+            left_signature="left",
+            right_signature="right",
+            score=72,
+            outcome="review",
+            evidence=[{"code": "title", "points": 5}],
+            vetoes=[],
+            contradictions=["unconfirmed_total"],
+            catalog={"tidal": {"status": "failed", "attempted_at": 100}},
+        )
+        db.commit()
+
+        stored = db.get_grouping_assessment("right", "left")
+
+        assert stored["score"] == 72
+        assert stored["evidence"] == [{"code": "title", "points": 5}]
+        assert stored["contradictions"] == ["unconfirmed_total"]
+        assert stored["catalog"]["tidal"]["attempted_at"] == 100
+        assert db.get_grouping_assessment("left", "changed") is None
+
+    def test_reassessment_preserves_current_user_decision(self, db):
+        db.save_grouping_assessment(
+            left_signature="left", right_signature="right",
+            score=70, outcome="review", evidence=[], vetoes=[], contradictions=[],
+        )
+        db.set_grouping_decision(
+            "left", "right", decision="group_together", canonical_title="Album",
+        )
+        db.save_grouping_assessment(
+            left_signature="left", right_signature="right",
+            score=82, outcome="review", evidence=[], vetoes=[], contradictions=[],
+        )
+        db.commit()
+
+        stored = db.get_grouping_assessment("left", "right")
+
+        assert stored["score"] == 82
+        assert stored["user_decision"] == "group_together"
+        assert stored["canonical_title"] == "Album"
