@@ -499,6 +499,11 @@ use FastAPI's `/api/docs` or `gui/api/__init__.py` for the complete current set.
 | `PATCH` | `/settings` | Update settings |
 | `GET` | `/auth/status` | Report connected, expired, unavailable, or not-configured state from local token data, including cached `account_quality` |
 | `GET` | `/auth/account` | Refresh the cached Tidal account quality from the provider |
+
+`music-dl piping-watch` compares bundled Tidal OAuth clients to
+`tidal_dl/piping_baseline.json`. The Monday `tidal-piping-watch` workflow
+also diffs the public API-key gist and, when `TIDAL_WATCH_ACCESS_TOKEN` is
+set, probes `playbackinfopostpaywall`. Drift should land in the next binary.
 | `POST` | `/auth/login` | Start OAuth device-code flow |
 | `GET` | `/auth/login/status` | Poll login progress |
 | `POST` | `/auth/reset` | Delete local OAuth credentials and rebuild an unauthenticated session without contacting Tidal |

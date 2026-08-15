@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "gist_id": "48d01f5a24b4b7b37f19443977c22cd6",
+  "gist_file": "tidal-api-key.json",
+  "gist_observed_on": "2026-08-15",
+  "gist_version": "1.0.1 GIST",
+  "probe_track_id": "59727857",
+  "preferred_client_id": "4N3n6Q1x95LL5K7p",
+  "preferred_bundled_only": true,
+  "clients": [
+    {
+      "platform": "Tidal Web",
+      "client_id": "4N3n6Q1x95LL5K7p",
+      "role": "preferred",
+      "expected_min_quality": "LOSSLESS",
+      "observed_quality": "LOSSLESS",
+      "observed_codec": "flac",
+      "observed_on": "2026-08-15",
+      "notes": "Preferred Hi-Fi client after Android Auto was capped (streamrip#966). Not listed in the public gist; keep it bundled."
+    },
+    {
+      "platform": "Android Auto",
+      "client_id": "zU4XHVVkc2tDPo4t",
+      "role": "legacy",
+      "expected_min_quality": "HIGH",
+      "expected_max_quality": "HIGH",
+      "observed_quality": "HIGH",
+      "observed_codec": "mp4a",
+      "observed_on": "2026-08-15",
+      "notes": "Gist still marks this valid HiFi/Master, but playbackinfo returns HIGH/AAC. Do not prefer it."
+    }
+  ],
+  "gist_clients": [
+    {
+      "platform": "Fire TV",
+      "client_id": "OmDtrzFgyVVL6uW56OnFA2COiabqm",
+      "valid": false
+    },
+    {
+      "platform": "Fire TV Master-Only",
+      "client_id": "7m7Ap0JC9j1cOM3n",
+      "valid": true
+    },
+    {
+      "platform": "Android TV",
+      "client_id": "Pzd0ExNVHkyZLiYN",
+      "valid": false
+    },
+    {
+      "platform": "TV",
+      "client_id": "8SEZWa4J1NVC5U5Y",
+      "valid": false
+    },
+    {
+      "platform": "Android Auto",
+      "client_id": "zU4XHVVkc2tDPo4t",
+      "valid": true
+    }
+  ]
+}

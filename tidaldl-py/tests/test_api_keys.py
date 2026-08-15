@@ -16,6 +16,7 @@ def test_api_module_import_does_not_fetch_remote_keys(monkeypatch):
 
     assert api.getNum() == 2
     assert api.getItem(0)["clientId"] == "4N3n6Q1x95LL5K7p"
+    assert api.API_KEYS_GIST_FILE == "tidal-api-key.json"
     fake_get.assert_not_called()
 
 
