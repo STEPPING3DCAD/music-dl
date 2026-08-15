@@ -497,7 +497,8 @@ use FastAPI's `/api/docs` or `gui/api/__init__.py` for the complete current set.
 | `POST` | `/setup/validate-path` | Check if path is safe and writable |
 | `GET` | `/settings` | Current settings as JSON |
 | `PATCH` | `/settings` | Update settings |
-| `GET` | `/auth/status` | Report connected, expired, unavailable, or not-configured state from local token data |
+| `GET` | `/auth/status` | Report connected, expired, unavailable, or not-configured state from local token data, including cached `account_quality` |
+| `GET` | `/auth/account` | Refresh the cached Tidal account quality from the provider |
 | `POST` | `/auth/login` | Start OAuth device-code flow |
 | `GET` | `/auth/login/status` | Poll login progress |
 | `POST` | `/auth/reset` | Delete local OAuth credentials and rebuild an unauthenticated session without contacting Tidal |

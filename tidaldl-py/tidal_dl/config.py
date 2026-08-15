@@ -474,6 +474,7 @@ class Tidal(BaseConfig[ModelToken]):
 
         if result:
             self.token_persist()
+            self.refresh_account_quality()
 
         return result
 
@@ -490,6 +491,27 @@ class Tidal(BaseConfig[ModelToken]):
 
         with contextlib.suppress(OSError, NotImplementedError):
             os.chmod(self.file_path, 0o600)
+
+    def refresh_account_quality(self) -> str | None:
+        """Read the account's highest Tidal quality and cache it on the token."""
+        cached = getattr(self.data, "account_quality", None) or None
+        try:
+            user = getattr(self.session, "user", None)
+            uid = getattr(user, "id", None)
+            request = getattr(getattr(self.session, "request", None), "request", None)
+            if not uid or not callable(request):
+                return cached
+            resp = request("GET", f"users/{uid}/subscription")
+            data = resp.json() if hasattr(resp, "json") else resp
+            if not isinstance(data, dict):
+                return cached
+            quality = str(data.get("highestSoundQuality") or "").upper() or None
+            if quality:
+                self.set_option("account_quality", quality)
+                self.save()
+            return quality or cached
+        except Exception:
+            return cached
 
     def _ensure_token_fresh(self, refresh_window_sec: int = 300) -> bool:
         _raw_exp = getattr(self.data, "expiry_time", 0) or 0

@@ -4227,7 +4227,10 @@ async function _resetTidalConnection(container) {
 
 async function loadAuthStatus(container) {
   try {
-    const data = await api('/auth/status');
+    let data = await api('/auth/status');
+    if (data.logged_in && !data.account_quality) {
+      try { data = await api('/auth/account'); } catch (_) { /* keep cached status */ }
+    }
     while (container.firstChild) container.removeChild(container.firstChild);
     container.appendChild(textEl('div', 'Tidal Account', 'settings-section-header'));
     const row = h('div', { className: 'connection', style: { padding: '0 0 16px', gap: '12px' } });
@@ -4236,6 +4239,12 @@ async function loadAuthStatus(container) {
       const dot = h('span', { className: 'connection-dot' + (presentation.dot ? ' ' + presentation.dot : '') });
       row.appendChild(dot);
       row.appendChild(document.createTextNode(presentation.label));
+      if (data.account_quality) {
+        const tier = _qualityTier(data.account_quality);
+        const badge = textEl('span', tier.tier, 'quality-tag ' + tier.cls);
+        badge.title = tier.desc;
+        row.appendChild(badge);
+      }
     } else {
       const dot = h('span', { className: 'connection-dot' + (presentation.dot ? ' ' + presentation.dot : '') });
       row.appendChild(dot);

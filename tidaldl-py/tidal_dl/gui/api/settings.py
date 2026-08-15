@@ -146,24 +146,46 @@ def auth_status(tidal: Tidal = Depends(get_tidal_instance)) -> dict:
     return _local_auth_status(tidal)
 
 
+def _cached_account_quality(tidal: Tidal) -> str | None:
+    quality = getattr(tidal.data, "account_quality", None)
+    if not isinstance(quality, str):
+        return None
+    quality = quality.strip().upper()
+    return quality or None
+
+
+def _auth_status_payload(
+    logged_in: bool,
+    username: str,
+    auth_state: str,
+    account_quality: str | None = None,
+) -> dict:
+    return {
+        "logged_in": logged_in,
+        "username": username,
+        "auth_state": auth_state,
+        "account_quality": account_quality if logged_in else None,
+    }
+
+
 def _local_auth_status(tidal: Tidal) -> dict:
     username = ""
     access_token = getattr(tidal.data, "access_token", None)
     if not access_token:
-        return {"logged_in": False, "username": username, "auth_state": "not_configured"}
+        return _auth_status_payload(False, username, "not_configured")
 
     try:
         raw_expiry = getattr(tidal.data, "expiry_time", 0) or 0
         expiry_time = raw_expiry.timestamp() if hasattr(raw_expiry, "timestamp") else float(raw_expiry)
     except (TypeError, ValueError):
-        return {"logged_in": False, "username": username, "auth_state": "unavailable"}
+        return _auth_status_payload(False, username, "unavailable")
 
     if expiry_time > 0 and expiry_time <= time.time():
-        return {"logged_in": False, "username": username, "auth_state": "expired"}
+        return _auth_status_payload(False, username, "expired")
 
     user = getattr(tidal.session, "user", None)
     username = getattr(user, "name", "") or ""
-    return {"logged_in": True, "username": username, "auth_state": "credentials_ready"}
+    return _auth_status_payload(True, username, "credentials_ready", _cached_account_quality(tidal))
 
 
 _login_lock = threading.Lock()
@@ -210,6 +232,9 @@ def auth_login(tidal: Tidal = Depends(get_tidal_instance)) -> dict:  # noqa: B00
                 refreshed = bool(refresh_token) and tidal.session.token_refresh(refresh_token)
                 if refreshed:
                     tidal.token_persist()
+                    refresh_quality = getattr(tidal, "refresh_account_quality", None)
+                    if callable(refresh_quality):
+                        refresh_quality()
                     _login_state["status"] = "success"
                     return {"status": "already_logged_in"}
             except Exception:
@@ -263,6 +288,18 @@ def auth_login_status() -> dict:
     """Poll login progress."""
     with _login_lock:
         return _login_state.copy()
+
+
+@router.get("/auth/account")
+def auth_account(tidal: Tidal = Depends(get_tidal_instance)) -> dict:
+    """Refresh the cached Tidal account quality. Status stays local-only."""
+    status = _local_auth_status(tidal)
+    if not status["logged_in"]:
+        return status
+    refresh_quality = getattr(tidal, "refresh_account_quality", None)
+    if callable(refresh_quality):
+        status["account_quality"] = refresh_quality()
+    return status
 
 
 @router.post("/auth/reset")

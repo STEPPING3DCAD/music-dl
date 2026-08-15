@@ -224,3 +224,4 @@ class Token(_JsonDataclassMixin):
     access_token: str | None = None
     refresh_token: str | None = None
     expiry_time: float = 0.0
+    account_quality: str | None = None

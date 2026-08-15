@@ -46,8 +46,9 @@ function _tidalStatusPresentation(data) {
   if (_remotePlaybackUnavailable() && (data.auth_state === 'credentials_ready' || data.logged_in)) {
     return { label: 'playback unavailable', dot: 'disconnected' };
   }
-  if (data.auth_state === 'credentials_ready') return { label: 'credentials saved', dot: 'neutral' };
-  if (data.logged_in) return { label: data.username || 'connected', dot: '' };
+  if (data.logged_in || data.auth_state === 'credentials_ready') {
+    return { label: data.username || 'connected', dot: '' };
+  }
   return { label: 'log in', dot: 'disconnected' };
 }
 
@@ -1278,18 +1279,25 @@ document.addEventListener('keydown', (e) => {
 });
 
 // ---- STATUS LIGHTS ----
-const _flashed = new Set();
-function flashError(el) {
-  if (_flashed.has(el.id)) return;
-  _flashed.add(el.id);
-  el.style.background = 'rgba(224, 96, 96, 0.1)';
-  el.style.borderRadius = 'var(--radius-xs)';
-  el.style.transition = 'background 2s ease';
-  setTimeout(() => { el.style.background = ''; }, 3000);
+function _renderAccountQualityChip(accountEl, quality) {
+  while (accountEl.firstChild) accountEl.removeChild(accountEl.firstChild);
+  if (!quality) {
+    accountEl.hidden = true;
+    accountEl.className = 'connection connection-account';
+    accountEl.removeAttribute('title');
+    return;
+  }
+  const tier = _qualityTier(quality);
+  accountEl.hidden = false;
+  accountEl.className = 'connection connection-account ' + tier.cls;
+  accountEl.title = tier.desc;
+  accountEl.appendChild(document.createTextNode(tier.tier));
 }
+
 async function refreshStatusLights() {
   // Tidal auth
   const tidalEl = document.getElementById('connection-tidal');
+  const accountEl = document.getElementById('connection-account');
   if (tidalEl) {
     try {
       const data = await api('/auth/status');
@@ -1297,32 +1305,31 @@ async function refreshStatusLights() {
       const presentation = _tidalStatusPresentation(data);
       const dot = h('span', { className: 'connection-dot' + (presentation.dot ? ' ' + presentation.dot : '') });
       tidalEl.appendChild(dot);
+      tidalEl.appendChild(document.createTextNode('tidal \u00b7 ' + presentation.label));
       if (data.logged_in) {
-        tidalEl.appendChild(document.createTextNode('tidal \u00b7 ' + presentation.label));
         tidalEl.style.cursor = '';
         tidalEl.onclick = null;
       } else {
-        tidalEl.appendChild(document.createTextNode('tidal \u00b7 ' + presentation.label));
         tidalEl.style.cursor = 'pointer';
         tidalEl.onclick = triggerLogin;
       }
+      if (accountEl) {
+        if (!data.logged_in) {
+          _renderAccountQualityChip(accountEl, null);
+        } else if (data.account_quality) {
+          _renderAccountQualityChip(accountEl, data.account_quality);
+        } else {
+          try {
+            const account = await api('/auth/account');
+            _renderAccountQualityChip(accountEl, account.account_quality);
+          } catch (_) {
+            _renderAccountQualityChip(accountEl, null);
+          }
+        }
+      }
     } catch (_) { /* leave default */ }
-  }
-
-  // HiFi servers
-  const hifiEl = document.getElementById('connection-hifi');
-  if (hifiEl) {
-    try {
-      const data = await api('/hifi/status');
-      while (hifiEl.firstChild) hifiEl.removeChild(hifiEl.firstChild);
-      const alive = data.alive || 0;
-      const dot = h('span', { className: 'connection-dot' + (alive > 0 ? '' : ' disconnected') });
-      hifiEl.appendChild(dot);
-      hifiEl.appendChild(document.createTextNode('tidal-servers \u00b7 ' + alive + ' up'));
-      if (alive === 0) flashError(hifiEl);
-    } catch (err) {
-      console.error('[music-dl] hifi status check failed:', err);
-    }
+  } else if (accountEl) {
+    _renderAccountQualityChip(accountEl, null);
   }
 }
 
