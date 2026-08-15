@@ -483,6 +483,8 @@ describe('download badge and requeue decisions', () => {
     expect(downloadTrack).toContain('refreshDlBadge()');
     expect(viewsSource).toContain('function _reconcileDownloadUi()');
     expect(viewsSource).toContain('_reconcileDownloadUi()');
+    expect(viewsSource).toContain("activeEl.querySelector('.dl-batch-summary')");
+    expect(viewsSource).toContain('setTimeout(_reconcileDownloadUi, 1500)');
   });
 });
 

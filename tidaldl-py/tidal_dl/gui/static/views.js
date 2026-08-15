@@ -3540,6 +3540,7 @@ async function downloadTrack(track, btn) {
     _dlCallbacks[track.id] = { btn };
     _ensureGlobalSSE();
     refreshDlBadge();
+    setTimeout(_reconcileDownloadUi, 1500);
   } catch (err) {
     toast('Download failed: ' + err.message, 'error');
     btn.disabled = false;
@@ -3671,6 +3672,13 @@ function _reconcileDownloadUi() {
       delete _dlCallbacks[id];
       _downloading.delete(Number(id) || id);
     });
+    const activeEl = document.getElementById('dl-active');
+    if (!activeEl) return;
+    const summary = activeEl.querySelector('.dl-batch-summary');
+    if (summary) summary.remove();
+    if (!activeEl.querySelector('.dl-card:not(.dl-empty)')) {
+      _showActiveEmpty(activeEl);
+    }
   }).catch(() => {});
 }
 
