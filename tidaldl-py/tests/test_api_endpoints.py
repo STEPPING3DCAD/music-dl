@@ -529,7 +529,12 @@ class TestDownloadsSnapshot:
         assert hasattr(client.app.state, "download_jobs")
         resp = client.get("/api/downloads/active/snapshot", headers=client._host_header)
         assert resp.status_code == 200
-        assert resp.json() == {"active": [], "queued_count": 0}
+        assert resp.json() == {
+            "active": [],
+            "queued_count": 0,
+            "active_count": 0,
+            "paused": False,
+        }
 
     def test_returns_200(self, client):
         resp = client.get("/api/downloads/active/snapshot", headers=client._host_header)
@@ -540,6 +545,9 @@ class TestDownloadsSnapshot:
         data = resp.json()
         assert "active" in data
         assert isinstance(data["active"], list)
+        assert "queued_count" in data
+        assert "active_count" in data
+        assert "paused" in data
 
     def test_empty_queue_initially(self, client):
         resp = client.get("/api/downloads/active/snapshot", headers=client._host_header)

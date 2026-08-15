@@ -205,7 +205,25 @@ def test_service_cancel_all_while_paused_clears_queued_jobs(tmp_path):
         "cancelled": True,
         "active_count": 0,
     }
-    assert service.snapshot() == {"active": [], "queued_count": 0}
+    assert service.snapshot() == {
+        "active": [],
+        "queued_count": 0,
+        "active_count": 0,
+        "paused": False,
+    }
+
+
+def test_service_cancel_all_clears_claimed_jobs_from_snapshot(tmp_path):
+    service = _service(tmp_path)
+    service.enqueue_download([1])
+    assert service.claim_next_for_test() is not None
+
+    result = service.cancel()
+
+    assert result["active_count"] == 0
+    assert service.snapshot()["queued_count"] == 0
+    assert service.snapshot()["active"] == []
+    assert service.queue_state()["active_count"] == 0
 
 
 def test_service_cancels_claimed_job_at_safe_checkpoint(tmp_path):
@@ -241,8 +259,29 @@ def test_service_initial_events_include_running_jobs_and_queue_summary(tmp_path)
             "job_id": running.id,
             "kind": "download",
         },
-        {"type": "batch_queued", "count": 1},
+        {
+            "type": "batch_queued",
+            "count": 1,
+            "queued_count": 1,
+            "active_count": 2,
+            "paused": False,
+        },
     ]
+
+
+def test_enqueue_batch_queued_reports_remaining_queue(tmp_path):
+    service = _service(tmp_path)
+    events = []
+    service.events.broadcast = events.append
+
+    service.enqueue_download([1])
+    service.claim_next_for_test()
+    service.enqueue_download([2, 3])
+
+    batch = [event for event in events if event["type"] == "batch_queued"]
+    assert batch[-1]["count"] == 2
+    assert batch[-1]["queued_count"] == 2
+    assert batch[-1]["active_count"] == 3
 
 
 @pytest.mark.parametrize(

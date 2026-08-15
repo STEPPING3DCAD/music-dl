@@ -480,13 +480,18 @@ describe('download badge and requeue decisions', () => {
     const cancelBlock = viewsSource.split("cancelBtn.textContent = 'Cancel All';")[1];
     expect(cancelBlock).toBeTruthy();
     expect(cancelBlock).toContain("await api('/downloads/cancel', { method: 'POST' })");
-    expect(cancelBlock).toContain('_clearActiveDownloads()');
-    expect(cancelBlock).toContain('_setQueuePaused(false)');
-    expect(cancelBlock).toContain('refreshDlBadge()');
-    expect(viewsSource).toContain('function _clearActiveDownloads()');
+    expect(cancelBlock).toContain('refreshActiveDownloads()');
+    expect(viewsSource).toContain('function refreshActiveDownloads()');
+    expect(viewsSource).toContain('function applyActiveSnapshot(');
+    expect(viewsSource).toContain("api('/downloads/active/snapshot')");
     expect(viewsSource).toContain("data.type === 'cancelled'");
-    expect(viewsSource).toContain("data.type === 'progress' || data.type === 'complete' || data.type === 'error' || data.type === 'cancelled'");
-    expect(viewsSource).toContain("queued === 1 ? ' track queued' : ' tracks queued'");
+    expect(viewsSource).toContain("count === 1 ? ' track queued' : ' tracks queued'");
+  });
+
+  test('Active downloads render from snapshot, not leftover SSE cards', () => {
+    expect(viewsSource).toContain('refreshActiveDownloads()');
+    expect(viewsSource).toContain("if (data.type === 'upgrade_progress') {");
+    expect(viewsSource).toContain("if (data.type !== 'progress') refreshActiveDownloads();");
   });
 
   test('single-track download can be requeued after a missed terminal event', () => {
@@ -496,7 +501,7 @@ describe('download badge and requeue decisions', () => {
     expect(downloadTrack).toContain('refreshDlBadge()');
     expect(viewsSource).toContain('function _reconcileDownloadUi()');
     expect(viewsSource).toContain('_reconcileDownloadUi()');
-    expect(viewsSource).toContain("activeEl.querySelector('.dl-batch-summary')");
+    expect(viewsSource).toContain('refreshActiveDownloads()');
     expect(viewsSource).toContain('setTimeout(_reconcileDownloadUi, 1500)');
   });
 });

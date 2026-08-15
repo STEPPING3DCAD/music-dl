@@ -181,7 +181,7 @@ class DownloadJobService:
         if queued == 0:
             return {"status": "already_queued", "count": 0}
 
-        self.events.broadcast({"type": "batch_queued", "count": queued})
+        self.events.broadcast(self._queue_event("batch_queued"))
         return {"status": "queued", "count": queued}
 
     def enqueue_upgrade(self, items: list[UpgradeJobInput]) -> dict:
@@ -206,17 +206,17 @@ class DownloadJobService:
                 queued += 1
 
         if queued > 0:
-            self.events.broadcast({"type": "batch_queued", "count": queued})
+            self.events.broadcast(self._queue_event("batch_queued"))
         return {"status": "queued", "count": queued, "skipped": skipped}
 
     def pause(self) -> dict:
         self._running.clear()
-        self.events.broadcast({"type": "queue_paused"})
+        self.events.broadcast(self._queue_event("queue_paused"))
         return {"status": "paused"}
 
     def resume(self) -> dict:
         self._running.set()
-        self.events.broadcast({"type": "queue_resumed"})
+        self.events.broadcast(self._queue_event("queue_resumed"))
         return {"status": "running"}
 
     def cancel(self, track_ids: list[int] | None = None) -> dict:
@@ -243,8 +243,8 @@ class DownloadJobService:
                 )
             return {"status": "cancelled", "count": count, "active_count": active_count}
 
-        self.events.broadcast({"type": "queue_cancelled", "count": count})
         self._running.set()
+        self.events.broadcast(self._queue_event("queue_cancelled", cancelled_count=count))
         return {"status": "cancelled", "count": count, "active_count": active_count}
 
     def queue_state(self) -> dict:
@@ -262,9 +262,24 @@ class DownloadJobService:
     def snapshot(self) -> dict:
         db = self._open_db()
         try:
-            return db.download_jobs_snapshot()
+            data = db.download_jobs_snapshot()
         finally:
             db.close()
+        data["paused"] = not self._running.is_set()
+        data["active_count"] = data["queued_count"] + len(data["active"])
+        return data
+
+    def _queue_event(self, event_type: str, **extra) -> dict:
+        snapshot = self.snapshot()
+        event = {
+            "type": event_type,
+            "count": snapshot["queued_count"],
+            "queued_count": snapshot["queued_count"],
+            "active_count": snapshot["active_count"],
+            "paused": snapshot["paused"],
+        }
+        event.update(extra)
+        return event
 
     def initial_events(self) -> list[dict]:
         snapshot = self.snapshot()
@@ -288,7 +303,7 @@ class DownloadJobService:
             )
         queued_count = snapshot["queued_count"]
         if queued_count > 0:
-            events.append({"type": "batch_queued", "count": queued_count})
+            events.append(self._queue_event("batch_queued"))
         return events
 
     def claim_next_for_test(self) -> DownloadJob | None:
@@ -440,19 +455,19 @@ class DownloadJobService:
         )
         current = self.get_job_for_test(job.id) or job
         self.events.broadcast(
-            {
-                "type": "progress",
-                "job_id": job.id,
-                "kind": job.kind.value,
-                "track_id": job.track_id,
-                "name": name,
-                "artist": artist,
-                "album": album,
-                "cover_url": cover_url,
-                "quality": quality,
-                "status": "downloading",
-                "progress": 0,
-            }
+            self._queue_event(
+                "progress",
+                job_id=job.id,
+                kind=job.kind.value,
+                track_id=job.track_id,
+                name=name,
+                artist=artist,
+                album=album,
+                cover_url=cover_url,
+                quality=quality,
+                status="downloading",
+                progress=0,
+            )
         )
 
         if self._is_cancel_requested(current):

@@ -457,7 +457,9 @@ The failed-history renderer shows the stored terminal reason beside `Failed` and
 - `DownloadJobService.events` owns the `JobEventHub`
 - Max 5 simultaneous clients by default
 - Each client gets an `asyncio.Queue`
-- On connect, `DownloadJobService.initial_events()` emits running job `progress` events and one `batch_queued` summary
+- On connect, `DownloadJobService.initial_events()` emits running job `progress` events and one `batch_queued` summary whose `count` is the remaining queued jobs
+- Queue events (`batch_queued`, `queue_paused`, `queue_resumed`, `queue_cancelled`) include `queued_count`, `active_count`, and `paused`
+- The Downloads Active list is a snapshot of `/downloads/active/snapshot` plus `/downloads/queue-state`, not an accumulation of SSE cards
 - Worker/service broadcasts push events through the hub; disconnect unsubscribes the queue
 - Route modules do not keep their own download SSE client lists or in-memory active-download maps
 
