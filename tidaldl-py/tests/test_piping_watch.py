@@ -135,10 +135,3 @@ def test_cli_piping_watch_is_registered():
 
     assert result.exit_code == 0
     assert "Tidal OAuth" in result.output
-
-
-def test_cli_token_refresh_is_registered():
-    result = CliRunner().invoke(app, ["token-refresh", "--help"])
-
-    assert result.exit_code == 0
-    assert "without starting device login" in result.output

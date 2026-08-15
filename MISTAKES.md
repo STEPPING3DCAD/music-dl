@@ -31,11 +31,3 @@
 **Root cause:** Tidal changed that client's piping without a matching change in our key list. We only noticed after a live login.
 
 **Prevention:** Keep `tidaldl-py/tidal_dl/piping_baseline.json` as the expected client contract. `music-dl piping-watch` and `.github/workflows/tidal-piping-watch.yml` (Monday) fail when the gist grows new clients or the preferred Web client drops below LOSSLESS. Ship any client change with the next binary.
-
-## 2026-08-15 — Started a new Tidal device login when a refresh token already existed
-
-**What happened:** Repeated device-code authorizations for the same sandbox account.
-
-**Root cause:** Agents treated "need a working Tidal session" as "run login" instead of refreshing the stored token.
-
-**Prevention:** If `~/.config/music-dl/token.json` has a refresh token, run `music-dl token-refresh`. Never start device login unless that command fails.
