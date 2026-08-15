@@ -366,7 +366,11 @@ def test_static_js_shows_tidal_session_banner_only_for_expired_auth():
 def test_static_js_playlist_sync_updates_download_badge_and_sse():
     client = _make_client()
     js = _fetch_gui_js(client)
-    assert "toast('Downloading ' + result.missing + ' missing tracks', 'success');\n            updateDlBadge(result.missing);\n            _ensureGlobalSSE();" in js
+    assert (
+        "toast('Downloading ' + result.missing + ' missing tracks', 'success');\n"
+        "            refreshDlBadge();\n"
+        "            _ensureGlobalSSE();"
+    ) in js
 
 
 def test_static_js_playlist_auto_upgrade_scan_present():

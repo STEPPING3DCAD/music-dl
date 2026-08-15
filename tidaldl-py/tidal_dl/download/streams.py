@@ -7,27 +7,41 @@ class QualityMismatchError(ValueError):
     """The provider cannot satisfy the selected audio-quality contract."""
 
 
+_LOSSLESS_TIERS = frozenset({"LOSSLESS", "HI_RES", "HI_RES_LOSSLESS"})
+_EXPECTED_CODECS = {
+    "LOW": ("aac", "mp4a"),
+    "HIGH": ("aac", "mp4a"),
+    "LOSSLESS": ("flac",),
+    "HI_RES": ("flac",),
+    "HI_RES_LOSSLESS": ("flac",),
+}
+
+
 def _require_exact_quality(requested: Quality | str, delivered: Quality | str | None, codec: str | None) -> None:
+    """Accept the best available delivery that stays in the requested family.
+
+    Settings quality is a ceiling, not an exact-match requirement. A Hi-Res
+    preference may fall back to Blue Lossless FLAC when that is all Tidal has.
+    Lossy AAC/MP4A is still rejected when a lossless tier was requested.
+    """
     requested_name = quality_name(requested).upper()
     delivered_name = quality_name(delivered).upper() if delivered else "unknown"
     codec_name = (codec or "unknown").strip().lower() or "unknown"
-    expected_codecs = {
-        "LOW": ("aac", "mp4a"),
-        "HIGH": ("aac", "mp4a"),
-        "LOSSLESS": ("flac",),
-        "HI_RES_LOSSLESS": ("flac",),
-    }
-    compatible = expected_codecs.get(requested_name)
+    requested_codecs = _EXPECTED_CODECS.get(requested_name)
+    delivered_codecs = _EXPECTED_CODECS.get(delivered_name)
+    same_family = (
+        requested_name in _LOSSLESS_TIERS and delivered_name in _LOSSLESS_TIERS
+    ) or requested_name == delivered_name
 
     if (
-        compatible is None
-        or delivered_name not in expected_codecs
-        or requested_name != delivered_name
-        or not codec_name.startswith(compatible)
+        requested_codecs is None
+        or delivered_codecs is None
+        or not same_family
+        or not codec_name.startswith(delivered_codecs)
     ):
         raise QualityMismatchError(
-            f"Quality mismatch: requested {requested_name if compatible else 'unknown'} "
-            f"but received {delivered_name if delivered_name in expected_codecs else 'unknown'} "
+            f"Quality mismatch: requested {requested_name if requested_codecs else 'unknown'} "
+            f"but received {delivered_name if delivered_name in _EXPECTED_CODECS else 'unknown'} "
             f"with codec {codec_name}."
         )
 

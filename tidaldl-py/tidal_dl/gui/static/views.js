@@ -1902,7 +1902,7 @@ async function renderLocalAlbumDetail(container, artistName, albumName, prefetch
                     method: 'POST',
                     body: { tracks: allUpgradeable.map(u => ({ path: u.path, tidal_track_id: u.tidal_track_id })) }
                   });
-                  if (resp.count > 0) { updateDlBadge(resp.count); _ensureGlobalSSE(); }
+                  if (resp.count > 0) { refreshDlBadge(); _ensureGlobalSSE(); }
                   toast('Upgrade started for ' + (resp.count || allUpgradeable.length) + ' tracks', 'success');
                 } catch (err) {
                   toast('Upgrade failed', 'error');
@@ -1962,7 +1962,7 @@ async function renderLocalAlbumDetail(container, artistName, albumName, prefetch
                 body: { track_ids: missingTracks.map(t => t.id) },
               });
               toast('Downloading ' + missingTracks.length + ' track' + (missingTracks.length !== 1 ? 's' : ''), 'success');
-              updateDlBadge(missingTracks.length);
+              refreshDlBadge();
               _ensureGlobalSSE();
               dlAllBtn.disabled = true;
               dlAllBtn.textContent = 'Queued';
@@ -2092,7 +2092,7 @@ async function renderAlbumDetail(container, albumId) {
           body: { track_ids: nonLocal.map(t => t.id) },
         });
         toast('Downloading ' + nonLocal.length + ' track' + (nonLocal.length !== 1 ? 's' : ''), 'success');
-        updateDlBadge(nonLocal.length);
+        refreshDlBadge();
         _ensureGlobalSSE();
       } catch (err) {
         toast('Download failed: ' + err.message, 'error');
@@ -3492,7 +3492,7 @@ async function loadPlaylistTracks(resultsArea, pl) {
             dlBtn.style.display = 'none';
           } else {
             toast('Downloading ' + result.missing + ' missing tracks', 'success');
-            updateDlBadge(result.missing);
+            refreshDlBadge();
             _ensureGlobalSSE();
             dlBtn.textContent = 'Queued';
             dlBtn.disabled = true;
@@ -3523,21 +3523,23 @@ const _downloading = new Set();
 const _dlCallbacks = {};  // track_id → { btn }
 
 async function downloadTrack(track, btn) {
-  if (_downloading.has(track.id)) return;
-  _downloading.add(track.id);
-
   btn.disabled = true;
   btn.classList.add('downloading');
 
   try {
-    await apiTidal('/download', {
+    const resp = await apiTidal('/download', {
       method: 'POST',
       body: { track_ids: [track.id] },
     });
-    toast((track.name || 'Track') + ' queued', 'success');
-    updateDlBadge(1);
+    if (resp && resp.status === 'already_queued') {
+      toast((track.name || 'Track') + ' already queued', 'info');
+    } else {
+      toast((track.name || 'Track') + ' queued', 'success');
+    }
+    _downloading.add(track.id);
     _dlCallbacks[track.id] = { btn };
     _ensureGlobalSSE();
+    refreshDlBadge();
   } catch (err) {
     toast('Download failed: ' + err.message, 'error');
     btn.disabled = false;
@@ -3560,7 +3562,7 @@ function _dlComplete(trackId, success) {
     delete _dlCallbacks[trackId];
   }
   _downloading.delete(trackId);
-  updateDlBadge(-1);
+  refreshDlBadge();
 }
 
 // Global SSE for download progress (shared across views)
@@ -3568,12 +3570,13 @@ let _globalSSE = null;
 function _ensureGlobalSSE() {
   if (_globalSSE) return;
   _globalSSE = new EventSource('/api/downloads/active');
+  _reconcileDownloadUi();
   _globalSSE.onmessage = (event) => {
     try {
       const data = JSON.parse(event.data);
       if (data.type === 'ping') return;
       if (data.type === 'batch_queued') {
-        updateDlBadge(data.count || 0);
+        refreshDlBadge();
         const activeEl = document.getElementById('dl-active');
         if (activeEl) {
           const emptyEl = activeEl.querySelector('.dl-empty');
@@ -3611,13 +3614,14 @@ function _ensureGlobalSSE() {
           _showActiveEmpty(activeEl);
         }
         _scheduleHistoryReload();
+        refreshDlBadge();
       }
       // Upgrade events — update badge and inline scanner rows
       else if (data.type === 'upgrade_complete') {
-        updateDlBadge(-1);
+        refreshDlBadge();
         _updateUpgradeRow(data.old_path, 'done', data.name);
       } else if (data.type === 'upgrade_error') {
-        updateDlBadge(-1);
+        refreshDlBadge();
         _updateUpgradeRow(data.old_path, 'error', data.error);
       } else if (data.type === 'upgrade_progress') {
         _updateUpgradeRow(data.old_path, 'upgrading', data.name);
@@ -3639,13 +3643,35 @@ function _ensureGlobalSSE() {
   };
 }
 
-function updateDlBadge(delta) {
+function setDlBadge(count) {
   const badge = document.getElementById('dl-badge');
   if (!badge) return;
-  let count = parseInt(badge.textContent || '0', 10) + delta;
-  if (count < 0) count = 0;
+  count = Math.max(0, parseInt(count, 10) || 0);
   badge.textContent = count;
   badge.style.display = count > 0 ? '' : 'none';
+}
+
+function refreshDlBadge() {
+  api('/downloads/queue-state').then(qs => {
+    setDlBadge(qs.active_count || 0);
+  }).catch(() => {});
+}
+
+function _reconcileDownloadUi() {
+  api('/downloads/queue-state').then(qs => {
+    const active = qs.active_count || 0;
+    setDlBadge(active);
+    if (active > 0) return;
+    Object.keys(_dlCallbacks).forEach(id => {
+      const cb = _dlCallbacks[id];
+      if (cb && cb.btn) {
+        cb.btn.classList.remove('downloading');
+        cb.btn.disabled = false;
+      }
+      delete _dlCallbacks[id];
+      _downloading.delete(Number(id) || id);
+    });
+  }).catch(() => {});
 }
 
 function _updateUpgradeRow(oldPath, status, detail) {
@@ -3870,6 +3896,7 @@ function renderDownloads(container) {
       await api('/downloads/history' + qs, { method: 'DELETE' });
       const histEl = document.getElementById('dl-history');
       if (histEl) loadDownloadHistory(histEl);
+      refreshDlBadge();
     };
     clearBtns.appendChild(btn);
   });
@@ -3903,6 +3930,7 @@ function renderDownloads(container) {
   });
 
   _ensureGlobalSSE();
+  refreshDlBadge();
 
   // Load history
   loadDownloadHistory(historySection);

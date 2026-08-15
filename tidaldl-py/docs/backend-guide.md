@@ -421,7 +421,7 @@ POST /api/download {track_ids: [123, 456]}
   │    ├─ Broadcast SSE: {"type": "progress", "status": "downloading"}
   │    ├─ Get stream manifest through the authenticated Tidal session
   │    ├─ Treat explicit Dolby Atmos as separate opt-in lossy spatial audio using EC-3/EAC3, not an ordinary lossless tier
-  │    ├─ Require delivered tier to equal selected `LOW`, `HIGH`, `LOSSLESS`, or `HI_RES_LOSSLESS`
+  │    ├─ Require delivered audio to stay in the selected family: lossless settings accept any FLAC `LOSSLESS`/`HI_RES`/`HI_RES_LOSSLESS` fallback, lossy settings stay exact
   │    ├─ Require AAC/MP4A for lossy tiers or FLAC for lossless tiers
   │    │  └─ Mismatch → error with requested/delivered/codec; URLs never reach segment consumers, and no bytes or output file
   │    ├─ Download segments (parallel, up to N)

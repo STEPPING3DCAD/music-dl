@@ -455,6 +455,37 @@ describe('recent history view decisions', () => {
   });
 });
 
+describe('download badge and requeue decisions', () => {
+  test('badge is an absolute count from queue-state, not a local delta', () => {
+    expect(viewsSource).toContain('function refreshDlBadge()');
+    expect(viewsSource).toContain("api('/downloads/queue-state')");
+    expect(viewsSource).toContain('setDlBadge(qs.active_count || 0)');
+    expect(viewsSource).not.toMatch(/updateDlBadge\(\s*1\s*\)/);
+    expect(viewsSource).not.toMatch(/updateDlBadge\(\s*-1\s*\)/);
+    expect(viewsSource).not.toMatch(/updateDlBadge\(data\.count/);
+    expect(viewsSource).not.toMatch(/updateDlBadge\(result\.missing\)/);
+    expect(viewsSource).not.toMatch(/updateDlBadge\(missingTracks\.length\)/);
+    expect(viewsSource).not.toMatch(/updateDlBadge\(nonLocal\.length\)/);
+    expect(viewsSource).not.toMatch(/updateDlBadge\(resp\.count\)/);
+  });
+
+  test('clear history buttons refresh the Downloads badge', () => {
+    const clearBlock = viewsSource.split("['Failed', 'Done', 'All'].forEach(label => {")[1];
+    expect(clearBlock).toBeTruthy();
+    expect(clearBlock).toContain("await api('/downloads/history' + qs, { method: 'DELETE' })");
+    expect(clearBlock).toContain('refreshDlBadge()');
+  });
+
+  test('single-track download can be requeued after a missed terminal event', () => {
+    const downloadTrack = viewsSource.split('async function downloadTrack(track, btn) {')[1];
+    expect(downloadTrack).toBeTruthy();
+    expect(downloadTrack).not.toContain('if (_downloading.has(track.id)) return;');
+    expect(downloadTrack).toContain('refreshDlBadge()');
+    expect(viewsSource).toContain('function _reconcileDownloadUi()');
+    expect(viewsSource).toContain('_reconcileDownloadUi()');
+  });
+});
+
 describe('Tidal album filter decisions', () => {
   test('filters albums by quality and rating', () => {
     const filterTidalAlbums = loadAlbumFilterHelper();
