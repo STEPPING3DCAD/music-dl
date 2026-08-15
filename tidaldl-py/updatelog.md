@@ -20,6 +20,12 @@ uv tool install --from git+https://github.com/alfdav/music-dl.git#subdirectory=t
 
 ---
 
+## v1.7.4 (2026-08-15)
+- Restored Tidal catalog playback and downloads at LOSSLESS / FLAC by preferring the Tidal Web OAuth client, fixing the remaining provider-side failures in [#118](https://github.com/alfdav/music-dl/issues/118) and [#125](https://github.com/alfdav/music-dl/issues/125).
+- Changed upgrade jobs to request the quality Tidal actually reports for each track, so CD-quality tracks can upgrade to LOSSLESS FLAC without being rejected for lacking Max quality.
+- Updated the sidebar to show connected Tidal sessions in green and replace the server count with the account plan tier using the existing quality colors.
+- Existing Tidal sessions created with the Android Auto client must reset their Tidal connection and complete device login again; old tokens remain capped at HIGH / AAC.
+
 ## v1.7.3 (2026-08-14)
 - Fixed GUI downloads that could report success without creating a usable file, and now preserve the real failure reason across the worker, Downloads UI, and history ([#118](https://github.com/alfdav/music-dl/issues/118)).
 - Enforced the selected audio quality as an exact tier and codec contract; mismatches fail before media output is created instead of silently saving lower-quality audio.

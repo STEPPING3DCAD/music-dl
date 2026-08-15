@@ -55,12 +55,12 @@ def test_refresh_api_keys_updates_keys_when_gist_has_content(monkeypatch):
     assert api.refresh_api_keys() is True
 
     assert api.getVersion() == "9.9.9"
-    assert api.getItem(0)["clientId"] == "id"
+    assert any(key["clientId"] == "id" for key in api.getItems())
     assert any(key["clientId"] == "4N3n6Q1x95LL5K7p" for key in api.getItems())
     fake_get.assert_called_once()
 
 
-def test_first_valid_index_skips_invalid_keys(monkeypatch):
+def test_first_valid_index_prefers_bundled_web_after_remote_refresh(monkeypatch):
     content = """{
       "version": "9.9.9",
       "keys": [
@@ -75,5 +75,5 @@ def test_first_valid_index_skips_invalid_keys(monkeypatch):
     api = import_api_fresh(monkeypatch, mock.Mock(return_value=response))
 
     assert api.refresh_api_keys() is True
-    assert api.first_valid_index() == 1
-    assert api.getItem(1)["clientId"] == "live"
+    assert api.first_valid_index() == 0
+    assert api.getItem(0)["clientId"] == "4N3n6Q1x95LL5K7p"

@@ -143,5 +143,6 @@ def refresh_api_keys() -> bool:
     remote_ids = {key.get("clientId") for key in remote["keys"]}
     extras = [key for key in bundled["keys"] if key.get("clientId") and key["clientId"] not in remote_ids]
     remote["keys"].extend(extras)
+    remote["keys"].sort(key=lambda key: key.get("clientId") != "4N3n6Q1x95LL5K7p")
     _API_KEYS = remote
     return True
