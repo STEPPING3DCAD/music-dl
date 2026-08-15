@@ -346,9 +346,12 @@ class Tidal(BaseConfig[ModelToken]):
 
     def refresh_api_keys(self) -> bool:
         """Refresh managed API keys and apply the first valid key."""
-        if not _api.refresh_api_keys():
+        refreshed = _api.refresh_api_keys()
+        index = _api.first_valid_index()
+        if index < 0:
             return False
-        return self._apply_api_key(0)
+        applied = self._apply_api_key(index)
+        return refreshed and applied
 
     def _apply_api_key(self, index: int) -> bool:
         """Apply the API key at *index* from the managed key list to the session config.

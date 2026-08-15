@@ -14,8 +14,16 @@ from tidal_dl.constants import REQUESTS_TIMEOUT_SEC
 
 __KEYS_JSON__: str = """
 {
-    "version": "1.0.1",
+    "version": "1.0.2",
     "keys": [
+        {
+            "platform": "Tidal Web",
+            "formats": "Normal/High/HiFi/Master",
+            "clientId": "4N3n6Q1x95LL5K7p",
+            "clientSecret": "oKOXfJW371cX6xaZ0PyhgGNBdNLlBZd4AKKYougMjik=",
+            "valid": "True",
+            "from": "sky8282/Tidal-Web-Downloader (streamrip#966)"
+        },
         {
             "platform": "Android Auto",
             "formats": "Normal/High/HiFi/Master",
@@ -87,6 +95,14 @@ def isItemValid(index: int) -> bool:
     return getItem(index).get("valid") == "True"
 
 
+def first_valid_index() -> int:
+    """Return the first valid key index, or -1 if none are valid."""
+    for index, key in enumerate(_API_KEYS["keys"]):
+        if key.get("valid") == "True" and key.get("clientId"):
+            return index
+    return -1
+
+
 def getItems() -> list[ApiKey]:
     return _API_KEYS["keys"]
 
@@ -117,8 +133,15 @@ def refresh_api_keys() -> bool:
         return False
 
     try:
-        _API_KEYS = _load_api_keys(content)
+        remote = _load_api_keys(content)
     except (json.JSONDecodeError, TypeError, ValueError) as exc:
         print(f"[music-dl] Could not parse API keys from gist: {exc}")
         return False
+
+    # Keep bundled Hi-Fi clients when the gist is stale or lists them as invalid.
+    bundled = _load_api_keys(__KEYS_JSON__)
+    remote_ids = {key.get("clientId") for key in remote["keys"]}
+    extras = [key for key in bundled["keys"] if key.get("clientId") and key["clientId"] not in remote_ids]
+    remote["keys"].extend(extras)
+    _API_KEYS = remote
     return True
