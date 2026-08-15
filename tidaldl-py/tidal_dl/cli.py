@@ -1,4 +1,6 @@
 #!/usr/bin/env python
+import json
+import os
 import pathlib as _pathlib
 import signal
 import sys
@@ -585,6 +587,39 @@ def source_remove(url: str) -> None:
     settings.data.hifi_api_instances = ",".join(current)
     settings.save()
     print(f"Configured instances: {settings.data.hifi_api_instances}")
+
+
+@app.command(name="piping-watch")
+def piping_watch_command(
+    gist: Annotated[bool, typer.Option("--gist/--no-gist", help="Fetch and diff the public API-key gist.")] = False,
+    live: Annotated[bool, typer.Option("--live/--no-live", help="Probe playbackinfo when TIDAL_WATCH_ACCESS_TOKEN is set.")] = False,
+    as_json: Annotated[bool, typer.Option("--json", help="Print a machine-readable report.")] = False,
+) -> None:
+    """Check whether Tidal OAuth clients still deliver the expected quality."""
+    from tidal_dl.piping_watch import WATCH_TOKEN_ENV, format_report, run_watch
+
+    token = os.environ.get(WATCH_TOKEN_ENV) if live else None
+    report = run_watch(check_gist=gist, live_token=token)
+    if as_json:
+        typer.echo(json.dumps(report.to_dict(), indent=2))
+    else:
+        typer.echo(format_report(report))
+    if not report.ok:
+        raise typer.Exit(code=1)
+
+
+@app.command(name="token-refresh")
+def token_refresh() -> None:
+    """Refresh the stored Tidal session without starting device login."""
+    from tidal_dl.config import reset_singletons
+
+    reset_singletons()
+    tidal = Tidal(Settings())
+    if tidal.refresh_stored_session():
+        print("Tidal session refreshed and saved.")
+        return
+    print("Could not refresh the stored Tidal session. Not starting device login.")
+    raise typer.Exit(code=1)
 
 
 @app.command(name="logout")

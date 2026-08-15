@@ -4227,7 +4227,10 @@ async function _resetTidalConnection(container) {
 
 async function loadAuthStatus(container) {
   try {
-    const data = await api('/auth/status');
+    let data = await api('/auth/status');
+    if (data.logged_in && !data.account_quality) {
+      try { data = await api('/auth/account'); } catch (_) { /* keep cached status */ }
+    }
     while (container.firstChild) container.removeChild(container.firstChild);
     container.appendChild(textEl('div', 'Tidal Account', 'settings-section-header'));
     const row = h('div', { className: 'connection', style: { padding: '0 0 16px', gap: '12px' } });
@@ -4236,6 +4239,12 @@ async function loadAuthStatus(container) {
       const dot = h('span', { className: 'connection-dot' + (presentation.dot ? ' ' + presentation.dot : '') });
       row.appendChild(dot);
       row.appendChild(document.createTextNode(presentation.label));
+      if (data.account_quality) {
+        const tier = _qualityTier(data.account_quality);
+        const badge = textEl('span', tier.tier, 'quality-tag ' + tier.cls);
+        badge.title = tier.desc;
+        row.appendChild(badge);
+      }
     } else {
       const dot = h('span', { className: 'connection-dot' + (presentation.dot ? ' ' + presentation.dot : '') });
       row.appendChild(dot);
@@ -4392,7 +4401,7 @@ async function loadSettingsForm(container, accessContainer) {
       { title: 'Quality', fields: [
         { key: 'quality_audio', label: 'Audio Quality', type: 'select', options: ['HI_RES_LOSSLESS', 'HI_RES', 'LOSSLESS', 'HIGH', 'LOW'], helper: 'Higher quality = larger files' },
         { key: 'extract_flac', label: 'Extract FLAC', type: 'toggle', helper: 'Converts MQA to standard FLAC' },
-        { key: 'upgrade_target_quality', label: 'Upgrade Target', type: 'select', options: ['HI_RES_LOSSLESS', 'HI_RES'], helper: 'Minimum quality tier for upgrades' },
+        { key: 'upgrade_target_quality', label: 'Upgrade Target', type: 'select', options: ['HI_RES_LOSSLESS', 'HI_RES'], helper: 'Preferred cap for upgrade downloads. Better-than-local Tidal quality still upgrades.' },
       ]},
       { title: 'Downloads', fields: [
         { key: 'downloads_concurrent_max', label: 'Max Concurrent Downloads', type: 'number', helper: '1\u201310 recommended for stability' },

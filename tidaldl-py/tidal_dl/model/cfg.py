@@ -159,7 +159,10 @@ SETTINGS_HELP: dict[str, str] = {
         "Managed via 'music-dl scan add/remove/show'. "
         "When only one path is configured, 'music-dl scan' uses it automatically."
     ),
-    "upgrade_target_quality": 'Target quality for upgrade jobs: "HI_RES" or "HI_RES_LOSSLESS".',
+    "upgrade_target_quality": (
+        'Preferred cap for upgrade jobs: "HI_RES" or "HI_RES_LOSSLESS". '
+        "Jobs request Tidal's available tier when it is below this cap."
+    ),
 }
 
 
@@ -221,3 +224,4 @@ class Token(_JsonDataclassMixin):
     access_token: str | None = None
     refresh_token: str | None = None
     expiry_time: float = 0.0
+    account_quality: str | None = None

@@ -162,6 +162,22 @@ def _probe_tidal_isrc(
         return None
 
 
+def _is_quality_upgrade(local_rank: int, probed_rank: int) -> bool:
+    """True when Tidal has a higher tier than the local file."""
+    return probed_rank > local_rank
+
+
+def _request_upgrade_quality(probed_quality: str, target_quality: str) -> str:
+    """Request Tidal's available tier, capped at the configured upgrade target."""
+    probed_rank = TIER_RANK.get(probed_quality, 0)
+    target_rank = TIER_RANK.get(target_quality, 0)
+    if probed_rank <= 0:
+        return target_quality
+    if target_rank <= 0 or probed_rank <= target_rank:
+        return probed_quality
+    return target_quality
+
+
 def _extract_quality(t: Any) -> str:
     """Extract max quality string from a Tidal track object."""
     tags = getattr(t, "media_metadata_tags", None) or []
@@ -427,12 +443,12 @@ def start_upgrade(req: UpgradeStartRequest, request: Request) -> dict:
 
     settings = Settings()
     target_quality = getattr(settings.data, "upgrade_target_quality", "HI_RES_LOSSLESS")
-    target_rank = TIER_RANK.get(target_quality, 4)
 
     db = _get_db()
     try:
         track_ids: list[int] = []
         upgrade_map: dict[int, str] = {}  # tidal_track_id -> old_path
+        request_quality: dict[int, str] = {}
         skipped = 0
         errors: list[str] = []
 
@@ -446,6 +462,10 @@ def start_upgrade(req: UpgradeStartRequest, request: Request) -> dict:
             if direct_tid:
                 track_ids.append(direct_tid)
                 upgrade_map[direct_tid] = path
+                isrc = row.get("isrc")
+                probe = db.get_probe(isrc) if isrc else None
+                probed_quality = (probe or {}).get("max_quality") or target_quality
+                request_quality[direct_tid] = _request_upgrade_quality(probed_quality, target_quality)
                 continue
             isrc = row.get("isrc")
             if not isrc:
@@ -464,10 +484,7 @@ def start_upgrade(req: UpgradeStartRequest, request: Request) -> dict:
                 row.get("quality"), row.get("format"), row.get("codec")
             )
 
-            if probed_rank <= local_rank:
-                skipped += 1
-                continue
-            if probed_rank < target_rank:
+            if not _is_quality_upgrade(local_rank, probed_rank):
                 skipped += 1
                 continue
 
@@ -475,6 +492,7 @@ def start_upgrade(req: UpgradeStartRequest, request: Request) -> dict:
             if tid and tid not in upgrade_map:
                 track_ids.append(tid)
                 upgrade_map[tid] = path
+                request_quality[tid] = _request_upgrade_quality(probe["max_quality"], target_quality)
     finally:
         db.close()
 
@@ -483,7 +501,7 @@ def start_upgrade(req: UpgradeStartRequest, request: Request) -> dict:
             UpgradeJobInput(
                 track_id=tid,
                 old_path=upgrade_map[tid],
-                quality=target_quality,
+                quality=request_quality.get(tid, target_quality),
             )
             for tid in track_ids
         ]
@@ -672,7 +690,7 @@ def _start_bulk_scan(cancel_event: threading.Event) -> None:
                 local_rank = _tier_rank_for_quality(
                     t.get("quality"), t.get("format"), t.get("codec")
                 )
-                if probed_rank > local_rank and probed_rank >= target_rank:
+                if _is_quality_upgrade(local_rank, probed_rank):
                     upgradeable_results.append({
                         "path": t["path"],
                         "title": t.get("title", ""),
@@ -760,7 +778,7 @@ def _rebuild_results_from_db() -> list[dict]:
             local_rank = _tier_rank_for_quality(
                 t.get("quality"), t.get("format"), t.get("codec")
             )
-            if probed_rank > local_rank and probed_rank >= target_rank:
+            if _is_quality_upgrade(local_rank, probed_rank):
                 results.append({
                     "path": t["path"],
                     "title": t.get("title", ""),

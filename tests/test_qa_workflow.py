@@ -274,6 +274,7 @@ def test_python_smoke_preserves_original_gui_and_api_selection():
         "tests/test_api_endpoints.py",
         "tests/test_downloads.py",
         "tests/test_gui_security.py",
+        "tests/test_piping_watch.py",
     ):
         assert f"          {selector}\n" in smoke
 

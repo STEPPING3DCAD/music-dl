@@ -57,6 +57,7 @@ jobs:
           tests/test_api_endpoints.py
           tests/test_downloads.py
           tests/test_gui_security.py
+          tests/test_piping_watch.py
           -q
 
       - name: Run Ruff checks

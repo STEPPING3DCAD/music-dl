@@ -346,9 +346,12 @@ class Tidal(BaseConfig[ModelToken]):
 
     def refresh_api_keys(self) -> bool:
         """Refresh managed API keys and apply the first valid key."""
-        if not _api.refresh_api_keys():
+        refreshed = _api.refresh_api_keys()
+        index = _api.first_valid_index()
+        if index < 0:
             return False
-        return self._apply_api_key(0)
+        applied = self._apply_api_key(index)
+        return refreshed and applied
 
     def _apply_api_key(self, index: int) -> bool:
         """Apply the API key at *index* from the managed key list to the session config.
@@ -471,6 +474,7 @@ class Tidal(BaseConfig[ModelToken]):
 
         if result:
             self.token_persist()
+            self.refresh_account_quality()
 
         return result
 
@@ -487,6 +491,42 @@ class Tidal(BaseConfig[ModelToken]):
 
         with contextlib.suppress(OSError, NotImplementedError):
             os.chmod(self.file_path, 0o600)
+
+    def refresh_account_quality(self) -> str | None:
+        """Read the account's highest Tidal quality and cache it on the token."""
+        cached = getattr(self.data, "account_quality", None) or None
+        try:
+            user = getattr(self.session, "user", None)
+            uid = getattr(user, "id", None)
+            request = getattr(getattr(self.session, "request", None), "request", None)
+            if not uid or not callable(request):
+                return cached
+            resp = request("GET", f"users/{uid}/subscription")
+            data = resp.json() if hasattr(resp, "json") else resp
+            if not isinstance(data, dict):
+                return cached
+            quality = str(data.get("highestSoundQuality") or "").upper() or None
+            if quality:
+                self.set_option("account_quality", quality)
+                self.save()
+            return quality or cached
+        except Exception:
+            return cached
+
+    def refresh_stored_session(self) -> bool:
+        """Refresh and persist the stored token. Never starts device login."""
+        if not getattr(self.data, "refresh_token", None):
+            return False
+        if not self.login_token(quiet=True):
+            return False
+        try:
+            if not self.session.token_refresh(self.data.refresh_token):
+                return False
+        except Exception:
+            return False
+        self.token_persist()
+        self.refresh_account_quality()
+        return True
 
     def _ensure_token_fresh(self, refresh_window_sec: int = 300) -> bool:
         _raw_exp = getattr(self.data, "expiry_time", 0) or 0

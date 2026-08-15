@@ -50,7 +50,11 @@ class _FakeTidal:
         self.session = _FakeTidalSession(logged_in, username)
         if expiry_time is None:
             expiry_time = time.time() + 3600 if logged_in else time.time() - 60
-        self.data = SimpleNamespace(access_token=access_token, expiry_time=expiry_time)
+        self.data = SimpleNamespace(
+            access_token=access_token,
+            expiry_time=expiry_time,
+            account_quality="HI_RES" if logged_in else None,
+        )
 
 
 def _make_auth_client(tidal: _FakeTidal) -> TestClient:
@@ -76,7 +80,12 @@ def test_auth_state_reports_saved_unexpired_credentials():
     resp = client.get("/api/auth/status", headers=_HOST_HEADER)
 
     assert resp.status_code == 200
-    assert resp.json() == {"logged_in": True, "username": "Ada", "auth_state": "credentials_ready"}
+    assert resp.json() == {
+        "logged_in": True,
+        "username": "Ada",
+        "auth_state": "credentials_ready",
+        "account_quality": "HI_RES",
+    }
 
 
 def test_auth_state_reports_not_configured_without_persisted_token():
@@ -85,7 +94,12 @@ def test_auth_state_reports_not_configured_without_persisted_token():
     resp = client.get("/api/auth/status", headers=_HOST_HEADER)
 
     assert resp.status_code == 200
-    assert resp.json()["auth_state"] == "not_configured"
+    assert resp.json() == {
+        "logged_in": False,
+        "username": "",
+        "auth_state": "not_configured",
+        "account_quality": None,
+    }
 
 
 def test_auth_state_reports_expired_with_persisted_token_and_failed_session():
@@ -94,7 +108,12 @@ def test_auth_state_reports_expired_with_persisted_token_and_failed_session():
     resp = client.get("/api/auth/status", headers=_HOST_HEADER)
 
     assert resp.status_code == 200
-    assert resp.json()["auth_state"] == "expired"
+    assert resp.json() == {
+        "logged_in": False,
+        "username": "",
+        "auth_state": "expired",
+        "account_quality": None,
+    }
 
 
 def test_auth_state_reports_unavailable_when_tidal_status_check_fails():
@@ -104,7 +123,55 @@ def test_auth_state_reports_unavailable_when_tidal_status_check_fails():
     resp = client.get("/api/auth/status", headers=_HOST_HEADER)
 
     assert resp.status_code == 200
-    assert resp.json() == {"logged_in": False, "username": "", "auth_state": "unavailable"}
+    assert resp.json() == {
+        "logged_in": False,
+        "username": "",
+        "auth_state": "unavailable",
+        "account_quality": None,
+    }
+
+
+def test_auth_status_uses_cached_account_quality_without_provider_refresh():
+    tidal = _FakeTidal(logged_in=True, access_token="token", username="Ada")
+    tidal.refresh_account_quality = lambda: (_ for _ in ()).throw(
+        AssertionError("auth status must stay local")
+    )
+    client = _make_auth_client(tidal)
+
+    resp = client.get("/api/auth/status", headers=_HOST_HEADER)
+
+    assert resp.status_code == 200
+    assert resp.json()["account_quality"] == "HI_RES"
+
+
+def test_auth_account_refreshes_quality_when_logged_in():
+    tidal = _FakeTidal(logged_in=True, access_token="token", username="Ada")
+    tidal.refresh_account_quality = lambda: "LOSSLESS"
+    client = _make_auth_client(tidal)
+
+    resp = client.get("/api/auth/account", headers=_HOST_HEADER)
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "logged_in": True,
+        "username": "Ada",
+        "auth_state": "credentials_ready",
+        "account_quality": "LOSSLESS",
+    }
+
+
+def test_auth_account_skips_provider_refresh_when_logged_out():
+    tidal = _FakeTidal(logged_in=False, access_token=None)
+    tidal.refresh_account_quality = lambda: (_ for _ in ()).throw(
+        AssertionError("logged-out account refresh must stay local")
+    )
+    client = _make_auth_client(tidal)
+
+    resp = client.get("/api/auth/account", headers=_HOST_HEADER)
+
+    assert resp.status_code == 200
+    assert resp.json()["auth_state"] == "not_configured"
+    assert resp.json()["account_quality"] is None
 
 
 def test_auth_reset_endpoint_uses_local_logout_only(client):

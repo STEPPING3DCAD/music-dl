@@ -18,12 +18,19 @@ REQUIRED_FILES = ["index.html", "favicon.ico", "routes.js", *GUI_JS_FILES, "styl
 
 
 class TestPlaybackStatusAssets:
-    def test_credential_ready_status_uses_neutral_copy_and_style(self):
+    def test_connected_tidal_status_uses_green_dot_and_account_chip(self):
         js = read_gui_js()
         css = (STATIC_DIR / "style.css").read_text()
+        html = (STATIC_DIR / "index.html").read_text()
 
-        assert "credentials saved" in js
+        assert "return { label: data.username || 'connected', dot: '' };" in js
         assert "_tidalStatusPresentation(data)" in js
+        assert "_renderAccountQualityChip(accountEl, quality)" in js
+        assert "connection-account" in html
+        assert "tidal-servers" not in html
+        assert "connection-hifi" not in html
+        assert ".connection-account[hidden]" in css
+        assert ".quality-hires" in css
         assert ".connection-dot.neutral" in css
 
 

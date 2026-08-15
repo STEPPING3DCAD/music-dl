@@ -508,7 +508,7 @@ describe('local playback decisions', () => {
     })).toBe('44100Hz/24bit · Hi-Res → Hi-Res Lossless · 24-bit FLAC');
   });
 
-  test('presents saved credentials neutrally', () => {
+  test('presents a connected Tidal session as ready', () => {
     const storage = new Map();
     const helpers = loadTidalStatusHelpers({
       getItem: key => storage.get(key) || null,
@@ -519,7 +519,12 @@ describe('local playback decisions', () => {
     expect(helpers._tidalStatusPresentation({
       logged_in: true,
       auth_state: 'credentials_ready',
-    })).toEqual({ label: 'credentials saved', dot: 'neutral' });
+    })).toEqual({ label: 'connected', dot: '' });
+    expect(helpers._tidalStatusPresentation({
+      logged_in: true,
+      auth_state: 'credentials_ready',
+      username: 'Ada',
+    })).toEqual({ label: 'Ada', dot: '' });
 
     helpers._setRemotePlaybackUnavailable(true);
     expect(helpers._tidalStatusPresentation({ logged_in: false, auth_state: 'expired' }))
@@ -586,7 +591,7 @@ describe('local playback decisions', () => {
     expect(loadTidalStatusHelpers(sessionStorage)._tidalStatusPresentation({
       logged_in: true,
       auth_state: 'credentials_ready',
-    })).toEqual({ label: 'credentials saved', dot: 'neutral' });
+    })).toEqual({ label: 'connected', dot: '' });
 
     storage.set('remotePlaybackUnavailable', 'true');
     const localState = { playing: true, queue: [{ id: 2, is_local: true, name: 'Local' }], queueIndex: 0 };
