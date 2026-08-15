@@ -170,6 +170,33 @@ def test_api_home_returns_200(api_home_client):
     assert len(data["weekly_activity"]) == 7
 
 
+def test_api_home_does_not_recompute_album_grouping(api_home_client, tmp_path, monkeypatch):
+    import tidal_dl.gui.api.library as library_api
+
+    def fail_if_called(_db):
+        raise AssertionError("Home must not rebuild every grouped album card")
+
+    monkeypatch.setattr(library_api, "_album_cards", fail_if_called)
+    db = LibraryDB(tmp_path / "library.db")
+    db.open()
+    for path in ("/playlist/a.m4a", "/backup/a.m4a"):
+        db.record(
+            path,
+            status="tagged",
+            artist="Frank Sinatra",
+            title="Let It Snow!",
+            album="Christmas Songs by Sinatra",
+            duration=0,
+        )
+    db.commit()
+    db.close()
+
+    response = api_home_client.get("/api/home", headers={"host": "localhost:8765"})
+
+    assert response.status_code == 200
+    assert response.json()["track_count"] == 2
+
+
 def test_api_home_play_returns_204(api_home_client):
     """POST /api/home/play returns 204."""
     host = {"host": "localhost:8765"}

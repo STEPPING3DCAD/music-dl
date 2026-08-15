@@ -178,7 +178,7 @@ def _cluster_slots(rows: Iterable[dict]) -> tuple[RecordingSlot, ...]:
                 clusters.append([row])
 
         clusters.sort(key=lambda cluster: (
-            min((_integer(row.get("duration")) for row in cluster), default=None) is None,
+            all(_integer(row.get("duration")) is None for row in cluster),
             min((value for row in cluster if (value := _integer(row.get("duration"))) is not None), default=0),
             min(str(row.get("path") or "") for row in cluster),
         ))

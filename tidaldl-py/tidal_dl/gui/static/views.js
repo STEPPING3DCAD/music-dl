@@ -133,7 +133,14 @@ async function renderHome(container) {
   try {
     data = await api('/home');
   } catch (_) {
-    data = { total_plays: 0, weekly_activity: [0,0,0,0,0,0,0] };
+    if (!wrap.isConnected) return;
+    wrap.classList.remove('home-loading');
+    loadingHint.remove();
+    wrap.appendChild(h('div', { className: 'empty-state' },
+      textEl('div', 'Could not load Home', 'empty-state-title'),
+      textEl('div', 'Home could not load your library summary. Try again in a moment.', 'empty-state-sub')
+    ));
+    return;
   }
 
   // If the user navigated away (and maybe back) while we were awaiting,

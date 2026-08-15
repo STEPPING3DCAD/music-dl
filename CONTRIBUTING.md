@@ -117,6 +117,7 @@ bun run typecheck
    - release notes are present
    - Linux assets are uploaded: `.AppImage`, `.AppImage.sig`, `.deb`
    - macOS assets are uploaded: `.dmg`, `.app.tar.gz`, `.app.tar.gz.sig`
+   - the macOS CI bundle-integrity check passed (ad-hoc signature, not Apple notarization)
    - Windows assets are uploaded: `.msi`, `.msi.sig`
    - `latest.json` points at the new tag
    - `latest.json` contains `linux-x86_64`, `darwin-aarch64`, and `windows-x86_64`
@@ -133,7 +134,7 @@ bun run typecheck
 
 Blank release notes are a release bug.
 
-macOS DMGs and updater archives are built and attached by GitHub Actions. Windows MSIs are unsigned, so SmartScreen warnings are expected.
+macOS DMGs and updater archives are built and attached by GitHub Actions. CI applies and verifies an ad-hoc macOS bundle signature with hardened runtime disabled so the bundled PyInstaller runtime remains loadable; the app is not Apple Developer ID signed or notarized. Windows MSIs are unsigned, so SmartScreen warnings are expected.
 
 Prepare stable release metadata from the repository root:
 

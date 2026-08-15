@@ -510,6 +510,9 @@ use FastAPI's `/api/docs` or `gui/api/__init__.py` for the complete current set.
 | `POST` | `/library/scan` | Trigger background library scan |
 | `GET` | `/library/scan-status` | Poll scan progress |
 
+Home statistics use the aggregate database queries behind `GET /home`; grouped
+album cards are built only by album-library routes, not during Home loading.
+
 ### Search & Download
 
 | Method | Path | Purpose |
