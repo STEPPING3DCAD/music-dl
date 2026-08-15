@@ -513,21 +513,6 @@ class Tidal(BaseConfig[ModelToken]):
         except Exception:
             return cached
 
-    def refresh_stored_session(self) -> bool:
-        """Refresh and persist the stored token. Never starts device login."""
-        if not getattr(self.data, "refresh_token", None):
-            return False
-        if not self.login_token(quiet=True):
-            return False
-        try:
-            if not self.session.token_refresh(self.data.refresh_token):
-                return False
-        except Exception:
-            return False
-        self.token_persist()
-        self.refresh_account_quality()
-        return True
-
     def _ensure_token_fresh(self, refresh_window_sec: int = 300) -> bool:
         _raw_exp = getattr(self.data, "expiry_time", 0) or 0
         expiry_time = _raw_exp.timestamp() if hasattr(_raw_exp, "timestamp") else float(_raw_exp)

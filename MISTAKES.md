@@ -23,19 +23,3 @@
 **Root cause:** The presentation helper assumed `credentials_ready` meant "token on disk, session not verified." The local-only status endpoint now uses that state for a valid unexpired token.
 
 **Prevention:** A saved unexpired token is connected. Use the default green `.connection-dot` for `logged_in` / `credentials_ready`. Keep gray only for an explicit saved-but-unverified state, which this API no longer has.
-
-## 2026-08-15 — Android Auto kept advertising HiFi after Tidal capped it
-
-**What happened:** The bundled Android Auto OAuth client still claimed HiFi/Master, but `playbackinfopostpaywall` returned HIGH/AAC. Downloads and playback looked configured for FLAC and then failed or saved M4A.
-
-**Root cause:** Tidal changed that client's piping without a matching change in our key list. We only noticed after a live login.
-
-**Prevention:** Keep `tidaldl-py/tidal_dl/piping_baseline.json` as the expected client contract. `music-dl piping-watch` and `.github/workflows/tidal-piping-watch.yml` (Monday) fail when the gist grows new clients or the preferred Web client drops below LOSSLESS. Ship any client change with the next binary.
-
-## 2026-08-15 — Started a new Tidal device login when a refresh token already existed
-
-**What happened:** Repeated device-code authorizations for the same sandbox account.
-
-**Root cause:** Agents treated "need a working Tidal session" as "run login" instead of refreshing the stored token.
-
-**Prevention:** If `~/.config/music-dl/token.json` has a refresh token, run `music-dl token-refresh`. Never start device login unless that command fails.

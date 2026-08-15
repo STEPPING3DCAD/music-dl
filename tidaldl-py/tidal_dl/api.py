@@ -12,10 +12,6 @@ import requests
 
 from tidal_dl.constants import REQUESTS_TIMEOUT_SEC
 
-API_KEYS_GIST_ID = "48d01f5a24b4b7b37f19443977c22cd6"
-API_KEYS_GIST_URL = f"https://api.github.com/gists/{API_KEYS_GIST_ID}"
-API_KEYS_GIST_FILE = "tidal-api-key.json"
-
 __KEYS_JSON__: str = """
 {
     "version": "1.0.2",
@@ -115,40 +111,31 @@ def getVersion() -> str:
     return _API_KEYS["version"]
 
 
-def bundled_api_keys() -> ApiKeysPayload:
-    """Return the clients compiled into this build, ignoring gist refresh."""
-    return _load_api_keys(__KEYS_JSON__)
-
-
-def fetch_remote_api_keys() -> ApiKeysPayload | None:
-    """Fetch the public API-key gist without merging bundled clients."""
-    try:
-        resp = requests.get(API_KEYS_GIST_URL, timeout=REQUESTS_TIMEOUT_SEC)
-        resp.raise_for_status()
-    except requests.RequestException as exc:
-        print(f"[music-dl] Could not refresh API keys from gist: {exc}")
-        return None
-
-    resp_json = cast(dict[str, Any], resp.json())
-    files = cast(dict[str, Any], resp_json.get("files", {}))
-    file_data = cast(dict[str, Any], files.get(API_KEYS_GIST_FILE, {}))
-    content = cast(str, file_data.get("content", ""))
-    if not content:
-        return None
-
-    try:
-        return _load_api_keys(content)
-    except (json.JSONDecodeError, TypeError, ValueError) as exc:
-        print(f"[music-dl] Could not parse API keys from gist: {exc}")
-        return None
-
-
 def refresh_api_keys() -> bool:
     """Refresh API keys from the remote gist on demand."""
     global _API_KEYS
 
-    remote = fetch_remote_api_keys()
-    if remote is None:
+    try:
+        resp = requests.get(
+            "https://api.github.com/gists/48d01f5a24b4b7b37f19443977c22cd6",
+            timeout=REQUESTS_TIMEOUT_SEC,
+        )
+        resp.raise_for_status()
+    except requests.RequestException as exc:
+        print(f"[music-dl] Could not refresh API keys from gist: {exc}")
+        return False
+
+    resp_json = cast(dict[str, Any], resp.json())
+    files = cast(dict[str, Any], resp_json.get("files", {}))
+    file_data = cast(dict[str, Any], files.get("tidal-api-key.json", {}))
+    content = cast(str, file_data.get("content", ""))
+    if not content:
+        return False
+
+    try:
+        remote = _load_api_keys(content)
+    except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        print(f"[music-dl] Could not parse API keys from gist: {exc}")
         return False
 
     # Keep bundled Hi-Fi clients when the gist is stale or lists them as invalid.
@@ -156,5 +143,6 @@ def refresh_api_keys() -> bool:
     remote_ids = {key.get("clientId") for key in remote["keys"]}
     extras = [key for key in bundled["keys"] if key.get("clientId") and key["clientId"] not in remote_ids]
     remote["keys"].extend(extras)
+    remote["keys"].sort(key=lambda key: key.get("clientId") != "4N3n6Q1x95LL5K7p")
     _API_KEYS = remote
     return True
