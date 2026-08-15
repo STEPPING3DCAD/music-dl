@@ -342,3 +342,24 @@ class TestLogoutReset:
         assert tidal.is_atmos_session is True
         tidal.api_cache.clear.assert_not_called()
         assert tidal.file_path_obj.exists()
+
+
+def test_refresh_stored_session_persists_without_device_login(tidal):
+    tidal.data.refresh_token = "valid-refresh-token"
+    tidal.login_token = lambda quiet=True: True
+    tidal.session.token_refresh.return_value = True
+    tidal.session.login_oauth = lambda: (_ for _ in ()).throw(AssertionError("no device login"))
+
+    with patch.object(tidal, "token_persist") as persist, patch.object(tidal, "refresh_account_quality"):
+        assert tidal.refresh_stored_session() is True
+
+    persist.assert_called_once()
+    tidal.session.token_refresh.assert_called_once_with("valid-refresh-token")
+
+
+def test_refresh_stored_session_returns_false_without_refresh_token(tidal):
+    tidal.data.refresh_token = None
+    tidal.session.login_oauth = lambda: (_ for _ in ()).throw(AssertionError("no device login"))
+
+    assert tidal.refresh_stored_session() is False
+    tidal.session.token_refresh.assert_not_called()
