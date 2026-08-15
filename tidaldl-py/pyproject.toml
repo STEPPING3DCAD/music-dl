@@ -46,7 +46,6 @@ where = ["."]
 include = ["tidal_dl*"]
 
 [tool.setuptools.package-data]
-"tidal_dl" = ["piping_baseline.json"]
 "tidal_dl.gui" = ["static/**/*"]
 
 [tool.ruff]

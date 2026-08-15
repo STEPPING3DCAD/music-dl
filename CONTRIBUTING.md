@@ -107,14 +107,13 @@ bun run typecheck
 3. Before tagging, confirm updater signing secrets exist:
    - `TAURI_SIGNING_PRIVATE_KEY`
    - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
-4. Before tagging, run `uv run --project tidaldl-py python -m tidal_dl.piping_watch --gist --live` (or read the Monday `tidal-piping-watch` workflow). If Tidal clients drifted, update `tidaldl-py/tidal_dl/api.py` and `piping_baseline.json` in the same release. Optional live probe uses repo secret `TIDAL_WATCH_ACCESS_TOKEN` from a Tidal Web login.
-5. After the PR merges, push an annotated tag like `v1.6.0`.
-6. GitHub Actions runs `.github/workflows/build-desktop.yml`, uploads Linux, macOS, and Windows binaries, updates `latest.json`, and writes release notes onto the GitHub release.
-7. Confirm the Windows MSI assets are present when the release should support Windows 10/11:
+4. After the PR merges, push an annotated tag like `v1.6.0`.
+5. GitHub Actions runs `.github/workflows/build-desktop.yml`, uploads Linux, macOS, and Windows binaries, updates `latest.json`, and writes release notes onto the GitHub release.
+6. Confirm the Windows MSI assets are present when the release should support Windows 10/11:
    - Windows assets are uploaded: `.msi`, `.msi.sig`
    - The MSI is unsigned, so SmartScreen warnings are expected.
    - WSL is not required to install or run the desktop app.
-8. Sanity-check the release before announcing it:
+7. Sanity-check the release before announcing it:
    - release notes are present
    - Linux assets are uploaded: `.AppImage`, `.AppImage.sig`, `.deb`
    - macOS assets are uploaded: `.dmg`, `.app.tar.gz`, `.app.tar.gz.sig`
@@ -122,7 +121,7 @@ bun run typecheck
    - Windows assets are uploaded: `.msi`, `.msi.sig`
    - `latest.json` points at the new tag
    - `latest.json` contains `linux-x86_64`, `darwin-aarch64`, and `windows-x86_64`
-9. Smoke-test Windows before announcing Windows support:
+8. Smoke-test Windows before announcing Windows support:
    - Install the MSI.
    - Launch `music-dl`.
    - Complete or recover Tidal authentication.
