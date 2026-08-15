@@ -615,6 +615,47 @@ class TestUpgradeStart:
         }
         assert client.app.state.download_jobs.snapshot()["queued_count"] == 1
 
+    def test_path_upgrade_requests_probed_lossless(self, client, monkeypatch):
+        captured: dict = {}
+
+        class FakeSettings:
+            data = SimpleNamespace(upgrade_target_quality="HI_RES_LOSSLESS")
+
+        class FakeDB:
+            def get(self, path):
+                return {
+                    "path": path,
+                    "isrc": "GBAYE9200070",
+                    "quality": "HIGH",
+                    "format": "M4A",
+                    "codec": "aac",
+                }
+
+            def get_probe(self, isrc):
+                return {"tidal_track_id": 58990486, "max_quality": "LOSSLESS"}
+
+            def close(self):
+                pass
+
+        def fake_enqueue(items):
+            captured["items"] = items
+            return {"status": "queued", "count": len(items), "skipped": 0}
+
+        monkeypatch.setattr("tidal_dl.config.Settings", FakeSettings)
+        monkeypatch.setattr("tidal_dl.gui.api.upgrade._get_db", lambda: FakeDB())
+        monkeypatch.setattr(client.app.state.download_jobs, "enqueue_upgrade", fake_enqueue)
+
+        resp = client.post(
+            "/api/upgrade/start",
+            json={"track_paths": ["/music/Creep.m4a"]},
+            headers=client._headers,
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["count"] == 1
+        assert resp.json()["skipped"] == 0
+        assert captured["items"][0].quality == "LOSSLESS"
+
     def test_direct_track_rejects_path_missing_from_library(self, client, monkeypatch):
         class FakeSettings:
             data = SimpleNamespace(upgrade_target_quality="HI_RES_LOSSLESS")
