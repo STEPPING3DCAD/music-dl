@@ -476,6 +476,19 @@ describe('download badge and requeue decisions', () => {
     expect(clearBlock).toContain('refreshDlBadge()');
   });
 
+  test('Cancel All clears the queued summary without waiting for SSE', () => {
+    const cancelBlock = viewsSource.split("cancelBtn.textContent = 'Cancel All';")[1];
+    expect(cancelBlock).toBeTruthy();
+    expect(cancelBlock).toContain("await api('/downloads/cancel', { method: 'POST' })");
+    expect(cancelBlock).toContain('_clearActiveDownloads()');
+    expect(cancelBlock).toContain('_setQueuePaused(false)');
+    expect(cancelBlock).toContain('refreshDlBadge()');
+    expect(viewsSource).toContain('function _clearActiveDownloads()');
+    expect(viewsSource).toContain("data.type === 'cancelled'");
+    expect(viewsSource).toContain("data.type === 'progress' || data.type === 'complete' || data.type === 'error' || data.type === 'cancelled'");
+    expect(viewsSource).toContain("queued === 1 ? ' track queued' : ' tracks queued'");
+  });
+
   test('single-track download can be requeued after a missed terminal event', () => {
     const downloadTrack = viewsSource.split('async function downloadTrack(track, btn) {')[1];
     expect(downloadTrack).toBeTruthy();

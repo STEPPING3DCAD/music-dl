@@ -189,7 +189,23 @@ def test_service_pause_resume_and_cancel_queued(tmp_path):
     assert service.resume() == {"status": "running"}
 
     result = service.cancel([1])
-    assert result == {"status": "cancelled", "count": 1}
+    assert result == {"status": "cancelled", "count": 1, "active_count": 1}
+
+
+def test_service_cancel_all_while_paused_clears_queued_jobs(tmp_path):
+    service = _service(tmp_path)
+    service.enqueue_download([1])
+    service.pause()
+
+    result = service.cancel()
+
+    assert result == {"status": "cancelled", "count": 1, "active_count": 0}
+    assert service.queue_state() == {
+        "paused": False,
+        "cancelled": True,
+        "active_count": 0,
+    }
+    assert service.snapshot() == {"active": [], "queued_count": 0}
 
 
 def test_service_cancels_claimed_job_at_safe_checkpoint(tmp_path):
@@ -199,7 +215,7 @@ def test_service_cancels_claimed_job_at_safe_checkpoint(tmp_path):
 
     result = service.cancel([1])
 
-    assert result == {"status": "cancelled", "count": 0}
+    assert result == {"status": "cancelled", "count": 0, "active_count": 1}
     assert service.is_cancelled_for_test(job.track_id) is True
 
 

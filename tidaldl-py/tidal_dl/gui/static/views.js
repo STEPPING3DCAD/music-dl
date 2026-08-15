@@ -3589,7 +3589,8 @@ function _ensureGlobalSSE() {
             activeEl.prepend(summary);
           }
           while (summary.firstChild) summary.removeChild(summary.firstChild);
-          summary.appendChild(textEl('div', (data.count || 0) + ' tracks queued', 'dl-card-name'));
+          const queued = data.count || 0;
+          summary.appendChild(textEl('div', queued + (queued === 1 ? ' track queued' : ' tracks queued'), 'dl-card-name'));
           summary.appendChild(textEl('div', 'Waiting to start...', 'dl-card-status dl-status-queued'));
         }
         return;
@@ -3609,11 +3610,7 @@ function _ensureGlobalSSE() {
         _setQueuePaused(false);
       } else if (data.type === 'queue_cancelled') {
         _setQueuePaused(false);
-        const activeEl = document.getElementById('dl-active');
-        if (activeEl) {
-          while (activeEl.firstChild) activeEl.removeChild(activeEl.firstChild);
-          _showActiveEmpty(activeEl);
-        }
+        _clearActiveDownloads();
         _scheduleHistoryReload();
         refreshDlBadge();
       }
@@ -3628,7 +3625,7 @@ function _ensureGlobalSSE() {
         _updateUpgradeRow(data.old_path, 'upgrading', data.name);
       }
       // Also update the downloads view if visible (only for standard download events)
-      if (data.type === 'progress' || data.type === 'complete' || data.type === 'error') {
+      if (data.type === 'progress' || data.type === 'complete' || data.type === 'error' || data.type === 'cancelled') {
         const activeEl = document.getElementById('dl-active');
         if (activeEl) updateActiveDownload(activeEl, data);
       }
@@ -3656,6 +3653,12 @@ function refreshDlBadge() {
   api('/downloads/queue-state').then(qs => {
     setDlBadge(qs.active_count || 0);
   }).catch(() => {});
+}
+
+function _clearActiveDownloads() {
+  const activeEl = document.getElementById('dl-active');
+  if (!activeEl) return;
+  _showActiveEmpty(activeEl);
 }
 
 function _reconcileDownloadUi() {
@@ -3874,6 +3877,10 @@ function renderDownloads(container) {
     inlineConfirm('Cancel all remaining downloads?', async () => {
       try {
         await api('/downloads/cancel', { method: 'POST' });
+        _setQueuePaused(false);
+        _clearActiveDownloads();
+        _scheduleHistoryReload();
+        refreshDlBadge();
         toast('Downloads cancelled', 'success');
       } catch (_) { toast('Failed to cancel', 'error'); }
     });
@@ -3928,7 +3935,7 @@ function renderDownloads(container) {
       entries.forEach(e => updateActiveDownload(activeSection, { type: 'progress', ...e }));
       if (queuedCount > 0) {
         const summary = h('div', { className: 'dl-card dl-batch-summary' });
-        summary.appendChild(textEl('div', queuedCount + ' tracks queued', 'dl-card-name'));
+        summary.appendChild(textEl('div', queuedCount + (queuedCount === 1 ? ' track queued' : ' tracks queued'), 'dl-card-name'));
         summary.appendChild(textEl('div', 'Waiting to start...', 'dl-card-status dl-status-queued'));
         activeSection.prepend(summary);
       }
@@ -3956,7 +3963,7 @@ function _scheduleHistoryReload() {
 function updateActiveDownload(container, data) {
   let card = container.querySelector('[data-dl-id="' + data.track_id + '"]');
 
-  if (data.type === 'complete' || data.type === 'error') {
+  if (data.type === 'complete' || data.type === 'error' || data.type === 'cancelled') {
     if (card) card.remove();
     // Remove batch summary if no real download cards remain
     const remaining = container.querySelectorAll('.dl-card:not(.dl-batch-summary):not(.dl-empty)');

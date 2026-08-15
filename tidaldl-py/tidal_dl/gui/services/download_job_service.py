@@ -227,6 +227,7 @@ class DownloadJobService:
             else:
                 self._cancel_all = True
                 count = db.cancel_all_queued_download_jobs()
+            active_count = db.active_download_job_count()
         finally:
             db.close()
 
@@ -240,11 +241,11 @@ class DownloadJobService:
                         "name": f"Track {track_id}",
                     }
                 )
-            return {"status": "cancelled", "count": count}
+            return {"status": "cancelled", "count": count, "active_count": active_count}
 
         self.events.broadcast({"type": "queue_cancelled", "count": count})
         self._running.set()
-        return {"status": "cancelled", "count": count}
+        return {"status": "cancelled", "count": count, "active_count": active_count}
 
     def queue_state(self) -> dict:
         db = self._open_db()

@@ -6,7 +6,7 @@
 
 **Root cause:** `_require_exact_quality` required the delivered tier to equal the setting. Tidal already returns the best available stream at or below the request, so LOSSLESS FLAC was treated as a mismatch. The nav badge was a local increment/decrement that double-counted `batch_queued` and never synced from queue state, so Clear History could not hide it.
 
-**Prevention:** Treat lossless settings as a family + ceiling. Accept FLAC `LOSSLESS`/`HI_RES`/`HI_RES_LOSSLESS` when lossless was requested; still reject AAC/HIGH. Drive the Downloads badge from `/downloads/queue-state` `active_count`.
+**Prevention:** Treat lossless settings as a family + ceiling. Accept FLAC `LOSSLESS`/`HI_RES`/`HI_RES_LOSSLESS` when lossless was requested; still reject AAC/HIGH. Drive the Downloads badge from `/downloads/queue-state` `active_count`. Cancel All must clear the Active summary locally; do not wait for SSE `queue_cancelled`.
 
 ## 2026-08-15 — Treated local playback as the core hello-world
 
