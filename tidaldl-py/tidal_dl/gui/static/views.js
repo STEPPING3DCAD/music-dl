@@ -3599,6 +3599,7 @@ function _ensureGlobalSSE() {
       if (data.type === 'progress') {
         const activeEl = document.getElementById('dl-active');
         if (activeEl) updateActiveDownload(activeEl, data);
+        applyQueueCountsFromEvent(data);
       }
       if (data.type !== 'progress') refreshActiveDownloads();
     } catch (_) {}
@@ -3629,6 +3630,31 @@ function refreshDlBadge() {
 
 function _queuedLabel(count) {
   return count + (count === 1 ? ' track queued' : ' tracks queued');
+}
+
+function applyQueueCountsFromEvent(data) {
+  if (data.queued_count == null && data.active_count == null) return;
+  if (data.active_count != null) setDlBadge(data.active_count);
+  if (data.paused != null) _setQueuePaused(!!data.paused);
+  const activeEl = document.getElementById('dl-active');
+  if (!activeEl) return;
+  const queuedCount = data.queued_count || 0;
+  let summary = activeEl.querySelector('.dl-batch-summary');
+  if (queuedCount > 0) {
+    if (!summary) {
+      summary = h('div', { className: 'dl-card dl-batch-summary' });
+      summary.appendChild(textEl('div', _queuedLabel(queuedCount), 'dl-card-name'));
+      summary.appendChild(textEl('div', data.paused ? 'Paused' : 'Waiting to start...', 'dl-card-status dl-status-queued'));
+      activeEl.prepend(summary);
+    } else {
+      const nameEl = summary.querySelector('.dl-card-name');
+      if (nameEl) nameEl.textContent = _queuedLabel(queuedCount);
+      const statusEl = summary.querySelector('.dl-card-status');
+      if (statusEl) statusEl.textContent = data.paused ? 'Paused' : 'Waiting to start...';
+    }
+  } else if (summary) {
+    summary.remove();
+  }
 }
 
 function applyActiveSnapshot(data, paused) {

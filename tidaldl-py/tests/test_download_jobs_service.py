@@ -705,3 +705,189 @@ def test_worker_upgrade_renames_replacement_to_original_path_after_cleanup(tmp_p
     assert set(trashed) == {str(old_path), str(duplicate_path)}
     assert stored.status.value == "done"
     assert stored.new_path == str(old_path)
+
+
+def test_claim_progress_event_includes_remaining_queue_counts(tmp_path, monkeypatch):
+    service = _service(tmp_path)
+    service.enqueue_download([1, 2])
+    events = []
+    service.events.broadcast = events.append
+
+    class FakeTrack:
+        id = 1
+        name = "Song"
+        full_name = "Song"
+        duration = 1
+        artists = ()
+        album = None
+
+    class FakeSession:
+        def track(self, track_id):
+            return FakeTrack()
+
+    class FakeTidal:
+        session = FakeSession()
+
+    class FakeSettingsData:
+        download_base_path = str(tmp_path)
+        skip_existing = True
+        format_track = "{track_title}"
+        quality_audio = "LOSSLESS"
+
+    class FakeSettings:
+        data = FakeSettingsData()
+
+    class FakeDownload:
+        def __init__(self, **kwargs):
+            pass
+
+        def item(self, **kwargs):
+            return DownloadOutcome.DOWNLOADED, tmp_path / "Song.flac"
+
+    monkeypatch.setattr("tidal_dl.gui.services.download_job_service.Tidal", FakeTidal)
+    monkeypatch.setattr("tidal_dl.gui.services.download_job_service.Settings", FakeSettings)
+    monkeypatch.setattr("tidal_dl.gui.services.download_job_service.Download", FakeDownload)
+    monkeypatch.setattr("tidal_dl.gui.services.download_job_service.scan_new_downloads", lambda *args: None)
+
+    job = service.claim_next_for_test()
+    service.execute_job_for_test(job)
+
+    progress = [event for event in events if event["type"] == "progress"]
+    assert progress
+    assert progress[0]["queued_count"] == 1
+    assert progress[0]["active_count"] == 2
+    assert progress[0]["paused"] is False
+
+
+def test_update_job_does_not_resurrect_cancelled_status(tmp_path):
+    service = _service(tmp_path)
+    service.enqueue_download([1])
+    job = service.claim_next_for_test()
+
+    service.cancel()
+    service._update_job(job, status="running", name="Song")
+
+    stored = service.get_job_for_test(job.id)
+    assert stored.status.value == "cancelled"
+    assert service.snapshot()["active"] == []
+    assert service.snapshot()["queued_count"] == 0
+
+
+def test_mark_retrying_after_cancel_all_does_not_broadcast_progress(tmp_path):
+    service = _service(tmp_path)
+    service.enqueue_download([1])
+    job = service.claim_next_for_test()
+    service.cancel()
+    events = []
+    service.events.broadcast = events.append
+
+    service._mark_retrying(job, 1, 3)
+
+    stored = service.get_job_for_test(job.id)
+    assert stored.status.value == "cancelled"
+    assert service.snapshot()["active"] == []
+    assert not any(event["type"] == "progress" for event in events)
+
+
+def test_cancel_all_during_metadata_does_not_emit_downloading_progress(tmp_path, monkeypatch):
+    service = _service(tmp_path)
+    service.enqueue_download([123])
+    job = service.claim_next_for_test()
+    events = []
+    service.events.broadcast = events.append
+
+    class FakeTrack:
+        id = 123
+        name = "Song"
+        full_name = "Song"
+        duration = 1
+        artists = ()
+        album = None
+
+    class FakeSession:
+        def track(self, track_id):
+            service.cancel()
+            return FakeTrack()
+
+    class FakeTidal:
+        session = FakeSession()
+
+    class FakeSettingsData:
+        download_base_path = str(tmp_path)
+        skip_existing = True
+        format_track = "{track_title}"
+        quality_audio = "LOSSLESS"
+
+    class FakeSettings:
+        data = FakeSettingsData()
+
+    class FakeDownload:
+        def __init__(self, **kwargs):
+            raise AssertionError("download should not start after cancel-all")
+
+    monkeypatch.setattr("tidal_dl.gui.services.download_job_service.Tidal", FakeTidal)
+    monkeypatch.setattr("tidal_dl.gui.services.download_job_service.Settings", FakeSettings)
+    monkeypatch.setattr("tidal_dl.gui.services.download_job_service.Download", FakeDownload)
+
+    service.execute_job_for_test(job)
+
+    stored = service.get_job_for_test(job.id)
+    assert stored.status.value == "cancelled"
+    assert service.snapshot()["active"] == []
+    assert not any(event["type"] == "progress" for event in events)
+    assert any(event["type"] == "cancelled" for event in events)
+
+
+def test_cancel_all_during_retryable_failure_does_not_mark_retrying(tmp_path, monkeypatch):
+    service = _service(tmp_path)
+    service.enqueue_download([123])
+    job = service.claim_next_for_test()
+    events = []
+    service.events.broadcast = events.append
+
+    class FakeTrack:
+        id = 123
+        name = "Song"
+        full_name = "Song"
+        duration = 1
+        artists = ()
+        album = None
+
+    class FakeSession:
+        def track(self, track_id):
+            return FakeTrack()
+
+    class FakeTidal:
+        session = FakeSession()
+
+    class FakeSettingsData:
+        download_base_path = str(tmp_path)
+        skip_existing = True
+        format_track = "{track_title}"
+        quality_audio = "LOSSLESS"
+
+    class FakeSettings:
+        data = FakeSettingsData()
+
+    class FakeDownload:
+        def __init__(self, **kwargs):
+            pass
+
+        def item(self, **kwargs):
+            service.cancel()
+            raise ConnectionError("network dropped")
+
+    monkeypatch.setattr("tidal_dl.gui.services.download_job_service.Tidal", FakeTidal)
+    monkeypatch.setattr("tidal_dl.gui.services.download_job_service.Settings", FakeSettings)
+    monkeypatch.setattr("tidal_dl.gui.services.download_job_service.Download", FakeDownload)
+    monkeypatch.setattr("tidal_dl.gui.services.download_job_service.time.sleep", lambda *_args: None)
+
+    service.execute_job_for_test(job)
+
+    stored = service.get_job_for_test(job.id)
+    assert stored.status.value == "cancelled"
+    assert service.snapshot()["active"] == []
+    assert not any(event.get("status") == "retrying" for event in events)
+    assert not any(
+        event["type"] == "progress" and event.get("status") == "retrying" for event in events
+    )

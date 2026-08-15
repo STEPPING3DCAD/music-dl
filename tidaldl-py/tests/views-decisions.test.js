@@ -455,6 +455,69 @@ describe('recent history view decisions', () => {
   });
 });
 
+function loadApplyQueueCountsFromEvent() {
+  const helperSource = viewsSource.match(
+    /function applyQueueCountsFromEvent\(data\) \{[\s\S]*?\n\}/,
+  );
+  if (!helperSource) throw new Error('applyQueueCountsFromEvent not found');
+
+  const summary = {
+    className: 'dl-card dl-batch-summary',
+    removed: false,
+    children: [],
+    querySelector(sel) {
+      if (sel === '.dl-card-status') {
+        return this.children.find(child => String(child.className || '').includes('dl-card-status'));
+      }
+      if (sel === '.dl-card-name') {
+        return this.children.find(child => String(child.className || '').includes('dl-card-name'));
+      }
+      return null;
+    },
+    remove() {
+      this.removed = true;
+      activeEl.children = activeEl.children.filter(child => child !== this);
+    },
+  };
+  const running = { className: 'dl-card', 'data-dl-id': '1' };
+  const activeEl = {
+    children: [summary, running],
+    querySelector(sel) {
+      if (sel === '.dl-batch-summary') {
+        return this.children.find(child => String(child.className || '').includes('dl-batch-summary')) || null;
+      }
+      return null;
+    },
+    prepend(node) {
+      this.children.unshift(node);
+    },
+  };
+  const badge = { textContent: '2', style: { display: '' } };
+  const h = (tag, props = {}) => ({ tag, ...props, children: [], appendChild(child) { this.children.push(child); return child; } });
+  const textEl = (tag, value, className) => ({ tag, textContent: value, className });
+  const fn = new Function(
+    'document',
+    'h',
+    'textEl',
+    'setDlBadge',
+    '_setQueuePaused',
+    '_queuedLabel',
+    `${helperSource[0]}\nreturn applyQueueCountsFromEvent;`,
+  )(
+    { getElementById: id => (id === 'dl-active' ? activeEl : null) },
+    h,
+    textEl,
+    count => {
+      badge.textContent = count;
+      badge.style.display = count > 0 ? '' : 'none';
+    },
+    () => {},
+    count => count + (count === 1 ? ' track queued' : ' tracks queued'),
+  );
+
+  return { fn, dom: { summary, activeEl, badge } };
+}
+
 describe('download badge and requeue decisions', () => {
   test('badge is an absolute count from queue-state, not a local delta', () => {
     expect(viewsSource).toContain('function refreshDlBadge()');
@@ -492,6 +555,32 @@ describe('download badge and requeue decisions', () => {
     expect(viewsSource).toContain('refreshActiveDownloads()');
     expect(viewsSource).toContain("if (data.type === 'upgrade_progress') {");
     expect(viewsSource).toContain("if (data.type !== 'progress') refreshActiveDownloads();");
+  });
+
+  test('progress events apply queue counts so the waiting card does not linger', () => {
+    const handler = viewsSource.split('_globalSSE.onmessage = (event) => {')[1];
+    expect(handler).toBeTruthy();
+    expect(handler).toContain("if (data.type === 'progress')");
+    expect(handler).toContain('updateActiveDownload(activeEl, data)');
+    expect(handler).toContain('applyQueueCountsFromEvent(data)');
+    expect(viewsSource).toContain('function applyQueueCountsFromEvent(');
+  });
+
+  test('applyQueueCountsFromEvent removes the queued summary when a claim lowers queued_count', () => {
+    const apply = loadApplyQueueCountsFromEvent();
+    const { summary, activeEl, badge } = apply.dom;
+
+    apply.fn({
+      type: 'progress',
+      queued_count: 0,
+      active_count: 1,
+      paused: false,
+    });
+
+    expect(summary.removed).toBe(true);
+    expect(activeEl.children).not.toContain(summary);
+    expect(badge.textContent).toBe(1);
+    expect(badge.style.display).toBe('');
   });
 
   test('single-track download can be requeued after a missed terminal event', () => {

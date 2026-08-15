@@ -1,5 +1,13 @@
 # Mistakes
 
+## 2026-08-15 — Progress SSE skipped the queue counts that clear the waiting card
+
+**What happened:** Claiming a queued job emits `progress` (and that payload already includes `queued_count`). The Active list only re-snapshotted on non-`progress` events, so the “Waiting to start…” summary stayed beside the now-running track until a later terminal or queue event.
+
+**Root cause:** The client treated `progress` as a per-card paint and ignored the queue envelope. Separately, Cancel All marked `running`/`retrying` rows cancelled, but `_update_job` / `_mark_retrying` wrote those statuses back and broadcast `progress`, which redrew the job in Active.
+
+**Prevention:** Apply `queued_count` / `active_count` / `paused` from progress payloads. Do not write an active job status, or emit downloading/retrying progress, after cancel has been requested or the row is already `cancelled`.
+
 ## 2026-08-15 — Exact quality match rejected valid Blue Lossless
 
 **What happened:** Settings default to `HI_RES_LOSSLESS`. Tracks that Tidal only publishes as Blue Lossless failed the download gate, sat on "Waiting to start...", and could not be requeued. The Downloads badge also stayed at 1 after Clear Done / Clear All.
