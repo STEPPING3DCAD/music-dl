@@ -399,7 +399,7 @@ async function _scanPlaylistUpgrades(tracks, trackList, upgradeBtn, refreshBtn, 
         method: 'POST',
         body: { tracks: allUpgradeable.map(u => ({ path: u.path, tidal_track_id: u.tidal_track_id })) }
       });
-      if (resp.count > 0) { updateDlBadge(resp.count); _ensureGlobalSSE(); }
+      if (resp.count > 0) { refreshDlBadge(); _ensureGlobalSSE(); }
       toast('Upgrade started for ' + (resp.count || allUpgradeable.length) + ' tracks', 'success');
     } catch (err) {
       toast('Upgrade failed', 'error');

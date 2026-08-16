@@ -1796,7 +1796,7 @@ function _renderScanResults(container, results) {
     const tracks = results.map(r => ({ path: r.path, tidal_track_id: r.tidal_track_id || null }));
     try {
       const resp = await api('/upgrade/start', { method: 'POST', body: { tracks } });
-      if (resp.count > 0) { updateDlBadge(resp.count); _ensureGlobalSSE(); }
+      if (resp.count > 0) { refreshDlBadge(); _ensureGlobalSSE(); }
       toast('Upgrade started for ' + resp.count + ' tracks', 'success');
     } catch (err) {
       toast('Upgrade failed', 'error');
@@ -1826,7 +1826,7 @@ function _renderScanResults(container, results) {
           const resp = await api('/upgrade/start', { method: 'POST', body: {
             tracks: [{ path: t.path, tidal_track_id: t.tidal_track_id || null }]
           }});
-          if (resp.count > 0) { updateDlBadge(resp.count); _ensureGlobalSSE(); }
+          if (resp.count > 0) { refreshDlBadge(); _ensureGlobalSSE(); }
           else if (resp.errors && resp.errors.length) { throw new Error(resp.errors[0]); }
         } catch (err) {
           toast('Upgrade failed: ' + (err.message || 'unknown'), 'error');

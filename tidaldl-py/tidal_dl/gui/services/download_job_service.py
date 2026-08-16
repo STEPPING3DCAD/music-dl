@@ -27,6 +27,12 @@ Settings: Any = None
 Tidal: Any = None
 Download: Any = None
 register_downloaded_track: Any = None
+_ACTIVE_JOB_STATUSES = {
+    JobStatus.QUEUED,
+    JobStatus.RUNNING,
+    JobStatus.RETRYING,
+    JobStatus.PAUSED,
+}
 
 
 def _download_dependencies() -> tuple[Any, Any, Any]:
@@ -181,7 +187,7 @@ class DownloadJobService:
         if queued == 0:
             return {"status": "already_queued", "count": 0}
 
-        self.events.broadcast({"type": "batch_queued", "count": queued})
+        self.events.broadcast(self._queue_event("batch_queued"))
         return {"status": "queued", "count": queued}
 
     def enqueue_upgrade(self, items: list[UpgradeJobInput]) -> dict:
@@ -206,17 +212,17 @@ class DownloadJobService:
                 queued += 1
 
         if queued > 0:
-            self.events.broadcast({"type": "batch_queued", "count": queued})
+            self.events.broadcast(self._queue_event("batch_queued"))
         return {"status": "queued", "count": queued, "skipped": skipped}
 
     def pause(self) -> dict:
         self._running.clear()
-        self.events.broadcast({"type": "queue_paused"})
+        self.events.broadcast(self._queue_event("queue_paused"))
         return {"status": "paused"}
 
     def resume(self) -> dict:
         self._running.set()
-        self.events.broadcast({"type": "queue_resumed"})
+        self.events.broadcast(self._queue_event("queue_resumed"))
         return {"status": "running"}
 
     def cancel(self, track_ids: list[int] | None = None) -> dict:
@@ -227,6 +233,7 @@ class DownloadJobService:
             else:
                 self._cancel_all = True
                 count = db.cancel_all_queued_download_jobs()
+            active_count = db.active_download_job_count()
         finally:
             db.close()
 
@@ -240,11 +247,11 @@ class DownloadJobService:
                         "name": f"Track {track_id}",
                     }
                 )
-            return {"status": "cancelled", "count": count}
+            return {"status": "cancelled", "count": count, "active_count": active_count}
 
-        self.events.broadcast({"type": "queue_cancelled", "count": count})
         self._running.set()
-        return {"status": "cancelled", "count": count}
+        self.events.broadcast(self._queue_event("queue_cancelled", cancelled_count=count))
+        return {"status": "cancelled", "count": count, "active_count": active_count}
 
     def queue_state(self) -> dict:
         db = self._open_db()
@@ -261,9 +268,24 @@ class DownloadJobService:
     def snapshot(self) -> dict:
         db = self._open_db()
         try:
-            return db.download_jobs_snapshot()
+            data = db.download_jobs_snapshot()
         finally:
             db.close()
+        data["paused"] = not self._running.is_set()
+        data["active_count"] = data["queued_count"] + len(data["active"])
+        return data
+
+    def _queue_event(self, event_type: str, **extra) -> dict:
+        snapshot = self.snapshot()
+        event = {
+            "type": event_type,
+            "count": snapshot["queued_count"],
+            "queued_count": snapshot["queued_count"],
+            "active_count": snapshot["active_count"],
+            "paused": snapshot["paused"],
+        }
+        event.update(extra)
+        return event
 
     def initial_events(self) -> list[dict]:
         snapshot = self.snapshot()
@@ -287,7 +309,7 @@ class DownloadJobService:
             )
         queued_count = snapshot["queued_count"]
         if queued_count > 0:
-            events.append({"type": "batch_queued", "count": queued_count})
+            events.append(self._queue_event("batch_queued"))
         return events
 
     def claim_next_for_test(self) -> DownloadJob | None:
@@ -427,7 +449,10 @@ class DownloadJobService:
         cover_url = self._cover_url(track)
         quality = self._quality_value(settings.data.quality_audio)
 
-        self._update_job(
+        if self._is_cancel_requested(job):
+            self._mark_cancelled(job)
+            return
+        if not self._update_job(
             job,
             name=name,
             artist=artist,
@@ -436,22 +461,24 @@ class DownloadJobService:
             quality=quality,
             status=JobStatus.RUNNING.value,
             progress=0,
-        )
+        ):
+            self._mark_cancelled(job)
+            return
         current = self.get_job_for_test(job.id) or job
         self.events.broadcast(
-            {
-                "type": "progress",
-                "job_id": job.id,
-                "kind": job.kind.value,
-                "track_id": job.track_id,
-                "name": name,
-                "artist": artist,
-                "album": album,
-                "cover_url": cover_url,
-                "quality": quality,
-                "status": "downloading",
-                "progress": 0,
-            }
+            self._queue_event(
+                "progress",
+                job_id=job.id,
+                kind=job.kind.value,
+                track_id=job.track_id,
+                name=name,
+                artist=artist,
+                album=album,
+                cover_url=cover_url,
+                quality=quality,
+                status="downloading",
+                progress=0,
+            )
         )
 
         if self._is_cancel_requested(current):
@@ -493,7 +520,11 @@ class DownloadJobService:
                     and attempt < max_retries
                 ):
                     last_exc = http_exc
-                    self._mark_retrying(current, attempt + 1, max_retries)
+                    if self._is_cancel_requested(current):
+                        self._mark_cancelled(current)
+                        return
+                    if not self._mark_retrying(current, attempt + 1, max_retries):
+                        return
                     time.sleep(2 ** (attempt + 1))
                     continue
                 raise
@@ -501,7 +532,11 @@ class DownloadJobService:
                 if attempt >= max_retries:
                     raise
                 last_exc = retry_exc
-                self._mark_retrying(current, attempt + 1, max_retries)
+                if self._is_cancel_requested(current):
+                    self._mark_cancelled(current)
+                    return
+                if not self._mark_retrying(current, attempt + 1, max_retries):
+                    return
                 time.sleep(2 ** (attempt + 1))
 
         if last_exc is not None:
@@ -598,7 +633,10 @@ class DownloadJobService:
                         use_primary_album_artist=settings.data.use_primary_album_artist,
                     )
 
-            self._update_job(
+            if self._is_cancel_requested(job):
+                self._mark_cancelled(job)
+                return
+            if not self._update_job(
                 job,
                 name=name,
                 artist=artist,
@@ -607,21 +645,23 @@ class DownloadJobService:
                 quality=quality,
                 status=JobStatus.RUNNING.value,
                 progress=0,
-            )
+            ):
+                self._mark_cancelled(job)
+                return
             self.events.broadcast(
-                {
-                    "type": "progress",
-                    "job_id": job.id,
-                    "kind": job.kind.value,
-                    "track_id": job.track_id,
-                    "name": name,
-                    "artist": artist,
-                    "album": album,
-                    "cover_url": cover_url,
-                    "quality": quality,
-                    "status": "downloading",
-                    "progress": 0,
-                }
+                self._queue_event(
+                    "progress",
+                    job_id=job.id,
+                    kind=job.kind.value,
+                    track_id=job.track_id,
+                    name=name,
+                    artist=artist,
+                    album=album,
+                    cover_url=cover_url,
+                    quality=quality,
+                    status="downloading",
+                    progress=0,
+                )
             )
             self.events.broadcast(
                 {
@@ -770,12 +810,22 @@ class DownloadJobService:
     def _quality_value(self, quality) -> str:
         return quality.value if hasattr(quality, "value") else str(quality or "LOSSLESS")
 
-    def _update_job(self, job: DownloadJob, **fields) -> None:
+    def _update_job(self, job: DownloadJob, **fields) -> bool:
+        new_status = fields.get("status")
+        if new_status is not None:
+            new_status = JobStatus(new_status)
+        if new_status in _ACTIVE_JOB_STATUSES and self._is_cancel_requested(job):
+            return False
         db = self._open_db()
         try:
+            if new_status in _ACTIVE_JOB_STATUSES:
+                current = db.get_download_job(job.id)
+                if current and current.get("status") == JobStatus.CANCELLED.value:
+                    return False
             db.update_download_job(job.id, **fields)
         finally:
             db.close()
+        return True
 
     def _record_history(self, **fields) -> None:
         db = self._open_db()
@@ -802,25 +852,31 @@ class DownloadJobService:
         except Exception:
             logger.exception("Failed to persist download error for track %s", job.track_id)
 
-    def _mark_retrying(self, job: DownloadJob, attempt: int, max_retries: int) -> None:
-        self._update_job(job, status=JobStatus.RETRYING.value)
+    def _mark_retrying(self, job: DownloadJob, attempt: int, max_retries: int) -> bool:
+        if self._is_cancel_requested(job):
+            self._mark_cancelled(job)
+            return False
+        if not self._update_job(job, status=JobStatus.RETRYING.value):
+            self._mark_cancelled(job)
+            return False
         self.events.broadcast(
-            {
-                "type": "progress",
-                "job_id": job.id,
-                "kind": job.kind.value,
-                "track_id": job.track_id,
-                "name": job.name,
-                "artist": job.artist,
-                "album": job.album,
-                "cover_url": job.cover_url,
-                "quality": job.quality,
-                "status": "retrying",
-                "progress": job.progress,
-                "retry": attempt,
-                "max_retries": max_retries,
-            }
+            self._queue_event(
+                "progress",
+                job_id=job.id,
+                kind=job.kind.value,
+                track_id=job.track_id,
+                name=job.name,
+                artist=job.artist,
+                album=job.album,
+                cover_url=job.cover_url,
+                quality=job.quality,
+                status="retrying",
+                progress=job.progress,
+                retry=attempt,
+                max_retries=max_retries,
+            )
         )
+        return True
 
     def _mark_cancelled(self, job: DownloadJob) -> None:
         self._update_job(

@@ -221,14 +221,14 @@ class DownloadsMixin:
             raise
 
     def cancel_all_queued_download_jobs(self) -> int:
-        """Cancel all queued jobs."""
+        """Cancel every unfinished job so the Active list can go empty."""
         assert self._conn
         self._conn.execute("BEGIN IMMEDIATE")
         try:
             cur = self._conn.execute(
                 """UPDATE download_jobs
                    SET status = 'cancelled', finished_at = ?
-                   WHERE status = 'queued'""",
+                   WHERE status IN ('queued', 'running', 'retrying', 'paused')""",
                 (time.time(),),
             )
             self._conn.commit()

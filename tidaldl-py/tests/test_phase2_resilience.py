@@ -25,6 +25,10 @@ from tidal_dl.model.downloader import HiFiStreamManifest
         (Quality.low_320k, Quality.low_320k, "aac"),
         (Quality.high_lossless, Quality.high_lossless, "flac"),
         (Quality.hi_res_lossless, Quality.hi_res_lossless, "flac"),
+        (Quality.hi_res_lossless, Quality.high_lossless, "flac"),
+        (Quality.high_lossless, Quality.hi_res_lossless, "flac"),
+        ("HI_RES_LOSSLESS", "LOSSLESS", "flac"),
+        ("HI_RES", "LOSSLESS", "flac"),
     ],
 )
 def test_exact_quality_accepts_only_matching_compatible_delivery(requested, delivered, codec):
@@ -44,10 +48,8 @@ def test_exact_quality_accepts_only_matching_compatible_delivery(requested, deli
         (Quality.low_320k, Quality.hi_res_lossless, "flac", "requested HIGH but received HI_RES_LOSSLESS"),
         (Quality.high_lossless, Quality.low_96k, "aac", "requested LOSSLESS but received LOW"),
         (Quality.high_lossless, Quality.low_320k, "aac", "requested LOSSLESS but received HIGH"),
-        (Quality.high_lossless, Quality.hi_res_lossless, "flac", "requested LOSSLESS but received HI_RES_LOSSLESS"),
         (Quality.hi_res_lossless, Quality.low_96k, "aac", "requested HI_RES_LOSSLESS but received LOW"),
         (Quality.hi_res_lossless, Quality.low_320k, "aac", "requested HI_RES_LOSSLESS but received HIGH"),
-        (Quality.hi_res_lossless, Quality.high_lossless, "flac", "requested HI_RES_LOSSLESS but received LOSSLESS"),
         (Quality.high_lossless, "UNKNOWN", "flac", "received unknown"),
         (Quality.high_lossless, Quality.high_lossless, "aac", "received LOSSLESS with codec aac"),
         (Quality.low_320k, Quality.low_320k, "flac", "received HIGH with codec flac"),
@@ -224,6 +226,19 @@ def test_oauth_exact_quality_returns_manifest_before_segment_consumption():
     assert segment_calls == ["oauth"]
 
 
+def test_oauth_accepts_lossless_flac_when_hi_res_is_unavailable():
+    subject = _oauth_stream_subject()
+    subject.session.audio_quality = Quality.hi_res_lossless
+    segment_calls = []
+    track, manifest = _oauth_track(Quality.high_lossless, "flac", segment_calls)
+
+    returned_manifest, *_ = subject._get_stream_info(track)
+
+    assert returned_manifest is manifest
+    assert returned_manifest.get_urls() == ["https://example.invalid/segment"]
+    assert segment_calls == ["oauth"]
+
+
 @pytest.mark.parametrize(
     ("delivered", "codec", "expected"),
     [
@@ -279,6 +294,17 @@ def test_hifi_exact_quality_returns_manifest_before_urls_reach_consumption():
     subject, calls = _hifi_stream_subject(_hifi_result("HI_RES_LOSSLESS", "flac"))
     subject.session.audio_quality = Quality.hi_res_lossless
     track, _ = _oauth_track(Quality.hi_res_lossless, "flac", [])
+
+    manifest, *_ = subject._get_stream_info(track)
+
+    assert manifest.get_urls() == ["https://example.invalid/segment"]
+    assert calls == [(118, "HI_RES_LOSSLESS")]
+
+
+def test_hifi_accepts_lossless_flac_when_hi_res_is_unavailable():
+    subject, calls = _hifi_stream_subject(_hifi_result("LOSSLESS", "flac"))
+    subject.session.audio_quality = Quality.hi_res_lossless
+    track, _ = _oauth_track(Quality.high_lossless, "flac", [])
 
     manifest, *_ = subject._get_stream_info(track)
 
