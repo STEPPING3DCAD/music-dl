@@ -20,6 +20,13 @@ uv tool install --from git+https://github.com/alfdav/music-dl.git#subdirectory=t
 
 ---
 
+## Unreleased
+- Accept Blue Lossless (LOSSLESS FLAC) when Hi-Res is requested but Tidal only publishes the track at a lower lossless tier; lossy AAC is still rejected ([#128](https://github.com/alfdav/music-dl/pull/128)).
+- Drive the Downloads Active list and badge from the queue snapshot so a missed SSE event no longer leaves a stale active card.
+- Remove the queued Downloads card on Cancel All, including running, retrying, and paused jobs.
+- Apply remaining queue counts on progress so the waiting card drops when a job is claimed, and stop cancelled jobs from being rewritten as running or retrying.
+- Cancel the job immediately when a retry status cannot be written, instead of leaving it Active through backoff.
+
 ## v1.7.4 (2026-08-15)
 - Restored Tidal catalog playback and downloads at LOSSLESS / FLAC by preferring the Tidal Web OAuth client, fixing the remaining provider-side failures in [#118](https://github.com/alfdav/music-dl/issues/118) and [#125](https://github.com/alfdav/music-dl/issues/125).
 - Changed upgrade jobs to request the quality Tidal actually reports for each track, so CD-quality tracks can upgrade to LOSSLESS FLAC without being rejected for lacking Max quality.
