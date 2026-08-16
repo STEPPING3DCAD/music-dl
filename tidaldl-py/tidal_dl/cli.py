@@ -6,7 +6,7 @@ from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from types import FrameType
-from typing import TYPE_CHECKING, Annotated, Any, Protocol, cast
+from typing import Annotated, Any, Protocol, cast
 from urllib.parse import urlparse
 
 import requests
@@ -43,9 +43,6 @@ from tidal_dl.helper.tidal import (
 )
 from tidal_dl.hifi_api import HiFiApiClient
 from tidal_dl.model.cfg import SETTINGS_HELP
-
-if TYPE_CHECKING:
-    from tidal_dl.helper.library_db import LibraryDB
 
 
 def _progress_logger(print_fn: Callable[..., Any], *, debug: bool = False):
@@ -1021,7 +1018,13 @@ def isrc_tag(
     from mutagen.id3 import TSRC
 
     from tidal_dl.helper.library_db import LibraryDB
-    from tidal_dl.helper.library_scanner import SCAN_EXTENSIONS, _extract_isrc
+    from tidal_dl.helper.library_scanner import (
+        SCAN_EXTENSIONS,
+        _extract_isrc,
+        drop_skipped_scan_paths,
+        is_skipped_scan_dir,
+        path_has_skipped_scan_dir,
+    )
 
     dir_path = Path(directory).expanduser().resolve()
     console = Console()
@@ -1036,6 +1039,9 @@ def isrc_tag(
     db.open()
 
     # ── Phase 1: Scan ──────────────────────────────────────────────
+    dropped = drop_skipped_scan_paths(db)
+    if dropped:
+        db.commit()
     known_paths = set() if rescan else db.known_paths()
     console.print(f"[cyan]Scanning {dir_path} (skipping {len(known_paths)} known files)...[/cyan]")
 
@@ -1043,9 +1049,12 @@ def isrc_tag(
     skipped_known = 0
     batch_size = 0
 
-    for walk_root, _dirs, walk_files in _os.walk(str(dir_path)):
+    for walk_root, dirs, walk_files in _os.walk(str(dir_path)):
+        dirs[:] = [name for name in dirs if not is_skipped_scan_dir(name)]
         for fname in walk_files:
             file_path = Path(walk_root) / fname
+            if path_has_skipped_scan_dir(file_path):
+                continue
             if file_path.suffix.lower() not in SCAN_EXTENSIONS:
                 continue
 
