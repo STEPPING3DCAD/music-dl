@@ -523,7 +523,8 @@ class DownloadJobService:
                     if self._is_cancel_requested(current):
                         self._mark_cancelled(current)
                         return
-                    self._mark_retrying(current, attempt + 1, max_retries)
+                    if not self._mark_retrying(current, attempt + 1, max_retries):
+                        return
                     time.sleep(2 ** (attempt + 1))
                     continue
                 raise
@@ -534,7 +535,8 @@ class DownloadJobService:
                 if self._is_cancel_requested(current):
                     self._mark_cancelled(current)
                     return
-                self._mark_retrying(current, attempt + 1, max_retries)
+                if not self._mark_retrying(current, attempt + 1, max_retries):
+                    return
                 time.sleep(2 ** (attempt + 1))
 
         if last_exc is not None:
@@ -850,12 +852,13 @@ class DownloadJobService:
         except Exception:
             logger.exception("Failed to persist download error for track %s", job.track_id)
 
-    def _mark_retrying(self, job: DownloadJob, attempt: int, max_retries: int) -> None:
+    def _mark_retrying(self, job: DownloadJob, attempt: int, max_retries: int) -> bool:
         if self._is_cancel_requested(job):
             self._mark_cancelled(job)
-            return
+            return False
         if not self._update_job(job, status=JobStatus.RETRYING.value):
-            return
+            self._mark_cancelled(job)
+            return False
         self.events.broadcast(
             self._queue_event(
                 "progress",
@@ -873,6 +876,7 @@ class DownloadJobService:
                 max_retries=max_retries,
             )
         )
+        return True
 
     def _mark_cancelled(self, job: DownloadJob) -> None:
         self._update_job(

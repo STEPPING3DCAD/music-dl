@@ -891,3 +891,88 @@ def test_cancel_all_during_retryable_failure_does_not_mark_retrying(tmp_path, mo
     assert not any(
         event["type"] == "progress" and event.get("status") == "retrying" for event in events
     )
+
+
+def test_mark_retrying_cancels_when_update_job_refuses_active_status(tmp_path):
+    service = _service(tmp_path)
+    service.enqueue_download([1])
+    job = service.claim_next_for_test()
+    service.cancel()
+    service._cancel_all = False
+    events = []
+    service.events.broadcast = events.append
+
+    scheduled = service._mark_retrying(job, 1, 3)
+
+    stored = service.get_job_for_test(job.id)
+    assert scheduled is False
+    assert stored.status.value == "cancelled"
+    assert any(event["type"] == "cancelled" for event in events)
+    assert not any(event["type"] == "progress" for event in events)
+
+
+def test_refused_retry_update_finishes_cancel_without_backoff(tmp_path, monkeypatch):
+    service = _service(tmp_path)
+    service.enqueue_download([123])
+    job = service.claim_next_for_test()
+    events = []
+    item_calls = []
+    slept = []
+    service.events.broadcast = events.append
+
+    class FakeTrack:
+        id = 123
+        name = "Song"
+        full_name = "Song"
+        duration = 1
+        artists = ()
+        album = None
+
+    class FakeSession:
+        def track(self, track_id):
+            return FakeTrack()
+
+    class FakeTidal:
+        session = FakeSession()
+
+    class FakeSettingsData:
+        download_base_path = str(tmp_path)
+        skip_existing = True
+        format_track = "{track_title}"
+        quality_audio = "LOSSLESS"
+
+    class FakeSettings:
+        data = FakeSettingsData()
+
+    class FakeDownload:
+        def __init__(self, **kwargs):
+            pass
+
+        def item(self, **kwargs):
+            item_calls.append(1)
+            raise ConnectionError("network dropped")
+
+    original_update = service._update_job
+
+    def refuse_retrying(job_to_update, **fields):
+        if fields.get("status") == "retrying":
+            return False
+        return original_update(job_to_update, **fields)
+
+    service._update_job = refuse_retrying
+    monkeypatch.setattr("tidal_dl.gui.services.download_job_service.Tidal", FakeTidal)
+    monkeypatch.setattr("tidal_dl.gui.services.download_job_service.Settings", FakeSettings)
+    monkeypatch.setattr("tidal_dl.gui.services.download_job_service.Download", FakeDownload)
+    monkeypatch.setattr(
+        "tidal_dl.gui.services.download_job_service.time.sleep",
+        lambda seconds: slept.append(seconds),
+    )
+
+    service.execute_job_for_test(job)
+
+    stored = service.get_job_for_test(job.id)
+    assert stored.status.value == "cancelled"
+    assert item_calls == [1]
+    assert slept == []
+    assert any(event["type"] == "cancelled" for event in events)
+    assert not any(event.get("status") == "retrying" for event in events)

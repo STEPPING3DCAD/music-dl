@@ -6,7 +6,7 @@
 
 **Root cause:** The client treated `progress` as a per-card paint and ignored the queue envelope. Separately, Cancel All marked `running`/`retrying` rows cancelled, but `_update_job` / `_mark_retrying` wrote those statuses back and broadcast `progress`, which redrew the job in Active.
 
-**Prevention:** Apply `queued_count` / `active_count` / `paused` from progress payloads. Do not write an active job status, or emit downloading/retrying progress, after cancel has been requested or the row is already `cancelled`.
+**Prevention:** Apply `queued_count` / `active_count` / `paused` from progress payloads. Do not write an active job status, or emit downloading/retrying progress, after cancel has been requested or the row is already `cancelled`. If `_update_job` refuses `retrying`, `_mark_retrying` must mark cancelled and the retry loop must return — do not sleep and continue.
 
 ## 2026-08-15 — Exact quality match rejected valid Blue Lossless
 
