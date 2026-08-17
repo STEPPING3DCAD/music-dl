@@ -1,12 +1,12 @@
 # Mistakes
 
-## 2026-08-17 — Search type chip kissed the search field gold rail
+## 2026-08-17 — Search type chips kissed the gold rail and sat off-center
 
-**What happened:** The active Tracks pill sat flush against the search input’s gold curve. Library sort pills share the same chrome.
+**What happened:** The active Tracks pill sat flush against the search input’s gold curve. “Tracks” also rode high in the capsule, so it did not share a line with Albums / Artists / Playlists. Library sort pills share the same chrome.
 
-**Root cause:** `.filter-pills` had horizontal padding only (`0 2px`). A 36px active pill and the focused input’s 4px gold glow met across the 16px `.search-area` gap.
+**Root cause:** `.filter-pills` had horizontal padding only (`0 2px`). `.pill` is a 36px box with padding but was not a flex-centered box, so the label sat at the top of the extra height. The active gold fill makes that offset visible; inactive pills only show glyphs.
 
-**Prevention:** Keep vertical padding (or column gap) on the shared search chrome so an active chip cannot meet a rounded gold control above it.
+**Prevention:** Keep vertical padding (or column gap) on the shared search chrome so an active chip cannot meet a rounded gold control above it. Flex-center every `.pill` label and `align-items: center` the row so active and inactive chips share one line. Do not give `.pill.active` a different height or padding.
 
 ## 2026-08-16 — Local scan indexed Synology `#recycle` as an artist
 

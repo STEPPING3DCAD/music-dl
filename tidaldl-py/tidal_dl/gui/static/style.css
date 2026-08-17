@@ -408,6 +408,7 @@ body {
 
 .filter-pills {
   display: flex;
+  align-items: center;
   gap: 8px;
   padding: 8px 2px 0;
 }
@@ -434,6 +435,9 @@ body {
 }
 
 .pill {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   padding: 6px 18px;
   min-height: 36px;
   border-radius: 20px;
