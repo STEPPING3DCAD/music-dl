@@ -90,6 +90,8 @@ class TestAppJsFeatureMarkers:
         assert "loading: index < 6 ? 'eager' : 'lazy'" in gallery_source
         assert "img.onerror = function() {" in gallery_source
         assert "artWrap.style.background = artGradient(album.name);" in gallery_source
+        assert "data.albums.length + ' album' + (data.albums.length !== 1 ? 's' : '')" in gallery_source
+        assert "data.albums.length + ' albums'" not in gallery_source
 
     def test_has_csrf_token_handling(self):
         js = read_gui_js()

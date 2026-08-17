@@ -1669,7 +1669,7 @@ async function renderArtistGallery(container, artistName) {
     }
 
     const titleRow = header.querySelector('.artist-gallery-title-row');
-    if (titleRow) titleRow.appendChild(textEl('span', data.albums.length + ' albums', 'artist-gallery-count'));
+    if (titleRow) titleRow.appendChild(textEl('span', data.albums.length + ' album' + (data.albums.length !== 1 ? 's' : ''), 'artist-gallery-count'));
 
     data.albums.forEach((album, index) => {
       const card = h('div', { className: 'album-card' });
