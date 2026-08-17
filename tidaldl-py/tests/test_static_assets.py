@@ -90,6 +90,27 @@ class TestAppJsFeatureMarkers:
         assert "loading: index < 6 ? 'eager' : 'lazy'" in gallery_source
         assert "img.onerror = function() {" in gallery_source
         assert "artWrap.style.background = artGradient(album.name);" in gallery_source
+        assert "data.albums.length + ' album' + (data.albums.length !== 1 ? 's' : '')" in gallery_source
+        assert "data.albums.length + ' albums'" not in gallery_source
+        assert "skeleton-row" not in gallery_source
+        assert "Loading albums" in gallery_source or "home-loading-hint" in gallery_source
+
+    def test_artist_hero_tile_singularizes_album_count(self):
+        js = read_gui_js()
+        tile_source = js.split("function _artistTile(artist, hero) {")[1].split("\nfunction ")[0]
+        assert "artist.album_count + ' album' + (artist.album_count !== 1 ? 's' : '')" in tile_source
+        assert "artist.album_count + ' albums'" not in tile_source
+
+    def test_local_album_detail_skips_artist_albums_when_cover_is_prefetched(self):
+        js = read_gui_js()
+        detail_source = js.split(
+            "async function renderLocalAlbumDetail(container, artistName, albumName, prefetchedData) {"
+        )[1].split("\nasync function ")[0]
+        assert "prefetchedData" in detail_source
+        assert "cover_url" in detail_source.split("// Album header")[0]
+        assert "if (!coverUrl" in detail_source.split("// Album header")[0]
+        assert "skeleton-row" not in detail_source
+        assert "Loading tracks" in detail_source or "home-loading-hint" in detail_source
 
     def test_has_csrf_token_handling(self):
         js = read_gui_js()

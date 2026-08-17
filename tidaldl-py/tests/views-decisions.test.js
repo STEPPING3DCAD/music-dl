@@ -617,3 +617,80 @@ describe('Tidal album filter decisions', () => {
     expect(filterTidalAlbums([{ id: 7, quality: 'HIGH', explicit: 'true' }], 'all', 'explicit')).toEqual([]);
   });
 });
+
+function loadArtistTile() {
+  const helperSource = viewsSource.match(
+    /function _artistTile\(artist, hero\) \{[\s\S]*?\n\}/,
+  );
+  if (!helperSource) throw new Error('artist tile helper not found');
+  return new Function(
+    'h',
+    'textEl',
+    'navigate',
+    'a11yClick',
+    'fetch',
+    `${helperSource[0]}\nreturn _artistTile;`,
+  )(
+    (tag, props = {}, ...children) => {
+      const node = {
+        tag,
+        ...props,
+        children: [],
+        appendChild(child) { this.children.push(child); return child; },
+        addEventListener() {},
+        textContent: props.textContent || '',
+      };
+      children.forEach(child => node.appendChild(child));
+      return node;
+    },
+    (tag, value, className) => ({ tag, textContent: value, className, children: [] }),
+    () => {},
+    () => {},
+    () => Promise.resolve({ json: async () => ({}) }),
+  );
+}
+
+describe('artist album count copy', () => {
+  test('hero tile singularizes one album', () => {
+    const tile = loadArtistTile()({ name: 'Sandy, PAPO', play_count: 4, album_count: 1, track_count: 9 }, true);
+    const text = JSON.stringify(tile);
+    expect(text).toContain('1 album');
+    expect(text).not.toContain('1 albums');
+  });
+
+  test('hero tile keeps plural albums', () => {
+    const tile = loadArtistTile()({ name: 'Artist', play_count: 4, album_count: 2, track_count: 9 }, true);
+    expect(JSON.stringify(tile)).toContain('2 albums');
+  });
+});
+
+describe('local album detail cover fetch', () => {
+  test('skips artist albums when prefetched data already has cover_url', () => {
+    const coverBlock = viewsSource
+      .split('async function renderLocalAlbumDetail(container, artistName, albumName, prefetchedData) {')[1]
+      ?.split('// Album header')[0];
+    if (!coverBlock) throw new Error('album detail cover block not found');
+    expect(coverBlock).toMatch(/prefetchedData(?: &&|\.)cover_url|'cover_url' in prefetchedData/);
+    expect(coverBlock).toMatch(/if \(!coverUrl\b/);
+  });
+});
+
+describe('artist and album loading state', () => {
+  test('artist gallery uses a visible loading hint instead of skeleton-row', () => {
+    const gallery = viewsSource
+      .split('async function renderArtistGallery(container, artistName) {')[1]
+      ?.split('// ---- LOCAL ALBUM DETAIL')[0];
+    if (!gallery) throw new Error('artist gallery not found');
+    expect(gallery).not.toContain('skeleton-row');
+    expect(gallery).toMatch(/Loading albums|home-loading-hint|skeleton-track/);
+  });
+
+  test('album detail uses a visible loading hint instead of skeleton-row', () => {
+    const detail = viewsSource
+      .split('async function renderLocalAlbumDetail(container, artistName, albumName, prefetchedData) {')[1]
+      ?.split('\nasync function ')[0];
+    if (!detail) throw new Error('album detail not found');
+    expect(detail).not.toContain('skeleton-row');
+    expect(detail).toMatch(/Loading tracks|home-loading-hint|skeleton-track/);
+  });
+});

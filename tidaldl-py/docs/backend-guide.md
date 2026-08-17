@@ -215,7 +215,7 @@ TIDAL_CDN_HOSTS  = {"audio.tidal.com", "sp-ad-cf.audio.tidal.com", ...}
 
 ## 7. Database Schema
 
-SQLite at `~/.config/music-dl/library.db`. Schema version 8, WAL mode, and a
+SQLite at `~/.config/music-dl/library.db`. Schema version 9, WAL mode, and a
 5-second busy timeout.
 
 ### Tables
@@ -249,9 +249,10 @@ SQLite at `~/.config/music-dl/library.db`. Schema version 8, WAL mode, and a
 | `waveform` | TEXT | Cached standard-resolution waveform JSON |
 | `waveform_hires` | TEXT | Cached high-resolution waveform JSON |
 | `art_available` | INTEGER | Local artwork availability; `NULL` until checked |
+| `release_id` | TEXT | Current grouped release card id; stamped during album-card builds. NULL after v9 migrate until a full regroup or a scoped card build writes it. A stamp miss recovers with one full regroup, then later lookups stay index-only. |
 | `scanned_at` | INTEGER | Unix timestamp |
 
-Indexes: `idx_scanned_status`, `idx_scanned_isrc`
+Indexes: `idx_scanned_status`, `idx_scanned_isrc`, `idx_scanned_release_id`
 
 **`album_grouping_assessments`** — explainable release-card decisions
 
@@ -357,7 +358,7 @@ Normal downloads, playlist sync, bot download requests, and upgrade requests all
 
 ### Migrations
 
-Additive only. `open()` reads SQLite's native `PRAGMA user_version`: databases below version 8 run these migrations and record version 8 in the same commit; current-schema opens configure their existing pragmas without rerunning migration writes.
+Additive only. `open()` reads SQLite's native `PRAGMA user_version`: databases below version 9 run these migrations and record version 9 in the same commit; current-schema opens configure their existing pragmas without rerunning migration writes.
 
 1. **v1 → v2**: Add `album`, `duration`, `quality`, `format` columns to `scanned`
 2. **v2 → v3**: Add `play_count`, `last_played`, `genre` to `scanned`
@@ -366,8 +367,9 @@ Additive only. `open()` reads SQLite's native `PRAGMA user_version`: databases b
 5. **v5 → v6**: Add `codec` and `metadata_complete` to `scanned`; backfill unambiguous native codecs and repair remaining legacy rows on the next scan
 6. **v6 → v7**: Add nullable release identity, position, and total fields to `scanned`; queue existing readable rows for one metadata repair pass
 7. **v7 → v8**: Add `album_grouping_assessments` for explainable scores, catalog state, and current user choices
-8. **Late additions**: Add `cover_url` and `quality` to `download_history`
-9. **Download jobs and favorites**: Create their tables and lookup indexes when absent
+8. **v8 → v9**: Add `release_id` on `scanned` so one-artist/one-release reads can load those rows without regrouping the whole library
+9. **Late additions**: Add `cover_url` and `quality` to `download_history`
+10. **Download jobs and favorites**: Create their tables and lookup indexes when absent
 
 Pattern: check `PRAGMA table_info()`, `ALTER TABLE ADD COLUMN` if missing. Never destructive.
 

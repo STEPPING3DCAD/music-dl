@@ -147,6 +147,56 @@ class BrowseMixin:
         total = len(rows)
         return rows[offset:offset + limit], total
 
+    def tracks_for_artist(self, artist: str) -> list[dict]:
+        """Return readable rows for one artist without loading the whole library."""
+        assert self._conn
+        rows = self._conn.execute(
+            """SELECT * FROM scanned
+               WHERE status != 'unreadable'
+                 AND artist = ? COLLATE NOCASE""",
+            (artist,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def tracks_for_release(self, release_id: str) -> list[dict]:
+        """Return readable rows already stamped with a grouped release id."""
+        assert self._conn
+        rows = self._conn.execute(
+            """SELECT * FROM scanned
+               WHERE status != 'unreadable'
+                 AND release_id = ?""",
+            (release_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def tracks_for_albums(self, albums: list[str]) -> list[dict]:
+        """Return readable rows for a small set of album titles."""
+        assert self._conn
+        titles = [album for album in albums if album]
+        if not titles:
+            return []
+        placeholders = ",".join("?" * len(titles))
+        rows = self._conn.execute(
+            f"""SELECT * FROM scanned
+                WHERE status != 'unreadable'
+                  AND album IN ({placeholders})""",
+            titles,
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def release_stamps_complete(self) -> bool:
+        """True when every readable album row already has a grouped release id."""
+        assert self._conn
+        row = self._conn.execute(
+            """SELECT COUNT(*) AS album_rows,
+                      SUM(CASE WHEN release_id IS NOT NULL THEN 1 ELSE 0 END) AS stamped
+               FROM scanned
+               WHERE status != 'unreadable' AND album IS NOT NULL"""
+        ).fetchone()
+        album_rows = int(row["album_rows"] or 0)
+        stamped = int(row["stamped"] or 0)
+        return album_rows > 0 and album_rows == stamped
+
     def albums_by_artist(self, artist: str) -> list[dict]:
         """Return albums for an artist with track count and a representative path for art."""
         assert self._conn

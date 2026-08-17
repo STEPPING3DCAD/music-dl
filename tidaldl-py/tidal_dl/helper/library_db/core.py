@@ -6,7 +6,7 @@ from tidal_dl.helper.library_db._common import *
 class LibraryDBCore:
     """Thin wrapper around a SQLite scan ledger."""
 
-    _SCHEMA_VERSION = 8
+    _SCHEMA_VERSION = 9
 
     def __init__(self, db_path: pathlib.Path) -> None:
         self._path = db_path
@@ -72,11 +72,15 @@ class LibraryDBCore:
                     waveform   TEXT,
                     waveform_hires TEXT,
                     art_available INTEGER,
+                    release_id TEXT,
                     scanned_at INTEGER NOT NULL
                 )"""
             )
             self._conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_scanned_status ON scanned(status)"
+            )
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_scanned_release_id ON scanned(release_id)"
             )
         else:
             # Migrate v1 → v2: add missing columns
@@ -151,6 +155,15 @@ class LibraryDBCore:
                 self._conn.execute(
                     "UPDATE scanned SET metadata_complete = 0 WHERE status != 'unreadable'"
                 )
+
+        # v8 → v9: persist the current grouped release id so one-release reads
+        # can load those rows without rebuilding every album card.
+        cols = {r["name"] for r in self._conn.execute("PRAGMA table_info(scanned)")}
+        if "release_id" not in cols:
+            self._conn.execute("ALTER TABLE scanned ADD COLUMN release_id TEXT")
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_scanned_release_id ON scanned(release_id)"
+        )
 
         # Backfill codecs that are unambiguous from their native file type.
         self._conn.execute(

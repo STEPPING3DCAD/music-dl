@@ -1,5 +1,13 @@
 # Mistakes
 
+## 2026-08-17 — Full-library album grouping on a single-artist/release read
+
+**What happened:** Artist page and release detail took 25–53s each on a 12k-row library. SQLite itself was instant. A bad release id 404'd in ~50s.
+
+**Root cause:** `artist_albums`, `artist_album_tracks`, and `release_tracks` called `_album_cards(db)`, which is not just “group everything.” On the live Mac it ran `build_local_album_groups(db.all_tracks())` on 11,844 rows, then `find_candidates` = `combinations(1565 albums, 2)` = 1,223,830 pairs, then `assess_pair` plus SQLite writes. In-flight CPU was 98% in `normalize_text()` (`unicodedata.combining`). After the release-tracks GET, `renderLocalAlbumDetail` re-fetched artist albums only for cover. Artist/album “loading” used `skeleton-row`, which has no CSS, so the wait was a blank page. “1 albums” was both the Home hero tile and the gallery count.
+
+**Prevention:** Group only the rows for that artist, the current recent-albums page, or a stamped release id. Do not call full-library grouping on those reads. After v9 migrate, `release_id` is NULL; a stamp miss for a real hash must recover with one full `_album_cards(db)` that writes every stamp, then return the card. A miss on a complete index 404s without walking. Skip the artist-albums cover fetch when the release payload already has `cover_url`. Use a visible Home-style loading hint, not an unstyled `skeleton-row`. Singularize both the hero tile and the gallery count.
+
 ## 2026-08-16 — Local scan indexed Synology `#recycle` as an artist
 
 **What happened:** Artists view showed a `#recycle` heading with deleted NAS files (WAV titles like `08 Menu Groove Edit`) as if they were a real library artist.

@@ -366,7 +366,7 @@ function _artistTile(artist, hero) {
   body.appendChild(textEl('div', artist.play_count + ' plays', 'bento-sub'));
   const stats = [];
   if (artist.track_count) stats.push(artist.track_count + ' tracks');
-  if (artist.album_count) stats.push(artist.album_count + ' albums');
+  if (artist.album_count) stats.push(artist.album_count + ' album' + (artist.album_count !== 1 ? 's' : ''));
   if (artist.genre) stats.push(artist.genre);
   if (stats.length) {
     body.appendChild(textEl('div', stats.join(' · '), 'bento-artist-stats'));
@@ -1654,7 +1654,7 @@ async function renderArtistGallery(container, artistName) {
 
   const grid = h('div', { className: 'album-gallery' });
   container.appendChild(grid);
-  grid.appendChild(h('div', { className: 'skeleton-row' }));
+  grid.appendChild(textEl('p', 'Loading albums…', 'home-loading-hint'));
 
   try {
     const data = await api('/library/artist/' + encodeURIComponent(artistName) + '/albums');
@@ -1669,7 +1669,7 @@ async function renderArtistGallery(container, artistName) {
     }
 
     const titleRow = header.querySelector('.artist-gallery-title-row');
-    if (titleRow) titleRow.appendChild(textEl('span', data.albums.length + ' albums', 'artist-gallery-count'));
+    if (titleRow) titleRow.appendChild(textEl('span', data.albums.length + ' album' + (data.albums.length !== 1 ? 's' : ''), 'artist-gallery-count'));
 
     data.albums.forEach((album, index) => {
       const card = h('div', { className: 'album-card' });
@@ -1715,10 +1715,13 @@ async function renderArtistGallery(container, artistName) {
 
 // ---- LOCAL ALBUM DETAIL (from library click) ----
 async function renderLocalReleaseDetail(container, releaseHash) {
+  container.appendChild(textEl('p', 'Loading tracks…', 'home-loading-hint'));
   try {
     const data = await api('/library/releases/' + encodeURIComponent(releaseHash) + '/tracks');
+    while (container.firstChild) container.removeChild(container.firstChild);
     renderLocalAlbumDetail(container, data.artist, data.album, data);
   } catch (err) {
+    while (container.firstChild) container.removeChild(container.firstChild);
     container.appendChild(h('div', { className: 'empty-state' },
       textEl('div', 'Could not load release', 'empty-state-title'),
       textEl('div', err.message, 'empty-state-sub')
@@ -1736,13 +1739,14 @@ async function renderLocalAlbumDetail(container, artistName, albumName, prefetch
     { label: albumName },
   ]));
 
-  // Fetch album info for cover art
-  let coverUrl = '';
-  try {
-    const albumsData = await api('/library/artist/' + encodeURIComponent(artistName) + '/albums');
-    const match = (albumsData.albums || []).find(a => a.name === albumName);
-    if (match) coverUrl = match.cover_url;
-  } catch (_) {}
+  let coverUrl = (prefetchedData && prefetchedData.cover_url) || '';
+  if (!coverUrl && !(prefetchedData && 'cover_url' in prefetchedData)) {
+    try {
+      const albumsData = await api('/library/artist/' + encodeURIComponent(artistName) + '/albums');
+      const match = (albumsData.albums || []).find(a => a.name === albumName);
+      if (match) coverUrl = match.cover_url;
+    } catch (_) {}
+  }
 
   // Album header
   const albumHeader = h('div', { className: 'album-detail-header' });
@@ -1797,7 +1801,7 @@ async function renderLocalAlbumDetail(container, artistName, albumName, prefetch
 
   const trackList = h('div', { className: 'tracks' });
   wrapper.appendChild(trackList);
-  trackList.appendChild(h('div', { className: 'skeleton-row' }));
+  trackList.appendChild(textEl('p', 'Loading tracks…', 'home-loading-hint'));
 
   try {
     const data = prefetchedData || await api('/library/artist/' + encodeURIComponent(artistName) + '/album/' + encodeURIComponent(albumName) + '/tracks');
