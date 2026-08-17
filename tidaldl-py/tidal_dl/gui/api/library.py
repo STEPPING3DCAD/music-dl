@@ -664,7 +664,12 @@ def _musicbrainz_catalog_lookup(left, right) -> dict:
     return {"status": "no_match", "same_release": False}
 
 
-def _album_cards(db: LibraryDB, *, include_artwork: bool = False) -> list[dict]:
+def _album_cards(
+    db: LibraryDB,
+    rows: list[dict] | None = None,
+    *,
+    include_artwork: bool = False,
+) -> list[dict]:
     """Build current release cards from cached rows without network access."""
     from tidal_dl.helper.album_grouping import (
         accepted_components,
@@ -676,7 +681,8 @@ def _album_cards(db: LibraryDB, *, include_artwork: bool = False) -> list[dict]:
         find_candidates,
     )
 
-    groups = build_local_album_groups(db.all_tracks())
+    tracks = db.all_tracks() if rows is None else list(rows)
+    groups = build_local_album_groups(tracks)
     titles = {group.signature: group.title for group in groups}
     assessments = {}
     stored_rows = {}
@@ -720,11 +726,9 @@ def _album_cards(db: LibraryDB, *, include_artwork: bool = False) -> list[dict]:
             contradictions=assessment.contradictions,
             catalog=stored.get("catalog") if stored else None,
         )
-    if assessments:
-        db.commit()
-
     components, clique_review = accepted_components(groups, assessments)
     cards: list[dict] = []
+    stamp_cards: list[dict] = []
     for component in components:
         signatures = {group.signature for group in component}
         component_assessments = [
@@ -769,6 +773,12 @@ def _album_cards(db: LibraryDB, *, include_artwork: bool = False) -> list[dict]:
             "recent_at": max((int(row.get("scanned_at") or 0) for row in tracks), default=0),
             "recent_source": "scan",
         })
+        stamp_cards.append({"id": cards[-1]["id"], "tracks": tracks})
+    if rows is None:
+        db.clear_release_ids()
+    db.stamp_release_ids(stamp_cards)
+    if assessments or cards or rows is None:
+        db.commit()
     return sorted(cards, key=lambda card: (card["name"].casefold(), card["artist"].casefold()))
 
 
@@ -1334,7 +1344,7 @@ def library_recent_albums(
 def artist_albums(artist_name: str):
     """Return all albums by an artist from the local library."""
     db = _get_db()
-    albums = [album for album in _album_cards(db) if any(
+    albums = [album for album in _album_cards(db, db.tracks_for_artist(artist_name)) if any(
         str(row.get("artist") or "").casefold() == artist_name.casefold()
         for row in album["tracks"]
     )]
@@ -1363,7 +1373,7 @@ def artist_album_tracks(artist_name: str, album_name: str):
     """Return all tracks for a specific album by an artist."""
     db = _get_db()
     card = next((
-        card for card in _album_cards(db)
+        card for card in _album_cards(db, db.tracks_for_artist(artist_name))
         if album_name in card["members"]
         and (card["artist"] == artist_name or artist_name == "Various Artists")
     ), None)
@@ -1380,7 +1390,10 @@ def artist_album_tracks(artist_name: str, album_name: str):
 def release_tracks(release_hash: str):
     db = _get_db()
     release_id = "release:" + release_hash
-    card = next((card for card in _album_cards(db) if card["id"] == release_id), None)
+    rows = db.tracks_for_release(release_id)
+    if not rows:
+        raise HTTPException(status_code=404, detail="Release not found")
+    card = next((card for card in _album_cards(db, rows) if card["id"] == release_id), None)
     if card is None:
         raise HTTPException(status_code=404, detail="Release not found")
     return {

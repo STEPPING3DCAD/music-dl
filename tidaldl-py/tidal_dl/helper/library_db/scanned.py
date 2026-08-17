@@ -356,6 +356,26 @@ class ScannedMixin:
             ),
         )
 
+    def clear_release_ids(self) -> None:
+        """Drop stamped release ids before a full-library regroup."""
+        assert self._conn
+        self._conn.execute("UPDATE scanned SET release_id = NULL")
+
+    def stamp_release_ids(self, cards: list[dict]) -> None:
+        """Remember which scanned rows belong to each grouped release card."""
+        assert self._conn
+        updates = [
+            (card["id"], row["path"])
+            for card in cards
+            for row in card.get("tracks") or []
+            if row.get("path")
+        ]
+        if updates:
+            self._conn.executemany(
+                "UPDATE scanned SET release_id = ? WHERE path = ?",
+                updates,
+            )
+
     def remove(self, path: str) -> None:
         """Remove a path from the ledger (e.g. file deleted)."""
         assert self._conn

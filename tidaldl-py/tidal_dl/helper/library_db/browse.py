@@ -147,6 +147,28 @@ class BrowseMixin:
         total = len(rows)
         return rows[offset:offset + limit], total
 
+    def tracks_for_artist(self, artist: str) -> list[dict]:
+        """Return readable rows for one artist without loading the whole library."""
+        assert self._conn
+        rows = self._conn.execute(
+            """SELECT * FROM scanned
+               WHERE status != 'unreadable'
+                 AND artist = ? COLLATE NOCASE""",
+            (artist,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def tracks_for_release(self, release_id: str) -> list[dict]:
+        """Return readable rows already stamped with a grouped release id."""
+        assert self._conn
+        rows = self._conn.execute(
+            """SELECT * FROM scanned
+               WHERE status != 'unreadable'
+                 AND release_id = ?""",
+            (release_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
     def albums_by_artist(self, artist: str) -> list[dict]:
         """Return albums for an artist with track count and a representative path for art."""
         assert self._conn

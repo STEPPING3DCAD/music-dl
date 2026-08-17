@@ -1,5 +1,13 @@
 # Mistakes
 
+## 2026-08-17 — Full-library album grouping on a single-artist/release read
+
+**What happened:** Artist page and release detail took 25–53s each on a 12k-row library. SQLite itself was instant. A bad release id 404'd in ~50s.
+
+**Root cause:** `artist_albums`, `artist_album_tracks`, and `release_tracks` called `_album_cards(db)`, which ran `build_local_album_groups(db.all_tracks())` and `find_candidates` over every album, then filtered to one artist or hash.
+
+**Prevention:** Group only the rows for that artist or stamped release id. Do not call full-library grouping on a single-artist/release read. A miss must 404 without walking the library.
+
 ## 2026-08-16 — Local scan indexed Synology `#recycle` as an artist
 
 **What happened:** Artists view showed a `#recycle` heading with deleted NAS files (WAV titles like `08 Menu Groove Edit`) as if they were a real library artist.
