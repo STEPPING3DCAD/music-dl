@@ -136,9 +136,9 @@ def scan_new_downloads(db, settings, paths: Iterable[Path] | None = None) -> Non
     batch = 0
 
     if paths is not None:
-        candidates = [Path(path) for path in paths]
+        candidates = (Path(path) for path in paths)
     else:
-        candidates = list(_iter_download_files(dl_path, _AUDIO_EXTENSIONS))
+        candidates = _iter_download_files(dl_path, _AUDIO_EXTENSIONS)
 
     for file_path in candidates:
         if not file_path.is_file():
@@ -610,6 +610,13 @@ class DownloadJobService:
             scan_new_downloads(db, settings, index_paths)
         finally:
             db.close()
+
+        if self._is_cancel_requested(current):
+            self._mark_cancelled(current)
+            return
+        stored = self.get_job_for_test(job.id)
+        if stored is not None and stored.status is JobStatus.CANCELLED:
+            return
 
         finished_at = time.time()
         self._record_history(

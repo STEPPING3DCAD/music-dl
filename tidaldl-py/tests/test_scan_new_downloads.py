@@ -60,6 +60,7 @@ class TestScanNewDownloadsSkipsTrash:
         from tidal_dl.gui.services.download_job_service import scan_new_downloads
 
         library_dir, new_file, recycle = _library_fixture(tmp_path)
+        trash = library_dir / ".Trash" / "deleted" / "old.wav"
         visited = _track_directory_descent(monkeypatch)
 
         db = LibraryDB(tmp_path / "library.db")
@@ -70,6 +71,7 @@ class TestScanNewDownloadsSkipsTrash:
 
         assert str(new_file) in paths
         assert str(recycle) not in paths
+        assert str(trash) not in paths
         assert not _descended_into_skipped(visited)
 
     def test_fallback_walk_prunes_recycle_and_still_indexes_new_file(
@@ -78,6 +80,7 @@ class TestScanNewDownloadsSkipsTrash:
         from tidal_dl.gui.services.download_job_service import scan_new_downloads
 
         library_dir, new_file, recycle = _library_fixture(tmp_path)
+        trash = library_dir / ".Trash" / "deleted" / "old.wav"
         visited = _track_directory_descent(monkeypatch)
 
         db = LibraryDB(tmp_path / "library.db")
@@ -88,6 +91,7 @@ class TestScanNewDownloadsSkipsTrash:
 
         assert str(new_file) in paths
         assert str(recycle) not in paths
+        assert str(trash) not in paths
         assert not _descended_into_skipped(visited)
 
 
@@ -132,24 +136,26 @@ class TestWorkerPostDownloadIndexing:
     def test_worker_indexes_output_file_skips_recycle_and_reaches_done(
         self, tmp_path, monkeypatch
     ):
+        from tidal_dl.gui.services import download_job_service as job_mod
         from tidal_dl.gui.services.download_job_service import DownloadJobService
 
-        _library_dir, new_file, recycle = _library_fixture(tmp_path)
+        library_dir, new_file, recycle = _library_fixture(tmp_path)
+        trash = library_dir / ".Trash" / "deleted" / "old.wav"
         visited = _track_directory_descent(monkeypatch)
         service = DownloadJobService(db_path=tmp_path / "library.db", autostart=False)
         service.enqueue_download([123])
-        monkeypatch.setattr(
-            "tidal_dl.gui.services.download_job_service.Tidal",
-            _download_fakes(tmp_path, new_file)[1],
-        )
-        monkeypatch.setattr(
-            "tidal_dl.gui.services.download_job_service.Settings",
-            _download_fakes(tmp_path, new_file)[0],
-        )
-        monkeypatch.setattr(
-            "tidal_dl.gui.services.download_job_service.Download",
-            _download_fakes(tmp_path, new_file)[2],
-        )
+        scan_calls = []
+        real_scan = job_mod.scan_new_downloads
+
+        def tracking_scan(db, settings, paths=None):
+            scan_calls.append(paths)
+            return real_scan(db, settings, paths)
+
+        fakes = _download_fakes(tmp_path, new_file)
+        monkeypatch.setattr(job_mod, "Settings", fakes[0])
+        monkeypatch.setattr(job_mod, "Tidal", fakes[1])
+        monkeypatch.setattr(job_mod, "Download", fakes[2])
+        monkeypatch.setattr(job_mod, "scan_new_downloads", tracking_scan)
 
         job = service.claim_next_for_test()
         service.execute_job_for_test(job)
@@ -161,10 +167,12 @@ class TestWorkerPostDownloadIndexing:
         paths = db.known_paths()
         db.close()
 
+        assert scan_calls == [[new_file]]
         assert stored.status.value == "done"
         assert history[0]["status"] == "done"
         assert str(new_file) in paths
         assert str(recycle) not in paths
+        assert str(trash) not in paths
         assert not _descended_into_skipped(visited)
 
     def test_worker_exposes_indexing_status_before_terminal_done(
@@ -211,3 +219,34 @@ class TestWorkerPostDownloadIndexing:
         stored = service.get_job_for_test(job.id)
         assert stored.status.value == "done"
         assert service.history(limit=10)["downloads"][0]["status"] == "done"
+
+    def test_cancel_during_indexing_does_not_mark_done(self, tmp_path, monkeypatch):
+        from tidal_dl.gui.services import download_job_service as job_mod
+        from tidal_dl.gui.services.download_job_service import DownloadJobService
+
+        _library_dir, new_file, _recycle = _library_fixture(tmp_path)
+        service = DownloadJobService(db_path=tmp_path / "library.db", autostart=False)
+        service.enqueue_download([123])
+        events = []
+        service.events.broadcast = events.append
+        real_scan = job_mod.scan_new_downloads
+
+        def cancel_during_scan(*args, **kwargs):
+            service.cancel()
+            return real_scan(*args, **kwargs)
+
+        fakes = _download_fakes(tmp_path, new_file)
+        monkeypatch.setattr(job_mod, "Settings", fakes[0])
+        monkeypatch.setattr(job_mod, "Tidal", fakes[1])
+        monkeypatch.setattr(job_mod, "Download", fakes[2])
+        monkeypatch.setattr(job_mod, "scan_new_downloads", cancel_during_scan)
+
+        job = service.claim_next_for_test()
+        service.execute_job_for_test(job)
+
+        stored = service.get_job_for_test(job.id)
+        history = service.history(limit=10)["downloads"]
+        assert stored.status.value == "cancelled"
+        assert history == []
+        assert any(event["type"] == "cancelled" for event in events)
+        assert not any(event["type"] == "complete" for event in events)
