@@ -1321,22 +1321,40 @@ def library_recent_albums(
     offset: int = Query(0, ge=0),
 ) -> dict:
     db = _get_db()
-    rows = sorted(_album_cards(db), key=lambda row: -row["recent_at"])
-    total = len(rows)
-    rows = rows[offset:offset + limit]
-    albums = [
-        {
-            "id": row["id"],
-            "name": row["name"],
-            "artist": row["artist"],
-            "track_count": row["track_count"],
-            "cover_url": _local_cover_url(row.get("cover_path"), row.get("cover_art_available")),
+    page, total = db.recent_albums_page(limit=limit, offset=offset)
+    titles = [row["album"] for row in page if row.get("album")]
+    artists = [
+        row["artist"] for row in page
+        if row.get("artist") and row["artist"] != "Various Artists"
+    ]
+    rows_by_path: dict[str, dict] = {}
+    for row in db.tracks_for_albums(titles):
+        rows_by_path[row["path"]] = row
+    for artist in dict.fromkeys(artists):
+        for row in db.tracks_for_artist(artist):
+            rows_by_path[row["path"]] = row
+    cards = _album_cards(db, list(rows_by_path.values())) if rows_by_path else []
+    by_title = {card["name"]: card for card in cards}
+    for card in cards:
+        for member in card["members"]:
+            by_title.setdefault(member, card)
+    albums = []
+    seen: set[str] = set()
+    for row in page:
+        card = by_title.get(row["album"])
+        if card is None or card["id"] in seen:
+            continue
+        seen.add(card["id"])
+        albums.append({
+            "id": card["id"],
+            "name": card["name"],
+            "artist": card["artist"],
+            "track_count": card["track_count"],
+            "cover_url": _local_cover_url(card.get("cover_path"), card.get("cover_art_available")),
             "recent_at": row["recent_at"],
             "recent_source": row["recent_source"],
-            "possible_duplicate": row["possible_duplicate"],
-        }
-        for row in rows
-    ]
+            "possible_duplicate": card["possible_duplicate"],
+        })
     return {"albums": albums, "total": total, "limit": limit, "offset": offset}
 
 
@@ -1392,7 +1410,14 @@ def release_tracks(release_hash: str):
     release_id = "release:" + release_hash
     rows = db.tracks_for_release(release_id)
     if not rows:
-        raise HTTPException(status_code=404, detail="Release not found")
+        if db.release_stamps_complete():
+            raise HTTPException(status_code=404, detail="Release not found")
+        # Cold or partial index after v9 migrate / one-artist stamp.
+        # One full regroup writes every release_id; later hits and 404s stay cheap.
+        _album_cards(db)
+        rows = db.tracks_for_release(release_id)
+        if not rows:
+            raise HTTPException(status_code=404, detail="Release not found")
     card = next((card for card in _album_cards(db, rows) if card["id"] == release_id), None)
     if card is None:
         raise HTTPException(status_code=404, detail="Release not found")

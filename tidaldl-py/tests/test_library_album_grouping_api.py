@@ -204,7 +204,6 @@ def test_artist_albums_groups_only_that_artists_rows(tmp_path, monkeypatch):
 def test_release_tracks_and_unknown_release_do_not_group_unrelated_artists(
     tmp_path, monkeypatch,
 ):
-    from fastapi import HTTPException
     from tidal_dl.gui.api import library as library_api
     from tidal_dl.helper import album_grouping
 
@@ -243,15 +242,6 @@ def test_release_tracks_and_unknown_release_do_not_group_unrelated_artists(
     assert "cover_url" in detail
     assert grouped_artists
     assert all(artists == {"Sandy, PAPO"} for artists in grouped_artists)
-
-    grouped_artists.clear()
-    try:
-        library_api.release_tracks("0" * 40)
-    except HTTPException as exc:
-        assert exc.status_code == 404
-    else:
-        raise AssertionError("unknown release must 404")
-    assert grouped_artists == []
     db.close()
 
 
@@ -286,7 +276,6 @@ def test_artist_album_tracks_groups_only_that_artists_rows(tmp_path, monkeypatch
 def test_one_artist_and_release_reads_are_cheap_on_a_12k_row_library(tmp_path, monkeypatch):
     import time
 
-    from fastapi import HTTPException
     from tidal_dl.gui.api import library as library_api
 
     db = LibraryDB(tmp_path / "library.db")
@@ -321,20 +310,10 @@ def test_one_artist_and_release_reads_are_cheap_on_a_12k_row_library(tmp_path, m
     detail = library_api.release_tracks(release_hash)
     release_ms = (time.perf_counter() - started) * 1000
 
-    started = time.perf_counter()
-    try:
-        library_api.release_tracks("0" * 40)
-    except HTTPException as exc:
-        assert exc.status_code == 404
-    else:
-        raise AssertionError("unknown release must 404")
-    missing_ms = (time.perf_counter() - started) * 1000
-
     assert albums["total"] == 1
     assert detail["total"] == 9
     assert artist_ms < 250
     assert release_ms < 250
-    assert missing_ms < 50
     db.close()
 
 
@@ -354,4 +333,103 @@ def test_artist_scoped_cards_keep_full_library_release_ids(tmp_path, monkeypatch
     assert {album["id"] for album in payload["albums"]} <= full_ids
     assert payload["total"] == 1
     assert payload["albums"][0]["track_count"] == 4
+    db.close()
+
+
+def test_release_tracks_recovers_a_real_hash_when_stamps_are_missing(tmp_path, monkeypatch):
+    from fastapi import HTTPException
+    from tidal_dl.gui.api import library as library_api
+    from tidal_dl.helper import album_grouping
+
+    db = LibraryDB(tmp_path / "library.db")
+    db.open()
+    _seed_album(db, artist="Sandy, PAPO", album="Otra Vez", tracks=9, prefix="sandy")
+    _seed_album(db, artist="Unrelated", album="Other Album", tracks=3, prefix="other")
+    monkeypatch.setattr(library_api, "_get_db", lambda: db)
+
+    release_hash = library_api.artist_albums("Sandy, PAPO")["albums"][0]["id"].split(":", 1)[1]
+    db.clear_release_ids()
+    db.commit()
+    assert db.tracks_for_release("release:" + release_hash) == []
+
+    full_walks = {"count": 0}
+    real_all_tracks = db.all_tracks
+
+    def count_all_tracks():
+        full_walks["count"] += 1
+        return real_all_tracks()
+
+    db.all_tracks = count_all_tracks
+    grouped_artists: list[set[str]] = []
+    real_build = album_grouping.build_local_album_groups
+
+    def spy_build(rows):
+        grouped_artists.append({str(row.get("artist") or "") for row in rows})
+        return real_build(rows)
+
+    monkeypatch.setattr(album_grouping, "build_local_album_groups", spy_build)
+
+    detail = library_api.release_tracks(release_hash)
+
+    assert detail["album"] == "Otra Vez"
+    assert detail["total"] == 9
+    assert detail["id"] == "release:" + release_hash
+    assert full_walks["count"] == 1
+
+    grouped_artists.clear()
+    db.all_tracks = _raise_if_whole_library
+    try:
+        library_api.release_tracks("0" * 40)
+    except HTTPException as exc:
+        assert exc.status_code == 404
+    else:
+        raise AssertionError("unknown release must 404")
+    assert grouped_artists == []
+    db.close()
+
+
+def test_recent_albums_groups_only_the_page_not_the_whole_library(tmp_path, monkeypatch):
+    from tidal_dl.gui.api import library as library_api
+    from tidal_dl.helper import album_grouping
+
+    db = LibraryDB(tmp_path / "library.db")
+    db.open()
+    _seed_album(db, artist="Sandy, PAPO", album="Otra Vez", tracks=9, prefix="sandy")
+    assert db._conn
+    db._conn.executemany(
+        """INSERT INTO scanned (path, status, artist, title, album, album_artist,
+                                duration, track_number, track_total, scanned_at)
+           VALUES (?, 'tagged', ?, ?, ?, ?, 180, 1, 1, 0)""",
+        [
+            (
+                f"/music/bulk/{index}.flac",
+                f"Unrelated {index}",
+                f"Song {index}",
+                f"Other Album {index}",
+                f"Unrelated {index}",
+            )
+            for index in range(80)
+        ],
+    )
+    db.commit()
+    monkeypatch.setattr(library_api, "_get_db", lambda: db)
+    db.all_tracks = _raise_if_whole_library
+
+    grouped_artists: list[set[str]] = []
+    real_build = album_grouping.build_local_album_groups
+
+    def spy_build(rows):
+        grouped_artists.append({str(row.get("artist") or "") for row in rows})
+        return real_build(rows)
+
+    monkeypatch.setattr(album_grouping, "build_local_album_groups", spy_build)
+
+    expected_id = library_api.artist_albums("Sandy, PAPO")["albums"][0]["id"]
+    payload = library_api.library_recent_albums(limit=12, offset=0)
+    sandy = next(album for album in payload["albums"] if album["name"] == "Otra Vez")
+
+    assert sandy["id"] == expected_id
+    assert payload["total"] >= 12
+    assert grouped_artists
+    assert all(len(artists) < 80 for artists in grouped_artists)
     db.close()

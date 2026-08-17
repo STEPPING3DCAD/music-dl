@@ -249,7 +249,7 @@ SQLite at `~/.config/music-dl/library.db`. Schema version 9, WAL mode, and a
 | `waveform` | TEXT | Cached standard-resolution waveform JSON |
 | `waveform_hires` | TEXT | Cached high-resolution waveform JSON |
 | `art_available` | INTEGER | Local artwork availability; `NULL` until checked |
-| `release_id` | TEXT | Current grouped release card id; stamped during album-card builds |
+| `release_id` | TEXT | Current grouped release card id; stamped during album-card builds. NULL after v9 migrate until a full regroup or a scoped card build writes it. A stamp miss recovers with one full regroup, then later lookups stay index-only. |
 | `scanned_at` | INTEGER | Unix timestamp |
 
 Indexes: `idx_scanned_status`, `idx_scanned_isrc`, `idx_scanned_release_id`
