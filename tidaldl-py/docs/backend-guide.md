@@ -323,7 +323,7 @@ Indexes: `idx_download_jobs_status_created`, `idx_download_jobs_track_id`
 
 Job creation uses an atomic `BEGIN IMMEDIATE` transaction so two requests cannot enqueue active duplicate work for the same `track_id`. Queue claiming also uses `BEGIN IMMEDIATE` and updates only a still-queued row before returning it to the worker.
 
-Startup recovery rule: queued jobs stay queued. `running`, `retrying`, and `paused` jobs become `interrupted`. Terminal jobs stay terminal.
+Startup recovery rule: queued jobs stay queued. `running`, `indexing`, `retrying`, and `paused` jobs become `interrupted`. Terminal jobs stay terminal.
 
 Pause rule: global queue pause does not rewrite queued backlog rows to `paused`; queued jobs remain `queued` so they can resume after restart.
 
@@ -434,8 +434,10 @@ POST /api/download {track_ids: [123, 456]}
   │    ├─ Commit successful track ISRC before any second LibraryDB writer
   │    ├─ Gate on `DownloadOutcome`
   │    │  ├─ `FAILED` → existing error path; never record completion
-  │    │  └─ `DOWNLOADED`, `COPIED`, `SKIPPED` → terminal success:
-  │    │     ├─ Scan new downloads into LibraryDB
+  │    │  └─ `DOWNLOADED`, `COPIED`, `SKIPPED` → index, then terminal success:
+  │    │     ├─ Mark job "indexing" and broadcast progress status "indexing"
+  │    │     ├─ Index the completed file path(s) into LibraryDB
+  │    │     │  (no full-library `rglob`; fallback walks prune skipped trash dirs)
   │    │     ├─ Record in download_history
   │    │     ├─ Mark job "done"
   │    │     └─ Broadcast SSE: {"type": "complete", "status": "done"}

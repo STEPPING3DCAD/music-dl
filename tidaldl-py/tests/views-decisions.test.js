@@ -583,6 +583,14 @@ describe('download badge and requeue decisions', () => {
     expect(badge.style.display).toBe('');
   });
 
+  test('active download card shows Indexing... during post-processing', () => {
+    const card = viewsSource.split('function updateActiveDownload(container, data) {')[1];
+    expect(card).toBeTruthy();
+    expect(card).toContain("data.status === 'indexing'");
+    expect(card).toContain('Indexing...');
+    expect(card).not.toMatch(/data\.status === 'queued' \? 'Waiting\.\.\.' : 'Downloading'/);
+  });
+
   test('single-track download can be requeued after a missed terminal event', () => {
     const downloadTrack = viewsSource.split('async function downloadTrack(track, btn) {')[1];
     expect(downloadTrack).toBeTruthy();
