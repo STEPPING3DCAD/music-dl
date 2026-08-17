@@ -1400,6 +1400,7 @@ def release_tracks(release_hash: str):
         "id": card["id"],
         "artist": card["artist"],
         "album": card["name"],
+        "cover_url": _local_cover_url(card.get("cover_path"), card.get("cover_art_available")),
         "tracks": [_db_row_to_track(track) for track in card["tracks"]],
         "total": card["track_count"],
     }

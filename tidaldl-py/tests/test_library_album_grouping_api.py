@@ -240,6 +240,7 @@ def test_release_tracks_and_unknown_release_do_not_group_unrelated_artists(
     assert detail["total"] == 9
     assert detail["album"] == "Otra Vez"
     assert detail["id"] == "release:" + release_hash
+    assert "cover_url" in detail
     assert grouped_artists
     assert all(artists == {"Sandy, PAPO"} for artists in grouped_artists)
 
