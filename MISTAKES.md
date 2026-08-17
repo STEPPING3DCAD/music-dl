@@ -1,5 +1,13 @@
 # Mistakes
 
+## 2026-08-17 — Search type chip kissed the search field gold rail
+
+**What happened:** The active Tracks pill sat flush against the search input’s gold curve. Library sort pills share the same chrome.
+
+**Root cause:** `.filter-pills` had horizontal padding only (`0 2px`). A 36px active pill and the focused input’s 4px gold glow met across the 16px `.search-area` gap.
+
+**Prevention:** Keep vertical padding (or column gap) on the shared search chrome so an active chip cannot meet a rounded gold control above it.
+
 ## 2026-08-16 — Local scan indexed Synology `#recycle` as an artist
 
 **What happened:** Artists view showed a `#recycle` heading with deleted NAS files (WAV titles like `08 Menu Groove Edit`) as if they were a real library artist.

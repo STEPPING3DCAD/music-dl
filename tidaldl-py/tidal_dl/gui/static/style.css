@@ -409,7 +409,7 @@ body {
 .filter-pills {
   display: flex;
   gap: 8px;
-  padding: 0 2px;
+  padding: 8px 2px 0;
 }
 
 .album-search-filters {
