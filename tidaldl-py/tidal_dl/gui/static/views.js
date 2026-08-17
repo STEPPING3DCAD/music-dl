@@ -4005,7 +4005,7 @@ function updateActiveDownload(container, data) {
   // Progress bar
   const barWrap = h('div', { className: 'dl-progress-wrap' });
   const barFill = h('div', { className: 'dl-progress-fill' });
-  if (data.status === 'downloading') {
+  if (data.status === 'downloading' || data.status === 'indexing') {
     barFill.classList.add('dl-progress-active');
     barFill.style.width = (data.progress || 0) + '%';
   } else {
@@ -4016,8 +4016,13 @@ function updateActiveDownload(container, data) {
   barWrap.appendChild(barFill);
   info.appendChild(barWrap);
 
+  const statusLabel = data.status === 'queued'
+    ? 'Waiting...'
+    : data.status === 'indexing'
+      ? 'Indexing...'
+      : 'Downloading';
   const statusText = textEl('div',
-    data.status === 'queued' ? 'Waiting...' : 'Downloading',
+    statusLabel,
     'dl-card-status' + (data.status === 'queued' ? ' dl-status-queued' : '')
   );
   info.appendChild(statusText);

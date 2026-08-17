@@ -13,6 +13,7 @@ class JobKind(StrEnum):
 class JobStatus(StrEnum):
     QUEUED = "queued"
     RUNNING = "running"
+    INDEXING = "indexing"
     RETRYING = "retrying"
     PAUSED = "paused"
     DONE = "done"

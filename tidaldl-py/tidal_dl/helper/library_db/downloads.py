@@ -65,7 +65,7 @@ class DownloadsMixin:
             active = self._conn.execute(
                 """SELECT 1 FROM download_jobs
                    WHERE track_id = ?
-                     AND status IN ('queued', 'running', 'retrying', 'paused')
+                     AND status IN ('queued', 'running', 'indexing', 'retrying', 'paused')
                    LIMIT 1""",
                 (track_id,),
             ).fetchone()
@@ -173,7 +173,7 @@ class DownloadsMixin:
         cur = self._conn.execute(
             """UPDATE download_jobs
                SET status = 'interrupted', finished_at = COALESCE(finished_at, ?)
-               WHERE status IN ('running', 'retrying', 'paused')""",
+               WHERE status IN ('running', 'indexing', 'retrying', 'paused')""",
             (now,),
         )
         self._conn.commit()
@@ -185,7 +185,7 @@ class DownloadsMixin:
         row = self._conn.execute(
             """SELECT 1 FROM download_jobs
                WHERE track_id = ?
-                 AND status IN ('queued', 'running', 'retrying', 'paused')
+                 AND status IN ('queued', 'running', 'indexing', 'retrying', 'paused')
                LIMIT 1""",
             (track_id,),
         ).fetchone()
@@ -196,7 +196,7 @@ class DownloadsMixin:
         assert self._conn
         row = self._conn.execute(
             """SELECT COUNT(*) FROM download_jobs
-               WHERE status IN ('queued', 'running', 'retrying', 'paused')"""
+               WHERE status IN ('queued', 'running', 'indexing', 'retrying', 'paused')"""
         ).fetchone()
         return int(row[0])
 
@@ -228,7 +228,7 @@ class DownloadsMixin:
             cur = self._conn.execute(
                 """UPDATE download_jobs
                    SET status = 'cancelled', finished_at = ?
-                   WHERE status IN ('queued', 'running', 'retrying', 'paused')""",
+                   WHERE status IN ('queued', 'running', 'indexing', 'retrying', 'paused')""",
                 (time.time(),),
             )
             self._conn.commit()
@@ -242,7 +242,7 @@ class DownloadsMixin:
         assert self._conn
         rows = self._conn.execute(
             """SELECT * FROM download_jobs
-               WHERE status IN ('running', 'retrying', 'paused')
+               WHERE status IN ('running', 'indexing', 'retrying', 'paused')
                ORDER BY created_at, id"""
         ).fetchall()
         queued = self._conn.execute(

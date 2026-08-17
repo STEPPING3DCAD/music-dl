@@ -1,5 +1,13 @@
 # Mistakes
 
+## 2026-08-17 — Post-download `rglob` walked Synology `#recycle` and stalled the worker
+
+**What happened:** After a track finished, Downloads History showed Done while Active stayed on "Waiting to start...". The worker was busy. On a Synology library, `scan_new_downloads` used `Path.rglob("*")` on the configured download root, so it recursively entered `#recycle` and other trash trees. Large deleted folders kept the next jobs queued and pegged the worker.
+
+**Root cause:** Local library indexing already skipped trash-like directory names through `is_skipped_scan_dir` / `os.walk` pruning. The post-download indexer did not. It also marked the job `done` and wrote History before that walk finished, so the UI looked idle while the worker was still scanning.
+
+**Prevention:** Index the completed file path(s) directly. If a walk is required, reuse the centralized skip helpers and prune those directories. Keep the job in an `indexing` status (and show that status) until post-processing finishes, then mark `done`.
+
 ## 2026-08-17 — Full-library album grouping on a single-artist/release read
 
 **What happened:** Artist page and release detail took 25–53s each on a 12k-row library. SQLite itself was instant. A bad release id 404'd in ~50s.
