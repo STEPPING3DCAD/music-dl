@@ -176,6 +176,50 @@ function loadRecentStripRenderer(recentlyPlayed) {
   )(h, textEl, recentlyPlayed, () => {}, () => 'gradient', () => {}, () => {}, () => {});
 }
 
+function huelepegaResume(time) {
+  const track = {
+    id: 'huelepega',
+    name: 'Huelepega / Sandy',
+    artist: 'PAPO — Otra Vez',
+    duration: 0,
+  };
+  const store = {
+    playerPosition: JSON.stringify({ key: 'huelepega', time }),
+  };
+  const continueListening = loadContinueListeningRenderer(
+    { queue: [track], queueIndex: 0 },
+    store,
+  );
+  const recentlyPlayed = [track];
+  return {
+    store,
+    continueListening,
+    recentlyPlayed,
+    renderRecentStrip: loadRecentStripRenderer(recentlyPlayed),
+  };
+}
+
+function offlineHomePayload() {
+  return {
+    total_plays: 0,
+    track_count: 0,
+    album_count: 0,
+    volume_available: false,
+  };
+}
+
+function delayedHomeApi() {
+  const pending = [];
+  return {
+    api: () => new Promise((resolve) => { pending.push(resolve); }),
+    resolveNext(data) {
+      const resolve = pending.shift();
+      if (!resolve) throw new Error('no pending /home');
+      resolve(data);
+    },
+  };
+}
+
 describe('Home view decisions', () => {
   test('shows an honest error instead of an empty-library state when Home fails', async () => {
     const renderHome = loadHomeRenderer(async () => { throw new Error('HTTP 500'); });
@@ -190,27 +234,8 @@ describe('Home view decisions', () => {
   });
 
   test('a second Home paint cannot leave two resume tiles or two recent strips', async () => {
-    const track = {
-      id: 'huelepega',
-      name: 'Huelepega / Sandy',
-      artist: 'PAPO — Otra Vez',
-      duration: 0,
-    };
-    const store = {
-      playerPosition: JSON.stringify({ key: 'huelepega', time: 118 }),
-    };
-    const continueListening = loadContinueListeningRenderer(
-      { queue: [track], queueIndex: 0 },
-      store,
-    );
-    const recentlyPlayed = [track];
-    const renderRecentStrip = loadRecentStripRenderer(recentlyPlayed);
-    const homeData = {
-      total_plays: 0,
-      track_count: 0,
-      album_count: 0,
-    };
-    const renderHome = loadHomeRenderer(async () => homeData, {
+    const { store, continueListening, recentlyPlayed, renderRecentStrip } = huelepegaResume(118);
+    const renderHome = loadHomeRenderer(async () => offlineHomePayload(), {
       _renderContinueListening: continueListening._renderContinueListening,
       _renderRecentStrip: renderRecentStrip,
       recentlyPlayed,
@@ -224,6 +249,8 @@ describe('Home view decisions', () => {
     expect(container.querySelectorAll('.home-wrap')).toHaveLength(1);
     expect(container.querySelectorAll('.continue-card')).toHaveLength(1);
     expect(container.querySelectorAll('.home-recent-section')).toHaveLength(1);
+    expect(container.querySelectorAll('.volume-offline-banner')).toHaveLength(1);
+    expect(container.textContent).toContain('Your music drive is offline — showing what we remember');
     expect(container.textContent).toContain('Continue Listening');
     expect(container.textContent).toContain('Resume at 1:59');
     expect(container.textContent).not.toContain('Resume at 1:58');
@@ -234,6 +261,38 @@ describe('Home view decisions', () => {
     renderRecentStrip(wrap);
     expect(wrap.querySelectorAll('.continue-card')).toHaveLength(1);
     expect(wrap.querySelectorAll('.home-recent-section')).toHaveLength(1);
+  });
+
+  test('a delayed offline /home cannot stack a second resume tile', async () => {
+    const { store, continueListening, recentlyPlayed, renderRecentStrip } = huelepegaResume(118);
+    const home = delayedHomeApi();
+    const renderHome = loadHomeRenderer(home.api, {
+      _renderContinueListening: continueListening._renderContinueListening,
+      _renderRecentStrip: renderRecentStrip,
+      recentlyPlayed,
+    });
+    const container = createConnectedContainer();
+
+    const firstPaint = renderHome(container);
+    const secondPaint = renderHome(container);
+    expect(container.querySelectorAll('.home-wrap')).toHaveLength(1);
+
+    home.resolveNext(offlineHomePayload());
+    await firstPaint;
+    expect(container.querySelectorAll('.continue-card')).toHaveLength(0);
+
+    store.playerPosition = JSON.stringify({ key: 'huelepega', time: 119 });
+    home.resolveNext(offlineHomePayload());
+    await secondPaint;
+
+    expect(container.querySelectorAll('.home-wrap')).toHaveLength(1);
+    expect(container.querySelectorAll('.continue-card')).toHaveLength(1);
+    expect(container.querySelectorAll('.home-recent-section')).toHaveLength(1);
+    expect(container.querySelectorAll('.volume-offline-banner')).toHaveLength(1);
+    expect(container.textContent).toContain('Your music drive is offline — showing what we remember');
+    expect(container.textContent).toContain('Continue Listening');
+    expect(container.textContent).toContain('Resume at 1:59');
+    expect(container.textContent).not.toContain('Resume at 1:58');
   });
 });
 

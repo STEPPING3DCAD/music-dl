@@ -10,11 +10,11 @@
 
 ## 2026-08-18 — Home showed two identical Continue Listening tiles
 
-**What happened:** After v1.7.6 the Tetrarch saw two resume tiles on Home for the same track (Huelepega / Sandy, PAPO — Otra Vez) with Resume 1:58 and Resume 1:59. Footer `#now-playing` was not the extra copy.
+**What happened:** After v1.7.6 the Tetrarch saw two resume tiles on Home for the same track (Huelepega / Sandy, PAPO — Otra Vez) with Resume 1:58 and Resume 1:59. The pair appeared when `/Volumes/Music` was unmounted or unreachable. After a quit/reopen with the volume up, Home was one tile again. Footer `#now-playing` was not the extra copy.
 
-**Root cause:** `renderHome` appends a `.home-wrap` before `await /home`. A second paint on the same view container (reload, overlapping navigate, or `/home` resolving twice about a second apart) appended another wrap instead of replacing. `_renderContinueListening` and `_renderRecentStrip` were also append-only. `_initApp` can paint `.home-recent-section` when `/home/recent` wins the race, then `renderHome` paints it again on the same wrap.
+**Root cause:** `renderHome` appends a `.home-wrap` before `await /home`. When the music volume is down, `/home` is slow or retried (NAS `Path.is_dir()`/`stat`, or a second navigate while the first fetch is still in flight). The second paint appended another wrap instead of replacing. `_renderContinueListening` and `_renderRecentStrip` were also append-only. `_initApp` can paint `.home-recent-section` when `/home/recent` wins the race, then `renderHome` paints it again on the same wrap. `volume_available === false` correctly adds the offline banner; that path must still leave one resume tile.
 
-**Prevention:** At most one `.home-wrap` in the view container, one `.continue-card`, and one `.home-recent-section`. A later paint removes the previous node and appends the new one. Keep the live eyebrow **Continue Listening**. Do not add a second Now Playing section. Decision-test a second Home paint so two resume tiles or two recent strips fail.
+**Prevention:** At most one `.home-wrap` in the view container, one `.continue-card`, and one `.home-recent-section`. A later paint — including an overlapping delayed `/home` with `volume_available: false` — removes the previous node and appends the new one. Offline banner + one Continue Listening tile is fine; two resume tiles is not. Keep the live eyebrow **Continue Listening**. Do not add a second Now Playing section. Decision-test the delayed offline `/home` race, not only a generic second navigate.
 
 ## 2026-08-18 — Artist search tiles showed photos with no name
 

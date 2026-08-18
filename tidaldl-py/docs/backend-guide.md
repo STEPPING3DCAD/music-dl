@@ -538,11 +538,17 @@ album cards are built only by album-library routes, not during Home loading.
 The Home client paints one `.home-wrap` in the view container. After `/home`
 returns it adds at most one Continue Listening `.continue-card` from
 `playerPosition` plus the current queue, then at most one
-`.home-recent-section`. A second `renderHome` or `_renderRecentStrip` call
-replaces those nodes; it must not append a duplicate. Footer `#now-playing`
-is the real Now Playing chrome and is separate from the Home resume tile.
-`GET /home/recent` may resolve after first paint; that path must reuse the
-same recent strip, not stack a second one.
+`.home-recent-section`. A second `renderHome` — including an overlapping
+paint while a delayed `/home` is still in flight, or `volume_available:
+false` after an unmounted `/music` volume — replaces those nodes; it must
+not append a duplicate. The offline banner ("Your music drive is offline —
+showing what we remember") plus one resume tile is correct; two resume
+tiles is not. Footer `#now-playing` is the real Now Playing chrome and is
+separate from the Home resume tile. `GET /home/recent` may resolve after
+first paint; that path must reuse the same recent strip, not stack a
+second one. First `/home` still must not `Path.is_dir()`/`stat` the NAS
+on the ready path; the client must survive a slow or retried `/home`
+without stacking tiles.
 
 `GET /library/recent-albums` pages album recency in SQL (scan vs download,
 Various Artists when a title has multiple artists) without a per-album
