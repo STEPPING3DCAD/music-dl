@@ -20,7 +20,7 @@ uv tool install --from git+https://github.com/alfdav/music-dl.git#subdirectory=t
 
 ---
 
-## Unreleased
+## v1.7.6 (2026-08-18)
 - Skip NAS trash dirs (`#recycle` and similar) from the local library scan ([#131](https://github.com/alfdav/music-dl/pull/131)).
 - Stop full-library album grouping on artist and release reads ([#133](https://github.com/alfdav/music-dl/pull/133)).
 - Stop post-download scans from walking library trash ([#134](https://github.com/alfdav/music-dl/pull/134)).
