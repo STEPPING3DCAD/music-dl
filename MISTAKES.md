@@ -15,6 +15,15 @@
 
 **Prevention:** Keep a `_navStack` of `{ view, librarySort, libraryQuery, scrollY }`. Default `navigate()` pushes the outgoing snapshot. `{ jump: true }` / `{ replace: true }` (sidebar, Sync Library) clear the stack. `{ back: true }` pops and restores library sort/query before `renderLibrary`. Do not wipe `libraryQuery` on mount. Show a quiet `.nav-back` chevron on drill-ins only when the stack is non-empty. Do not treat sidebar clicks as stack pops.
 
+## 2026-08-18 — Albums gallery regrouped the whole library on every paint
+
+**What happened:** Library sort pill "Album" called `GET /api/library/albums` and sat ~16–25s with zero bytes on a ~12k-row / ~1565-album library. `GET /api/library` was ~22ms.
+
+**Root cause:** `all_albums` always called `_album_cards(db)` with no row subset. That is `db.all_tracks()` plus `find_candidates` = `combinations(N albums, 2)` (~1.2M pairs) and `assess_pair` for every pair. Scan/enrichment had already stamped `release_id` and stored assessments; the gallery ignored both. The same full-library grouping cost was already forbidden on artist click (PR 133) and Home/recent-albums (PR 137).
+
+**Prevention:** When `release_stamps_complete()`, build gallery cards from stamped `release_id` groups. Do not call `all_tracks()` or `find_candidates` on the whole library. Attach stored `album_grouping_assessments` by reconstructing `release:` ids from left/right signatures so possible_duplicate / review / members / Various Artists / cover_url stay correct. Avoid correlated cover-art subqueries. Cold after v9 migrate (stamps incomplete): one full `_album_cards(db)` that writes every stamp, then later paints use the stamp path. A grouping decision restamps only the pair. Lock the warmed 12k gallery to the same <250ms budget as artist/release/recent-albums.
+
+
 ## 2026-08-18 — Lyrics panel stayed empty for years
 
 **What happened:** Opening Lyrics on now-playing (including library files with no `.lrc` / tags, and Tidal-only streams) showed nothing. Live 1.7.6 `GET /api/lyrics/local` returned `{mode: none}` because download settings `lyrics_embed` and `lyrics_file` default off, so `metadata_write` never called `track.lyrics()`.

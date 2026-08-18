@@ -249,7 +249,7 @@ SQLite at `~/.config/music-dl/library.db`. Schema version 9, WAL mode, and a
 | `waveform` | TEXT | Cached standard-resolution waveform JSON |
 | `waveform_hires` | TEXT | Cached high-resolution waveform JSON |
 | `art_available` | INTEGER | Local artwork availability; `NULL` until checked |
-| `release_id` | TEXT | Current grouped release card id; stamped during album-card builds. NULL after v9 migrate until a full regroup or a scoped card build writes it. A stamp miss recovers with one full regroup, then later lookups stay index-only. |
+| `release_id` | TEXT | Current grouped release card id; stamped during album-card builds. NULL after v9 migrate until a full regroup or a scoped card build writes it. A stamp miss recovers with one full regroup, then later lookups stay index-only. The albums gallery (`GET /library/albums`) uses these stamps when complete and must not regroup the whole library on every paint. |
 | `scanned_at` | INTEGER | Unix timestamp |
 
 Indexes: `idx_scanned_status`, `idx_scanned_isrc`, `idx_scanned_release_id`
@@ -369,7 +369,7 @@ Additive only. `open()` reads SQLite's native `PRAGMA user_version`: databases b
 5. **v5 → v6**: Add `codec` and `metadata_complete` to `scanned`; backfill unambiguous native codecs and repair remaining legacy rows on the next scan
 6. **v6 → v7**: Add nullable release identity, position, and total fields to `scanned`; queue existing readable rows for one metadata repair pass
 7. **v7 → v8**: Add `album_grouping_assessments` for explainable scores, catalog state, and current user choices
-8. **v8 → v9**: Add `release_id` on `scanned` so one-artist/one-release reads can load those rows without regrouping the whole library
+8. **v8 → v9**: Add `release_id` on `scanned` so one-artist/one-release reads and the albums gallery can load those rows without regrouping the whole library
 9. **Late additions**: Add `cover_url` and `quality` to `download_history`
 10. **Download jobs and favorites**: Create their tables and lookup indexes when absent
 
@@ -529,6 +529,7 @@ use FastAPI's `/api/docs` or `gui/api/__init__.py` for the complete current set.
 | Method | Path | Purpose |
 |--------|------|---------|
 | `GET` | `/library` | Paginated local tracks, grouped by artist |
+| `GET` | `/library/albums` | Full local album gallery from stamped release ids |
 | `GET` | `/library/recent-albums` | First page of recently added releases |
 | `POST` | `/library/scan` | Trigger background library scan |
 | `GET` | `/library/scan/status` | Poll scan progress: `{scanning, scanned, total, done, phase, error}`. `phase` is `idle`, `preparing`, `repairing`, `discovering`, `indexing`, `sweeping`, `finalizing`, `done`, or `error`. During discovery `total` may be 0 while `scanned` increments. |
@@ -549,6 +550,15 @@ first paint; that path must reuse the same recent strip, not stack a
 second one. First `/home` still must not `Path.is_dir()`/`stat` the NAS
 on the ready path; the client must survive a slow or retried `/home`
 without stacking tiles.
+
+`GET /library/albums` returns the full gallery. When every readable album
+row already has a `release_id`, cards come from those stamp groups plus
+stored `album_grouping_assessments` (possible_duplicate, review payloads,
+members, Various Artists, cover URLs). It does not call `all_tracks()` or
+`find_candidates` on the whole library, and it does not use a per-album
+cover-art subquery. After v9 migrate, stamps are NULL: one full regroup
+writes every stamp, then later paints stay on the stamp path. A grouping
+decision restamps only that pair.
 
 `GET /library/recent-albums` pages album recency in SQL (scan vs download,
 Various Artists when a title has multiple artists) without a per-album

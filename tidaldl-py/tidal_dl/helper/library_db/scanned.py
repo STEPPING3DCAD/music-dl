@@ -64,6 +64,16 @@ class ScannedMixin:
             "SELECT * FROM album_grouping_assessments WHERE pair_key = ?",
             (self.grouping_pair_key(left_signature, right_signature),),
         ).fetchone()
+        return self._decode_assessment_row(row)
+
+    def list_grouping_assessments(self) -> list[dict]:
+        """Return every stored pair assessment without regrouping."""
+        assert self._conn
+        rows = self._conn.execute("SELECT * FROM album_grouping_assessments").fetchall()
+        return [decoded for row in rows if (decoded := self._decode_assessment_row(row))]
+
+    @staticmethod
+    def _decode_assessment_row(row) -> dict | None:
         if not row:
             return None
         result = dict(row)
