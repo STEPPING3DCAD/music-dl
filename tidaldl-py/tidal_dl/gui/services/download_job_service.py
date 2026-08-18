@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sqlite3
 import threading
 import time
 from collections.abc import Callable, Iterable
@@ -19,7 +20,7 @@ from tidal_dl.gui.services.upgrade_jobs import (
     norm,
     resolve_tidal_album,
 )
-from tidal_dl.helper.library_db import LibraryDB
+from tidal_dl.helper.library_db import LibraryDB, is_sqlite_lock_error
 from tidal_dl.helper.path import format_path_media, path_config_base
 from tidal_dl.model.downloader import DownloadOutcome
 
@@ -78,62 +79,62 @@ def _iter_download_files(root: Path, extensions: set[str]) -> Iterable[Path]:
             yield file_path
 
 
-def _record_downloaded_file(db, file_path: Path, roots: list[Path], known: set[str]) -> bool:
+def _prepare_downloaded_file(file_path: Path, roots: list[Path], known: set[str]) -> dict | None:
     from tidal_dl.gui.api.library import _AUDIO_EXTENSIONS, _read_metadata
     from tidal_dl.helper.library_scanner import path_has_skipped_scan_dir
 
     if path_has_skipped_scan_dir(file_path):
-        return False
+        return None
     if file_path.suffix.lower() not in _AUDIO_EXTENSIONS:
-        return False
+        return None
     path_str = str(file_path)
     if path_str in known:
-        return False
+        return None
     meta = _read_metadata(file_path, roots)
     if meta:
-        db.record(
-            path_str,
-            status="tagged" if meta["isrc"] else "needs_isrc",
-            isrc=meta["isrc"] or None,
-            artist=meta["artist"],
-            title=meta["name"],
-            album=meta["album"],
-            album_artist=meta.get("album_artist"),
-            release_date=meta.get("release_date"),
-            track_number=meta.get("track_number"),
-            track_total=meta.get("track_total"),
-            disc_number=meta.get("disc_number"),
-            disc_total=meta.get("disc_total"),
-            musicbrainz_release_id=meta.get("musicbrainz_release_id"),
-            musicbrainz_release_group_id=meta.get("musicbrainz_release_group_id"),
-            provider_namespace=meta.get("provider_namespace"),
-            provider_album_id=meta.get("provider_album_id"),
-            barcode=meta.get("barcode"),
-            duration=meta["duration"],
-            genre=meta.get("genre"),
-            quality=meta["quality"],
-            fmt=meta["format"],
-            codec=meta["codec"],
-            metadata_complete=True,
-        )
+        record = {
+            "path": path_str,
+            "status": "tagged" if meta["isrc"] else "needs_isrc",
+            "isrc": meta["isrc"] or None,
+            "artist": meta["artist"],
+            "title": meta["name"],
+            "album": meta["album"],
+            "album_artist": meta.get("album_artist"),
+            "release_date": meta.get("release_date"),
+            "track_number": meta.get("track_number"),
+            "track_total": meta.get("track_total"),
+            "disc_number": meta.get("disc_number"),
+            "disc_total": meta.get("disc_total"),
+            "musicbrainz_release_id": meta.get("musicbrainz_release_id"),
+            "musicbrainz_release_group_id": meta.get("musicbrainz_release_group_id"),
+            "provider_namespace": meta.get("provider_namespace"),
+            "provider_album_id": meta.get("provider_album_id"),
+            "barcode": meta.get("barcode"),
+            "duration": meta["duration"],
+            "genre": meta.get("genre"),
+            "quality": meta["quality"],
+            "fmt": meta["format"],
+            "codec": meta["codec"],
+            "metadata_complete": True,
+        }
     else:
-        db.record(
-            path_str,
-            status="unreadable",
-            codec="unknown",
-            metadata_complete=True,
-        )
+        record = {
+            "path": path_str,
+            "status": "unreadable",
+            "codec": "unknown",
+            "metadata_complete": True,
+        }
     known.add(path_str)
-    return True
+    return record
 
 
 def scan_new_downloads(db, settings, paths: Iterable[Path] | None = None) -> None:
-    from tidal_dl.gui.api.library import _AUDIO_EXTENSIONS
+    from tidal_dl.gui.api.library import _AUDIO_EXTENSIONS, _flush_record_batch
 
     dl_path = Path(settings.data.download_base_path).expanduser()
     roots = [dl_path]
     known = db.known_paths()
-    batch = 0
+    pending: list[dict] = []
 
     if paths is not None:
         candidates = (Path(path) for path in paths)
@@ -143,14 +144,15 @@ def scan_new_downloads(db, settings, paths: Iterable[Path] | None = None) -> Non
     for file_path in candidates:
         if not file_path.is_file():
             continue
-        if _record_downloaded_file(db, file_path, roots, known):
-            batch += 1
-            if batch >= 50:
-                db.commit()
-                batch = 0
+        record = _prepare_downloaded_file(file_path, roots, known)
+        if record is None:
+            continue
+        pending.append(record)
+        if len(pending) >= 50:
+            _flush_record_batch(db, pending)
+            pending.clear()
 
-    if batch > 0:
-        db.commit()
+    _flush_record_batch(db, pending)
 
     import tidal_dl.gui.api.library as lib_mod
 
@@ -441,6 +443,12 @@ class DownloadJobService:
             db = self._open_db()
             try:
                 row = db.claim_next_download_job()
+            except sqlite3.OperationalError as exc:
+                if not is_sqlite_lock_error(exc):
+                    raise
+                logger.warning("download worker deferred claim; library db locked")
+                time.sleep(0.25)
+                continue
             finally:
                 db.close()
             if row is None:

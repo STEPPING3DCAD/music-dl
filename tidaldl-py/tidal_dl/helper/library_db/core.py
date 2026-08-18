@@ -1,6 +1,34 @@
 """Connection lifecycle and schema migrations."""
 
+from __future__ import annotations
+
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
+
 from tidal_dl.helper.library_db._common import *
+
+_WRITE_LOCKS: dict[str, threading.Lock] = {}
+_WRITE_LOCKS_GUARD = threading.Lock()
+_SQLITE_LOCK_MARKERS = ("database is locked", "database is busy")
+_IMMEDIATE_ATTEMPTS = 4
+_IMMEDIATE_RETRY_BASE_SEC = 0.02
+_IMMEDIATE_RETRY_CAP_SEC = 0.25
+
+
+def is_sqlite_lock_error(exc: BaseException) -> bool:
+    """Return True for a transient SQLite writer-lock failure."""
+    if not isinstance(exc, sqlite3.OperationalError):
+        return False
+    message = str(exc).lower()
+    return any(marker in message for marker in _SQLITE_LOCK_MARKERS)
+
+
+def write_lock_for(db_path: pathlib.Path | str) -> threading.Lock:
+    """Return the process-wide writer lock for one library database file."""
+    key = str(pathlib.Path(db_path).resolve())
+    with _WRITE_LOCKS_GUARD:
+        return _WRITE_LOCKS.setdefault(key, threading.Lock())
 
 
 class LibraryDBCore:
@@ -342,6 +370,40 @@ class LibraryDBCore:
             """CREATE INDEX IF NOT EXISTS idx_album_grouping_signatures
                ON album_grouping_assessments(left_signature, right_signature)"""
         )
+
+    def begin_immediate(self) -> None:
+        """Acquire a reserved writer lock, retrying transient contention."""
+        assert self._conn
+        delay = _IMMEDIATE_RETRY_BASE_SEC
+        last_error: sqlite3.OperationalError | None = None
+        for attempt in range(_IMMEDIATE_ATTEMPTS):
+            try:
+                self._conn.execute("BEGIN IMMEDIATE")
+                return
+            except sqlite3.OperationalError as exc:
+                last_error = exc
+                if not is_sqlite_lock_error(exc) or attempt == _IMMEDIATE_ATTEMPTS - 1:
+                    raise
+                time.sleep(delay)
+                delay = min(delay * 2, _IMMEDIATE_RETRY_CAP_SEC)
+        if last_error is not None:
+            raise last_error
+
+    @contextmanager
+    def write_transaction(self, *, immediate: bool = False) -> Iterator[None]:
+        """Hold the per-db writer lock for one short SQL transaction."""
+        assert self._conn
+        with write_lock_for(self._path):
+            if immediate:
+                self.begin_immediate()
+            try:
+                yield
+                if self._conn.in_transaction:
+                    self._conn.commit()
+            except Exception:
+                if self._conn is not None and self._conn.in_transaction:
+                    self._conn.rollback()
+                raise
 
     def close(self) -> None:
         if self._conn:

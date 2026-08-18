@@ -686,6 +686,7 @@ def _album_cards(
     titles = {group.signature: group.title for group in groups}
     assessments = {}
     stored_rows = {}
+    pending_saves: list[tuple] = []
     for left, right in find_candidates(groups):
         stored = db.get_grouping_assessment(left.signature, right.signature)
         stored_rows[frozenset({left.signature, right.signature})] = stored
@@ -716,16 +717,7 @@ def _album_cards(
         pair = frozenset({left.signature, right.signature})
         assessments[pair] = assessment
         payload = _assessment_payload(assessment, titles)
-        db.save_grouping_assessment(
-            left_signature=left.signature,
-            right_signature=right.signature,
-            score=assessment.score,
-            outcome=assessment.outcome,
-            evidence=payload["evidence"],
-            vetoes=payload["vetoes"],
-            contradictions=assessment.contradictions,
-            catalog=stored.get("catalog") if stored else None,
-        )
+        pending_saves.append((left, right, assessment, stored, payload))
     components, clique_review = accepted_components(groups, assessments)
     cards: list[dict] = []
     stamp_cards: list[dict] = []
@@ -774,11 +766,22 @@ def _album_cards(
             "recent_source": "scan",
         })
         stamp_cards.append({"id": cards[-1]["id"], "tracks": tracks})
-    if rows is None:
-        db.clear_release_ids()
-    db.stamp_release_ids(stamp_cards)
     if assessments or cards or rows is None:
-        db.commit()
+        with db.write_transaction(immediate=True):
+            if rows is None:
+                db.clear_release_ids()
+            for left, right, assessment, stored, payload in pending_saves:
+                db.save_grouping_assessment(
+                    left_signature=left.signature,
+                    right_signature=right.signature,
+                    score=assessment.score,
+                    outcome=assessment.outcome,
+                    evidence=payload["evidence"],
+                    vetoes=payload["vetoes"],
+                    contradictions=assessment.contradictions,
+                    catalog=stored.get("catalog") if stored else None,
+                )
+            db.stamp_release_ids(stamp_cards)
     return sorted(cards, key=lambda card: (card["name"].casefold(), card["artist"].casefold()))
 
 
@@ -824,17 +827,17 @@ def _enrich_album_candidates(db: LibraryDB) -> None:
             attempted_at = time.time()
             result = _safe_catalog_lookup(lookup)
             catalog[source] = {**result, "attempted_at": attempted_at}
-            db.save_grouping_assessment(
-                left_signature=left.signature,
-                right_signature=right.signature,
-                score=stored["score"],
-                outcome=stored["outcome"],
-                evidence=stored["evidence"],
-                vetoes=stored["vetoes"],
-                contradictions=stored["contradictions"],
-                catalog=catalog,
-            )
-            db.commit()
+            with db.write_transaction():
+                db.save_grouping_assessment(
+                    left_signature=left.signature,
+                    right_signature=right.signature,
+                    score=stored["score"],
+                    outcome=stored["outcome"],
+                    evidence=stored["evidence"],
+                    vetoes=stored["vetoes"],
+                    contradictions=stored["contradictions"],
+                    catalog=catalog,
+                )
             _album_cards(db)
             stored = db.get_grouping_assessment(left.signature, right.signature) or stored
 
@@ -989,8 +992,20 @@ def _migrate_volume_prefixes(db: LibraryDB, scan_dirs: list[Path]) -> None:
         print(f"[library] Volume prefix migration complete — {count} paths updated")
 
 
+def _flush_record_batch(db: LibraryDB, batch: list[dict]) -> None:
+    """Persist already-prepared scan rows without doing more I/O."""
+    if not batch:
+        return
+    with db.write_transaction():
+        for item in batch:
+            path = item["path"]
+            fields = {key: value for key, value in item.items() if key != "path"}
+            db.record(path, **fields)
+
+
 def _reconcile_library_rows(db: LibraryDB, *, scan_dirs: list[Path]) -> int:
     """Resolve legacy metadata facts once without repeating waveform work."""
+    pending: list[dict] = []
     repaired = 0
     for row in db.metadata_repair_worklist():
         file_path = Path(row["path"])
@@ -998,49 +1013,51 @@ def _reconcile_library_rows(db: LibraryDB, *, scan_dirs: list[Path]) -> int:
             continue
         meta = _read_metadata(file_path, scan_dirs)
         if meta:
-            db.record(
-                row["path"],
-                status="tagged" if meta["isrc"] else "needs_isrc",
-                isrc=meta["isrc"] or None,
-                artist=meta["artist"],
-                title=meta["name"],
-                album=meta["album"],
-                album_artist=meta.get("album_artist"),
-                release_date=meta.get("release_date"),
-                track_number=meta.get("track_number"),
-                track_total=meta.get("track_total"),
-                disc_number=meta.get("disc_number"),
-                disc_total=meta.get("disc_total"),
-                musicbrainz_release_id=meta.get("musicbrainz_release_id"),
-                musicbrainz_release_group_id=meta.get("musicbrainz_release_group_id"),
-                provider_namespace=meta.get("provider_namespace"),
-                provider_album_id=meta.get("provider_album_id"),
-                barcode=meta.get("barcode"),
-                duration=meta["duration"],
-                genre=meta.get("genre"),
-                quality=meta["quality"],
-                fmt=meta["format"],
-                codec=meta["codec"],
-                metadata_complete=True,
-            )
+            pending.append({
+                "path": row["path"],
+                "status": "tagged" if meta["isrc"] else "needs_isrc",
+                "isrc": meta["isrc"] or None,
+                "artist": meta["artist"],
+                "title": meta["name"],
+                "album": meta["album"],
+                "album_artist": meta.get("album_artist"),
+                "release_date": meta.get("release_date"),
+                "track_number": meta.get("track_number"),
+                "track_total": meta.get("track_total"),
+                "disc_number": meta.get("disc_number"),
+                "disc_total": meta.get("disc_total"),
+                "musicbrainz_release_id": meta.get("musicbrainz_release_id"),
+                "musicbrainz_release_group_id": meta.get("musicbrainz_release_group_id"),
+                "provider_namespace": meta.get("provider_namespace"),
+                "provider_album_id": meta.get("provider_album_id"),
+                "barcode": meta.get("barcode"),
+                "duration": meta["duration"],
+                "genre": meta.get("genre"),
+                "quality": meta["quality"],
+                "fmt": meta["format"],
+                "codec": meta["codec"],
+                "metadata_complete": True,
+            })
         else:
-            db.record(
-                row["path"],
-                status=row["status"],
-                isrc=row.get("isrc"),
-                artist=row.get("artist"),
-                title=row.get("title"),
-                album=row.get("album"),
-                duration=row.get("duration"),
-                genre=row.get("genre"),
-                quality=row.get("quality"),
-                fmt=row.get("format"),
-                codec=row.get("codec") or "unknown",
-                metadata_complete=True,
-            )
+            pending.append({
+                "path": row["path"],
+                "status": row["status"],
+                "isrc": row.get("isrc"),
+                "artist": row.get("artist"),
+                "title": row.get("title"),
+                "album": row.get("album"),
+                "duration": row.get("duration"),
+                "genre": row.get("genre"),
+                "quality": row.get("quality"),
+                "fmt": row.get("format"),
+                "codec": row.get("codec") or "unknown",
+                "metadata_complete": True,
+            })
         repaired += 1
-    if repaired:
-        db.commit()
+        if len(pending) >= 50:
+            _flush_record_batch(db, pending)
+            pending.clear()
+    _flush_record_batch(db, pending)
     return repaired
 
 
@@ -1111,7 +1128,6 @@ def _background_scan(rescan: bool) -> None:
         with _scan_lock:
             _scan_progress = {"scanned": 0, "total": 0, "done": False}
         disk_paths: set[str] = set()
-        batch = 0
 
         if scan_dirs:
             # Phase 1: Walk filesystem — fast, just collect paths
@@ -1134,6 +1150,7 @@ def _background_scan(rescan: bool) -> None:
 
             new_paths = disk_paths - known
             _scan_progress["scanned"] = 0
+            pending_records: list[dict] = []
             for path_str in new_paths:
                 file_path = Path(path_str)
                 art_available = _has_local_art(file_path)
@@ -1147,47 +1164,48 @@ def _background_scan(rescan: bool) -> None:
                         waveform_json = peaks_to_json(both[0])
                         hires_json = peaks_to_json(both[1])
 
-                    db.record(
-                        path_str,
-                        status="tagged" if meta["isrc"] else "needs_isrc",
-                        isrc=meta["isrc"] or None,
-                        artist=meta["artist"],
-                        title=meta["name"],
-                        album=meta["album"],
-                        album_artist=meta.get("album_artist"),
-                        release_date=meta.get("release_date"),
-                        track_number=meta.get("track_number"),
-                        track_total=meta.get("track_total"),
-                        disc_number=meta.get("disc_number"),
-                        disc_total=meta.get("disc_total"),
-                        musicbrainz_release_id=meta.get("musicbrainz_release_id"),
-                        musicbrainz_release_group_id=meta.get("musicbrainz_release_group_id"),
-                        provider_namespace=meta.get("provider_namespace"),
-                        provider_album_id=meta.get("provider_album_id"),
-                        barcode=meta.get("barcode"),
-                        duration=meta["duration"],
-                        genre=meta.get("genre"),
-                        quality=meta["quality"],
-                        fmt=meta["format"],
-                        codec=meta["codec"],
-                        metadata_complete=True,
-                        waveform=waveform_json,
-                        waveform_hires=hires_json,
-                        art_available=art_available,
-                    )
+                    pending_records.append({
+                        "path": path_str,
+                        "status": "tagged" if meta["isrc"] else "needs_isrc",
+                        "isrc": meta["isrc"] or None,
+                        "artist": meta["artist"],
+                        "title": meta["name"],
+                        "album": meta["album"],
+                        "album_artist": meta.get("album_artist"),
+                        "release_date": meta.get("release_date"),
+                        "track_number": meta.get("track_number"),
+                        "track_total": meta.get("track_total"),
+                        "disc_number": meta.get("disc_number"),
+                        "disc_total": meta.get("disc_total"),
+                        "musicbrainz_release_id": meta.get("musicbrainz_release_id"),
+                        "musicbrainz_release_group_id": meta.get("musicbrainz_release_group_id"),
+                        "provider_namespace": meta.get("provider_namespace"),
+                        "provider_album_id": meta.get("provider_album_id"),
+                        "barcode": meta.get("barcode"),
+                        "duration": meta["duration"],
+                        "genre": meta.get("genre"),
+                        "quality": meta["quality"],
+                        "fmt": meta["format"],
+                        "codec": meta["codec"],
+                        "metadata_complete": True,
+                        "waveform": waveform_json,
+                        "waveform_hires": hires_json,
+                        "art_available": art_available,
+                    })
                 else:
-                    db.record(
-                        path_str,
-                        status="unreadable",
-                        art_available=art_available,
-                        codec="unknown",
-                        metadata_complete=True,
-                    )
-                batch += 1
-                if batch >= 50:
-                    db.commit()
-                    batch = 0
+                    pending_records.append({
+                        "path": path_str,
+                        "status": "unreadable",
+                        "art_available": art_available,
+                        "codec": "unknown",
+                        "metadata_complete": True,
+                    })
+                if len(pending_records) >= 50:
+                    _flush_record_batch(db, pending_records)
+                    pending_records.clear()
                 _scan_progress["scanned"] += 1
+
+            _flush_record_batch(db, pending_records)
 
             # Prune deleted files — with safety threshold for volume remounts
             stale = known - disk_paths
@@ -1197,11 +1215,10 @@ def _background_scan(rescan: bool) -> None:
                     " — possible volume remount"
                 )
             else:
-                for p in stale:
-                    db.remove(p)
-
-            if batch > 0 or stale:
-                db.commit()
+                if stale:
+                    with db.write_transaction():
+                        for p in stale:
+                            db.remove(p)
 
         with _scan_lock:
             _scan_progress["done"] = True
@@ -1228,7 +1245,7 @@ def _background_scan(rescan: bool) -> None:
             "SELECT path FROM scanned WHERE (genre IS NULL OR genre = '') AND status != 'unreadable' LIMIT 200"
         ).fetchall()
         if missing:
-            gfilled = 0
+            genre_updates: list[tuple[str, str]] = []
             for row in missing:
                 p = Path(row[0])
                 try:
@@ -1244,15 +1261,15 @@ def _background_scan(rescan: bool) -> None:
                         else:
                             genre = None
                         if genre:
-                            db._conn.execute(
-                                "UPDATE scanned SET genre = ? WHERE path = ?",
-                                (genre, row[0]),
-                            )
-                            gfilled += 1
+                            genre_updates.append((genre, row[0]))
                 except Exception:  # noqa: BLE001, S110
                     pass
-            if gfilled:
-                db.commit()
+            if genre_updates:
+                with db.write_transaction():
+                    db._conn.executemany(
+                        "UPDATE scanned SET genre = ? WHERE path = ?",
+                        genre_updates,
+                    )
 
         # Local scoring completes with the scan. Optional network work gets its
         # own background pass so it cannot extend the scan's busy state.
