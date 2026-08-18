@@ -14,7 +14,15 @@
 
 **Root cause:** `updateNowPlayingButtons` hid Download only when `current.is_local` was truthy. Tidal-shaped queue items (search, album tracks, Show on Tidal) often have an `id` and omit `is_local` even when the same recording is on disk. `album_lookup` then forced `is_local = False` and only restored it on a `(title, artist, album)` triple against Tidal's album string, without stamping `path` / `local_path`. A leftover ISRC `path` from `_serialize_track` was ignored by the player, which also streams unless `is_local` is set.
 
-**Prevention:** Hide `#now-download` when `is_local`, `path` / `local_path`, or the audio src is `/api/playback/local`. Stamp `is_local` plus `path` / `local_path` from album-scoped title+artist (the queried release's files), never ISRC. Clicking Download on a local track toasts "Already in your library" and must not enqueue again.
+**Prevention:** Hide `#now-download` when `is_local`, `path` / `local_path`, or the audio src is `/api/playback/local`. Stamp `is_local` plus `path` / `local_path` from album-scoped title+artist (the queried release's files), never ISRC. Clicking Download on a local track toasts "Already in your library" and must not enqueue again. The now-playing bar must name the source: `#now-source` uses the track-row `source-tag` chip and prefers the audio src (`/api/playback/local` → local, `/api/playback/stream/` → tidal) over queue flags.
+
+## 2026-08-18 — Now-playing bar did not name Local vs Tidal
+
+**What happened:** While a downloaded track played, the footer showed title, artist — album, and quality, but not whether audio came from the file or a Tidal stream.
+
+**Root cause:** Track rows already paint `source-tag` / `local-tag` / `tidal-tag`. The now-playing bar did not. Queue `is_local` alone is also the wrong signal; a library match should play `/api/playback/local`.
+
+**Prevention:** Paint `#now-source` in `.now-sub-row` with those classes and the text `local` or `tidal`. Prefer audio src, then on-disk flags vs Tidal id. Hide when idle.
 
 ## 2026-08-18 — Cold boot waited on Tidal before the sidecar was ready
 

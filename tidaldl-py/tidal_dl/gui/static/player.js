@@ -96,6 +96,30 @@ function _nowPlayingDownloadHidden(track, audioSrc) {
   return String(audioSrc || '').includes('/playback/local');
 }
 
+function _nowPlayingSource(track, audioSrc) {
+  const src = String(audioSrc || '');
+  if (src.includes('/playback/local')) return 'local';
+  if (src.includes('/playback/stream/')) return 'tidal';
+  if (!track) return null;
+  if (track.is_local || track.local_path || track.path) return 'local';
+  if (track.id) return 'tidal';
+  return null;
+}
+
+function _updateNowPlayingSourceChip(track, audioSrc) {
+  const el = document.getElementById('now-source');
+  if (!el) return;
+  const source = _nowPlayingSource(track, audioSrc);
+  if (!source) {
+    el.textContent = '';
+    el.style.display = 'none';
+    return;
+  }
+  el.textContent = source;
+  el.className = 'source-tag ' + (source === 'local' ? 'local-tag' : 'tidal-tag');
+  el.style.display = '';
+}
+
 function _lyricsOpen() {
   return lyricsState.lyricsPanelState !== 'closed';
 }
@@ -665,6 +689,7 @@ function updatePlayerHeart() {
   if (!hasTrack) {
     heartEl.style.display = 'none';
     dlEl.style.display = 'none';
+    _updateNowPlayingSourceChip(null, '');
     return;
   }
 
@@ -677,6 +702,7 @@ function updatePlayerHeart() {
   }
   const downloadTrack = current || recent || null;
   dlEl.style.display = _nowPlayingDownloadHidden(downloadTrack, audioSrc) ? 'none' : '';
+  _updateNowPlayingSourceChip(downloadTrack, audioSrc);
 }
 
 // ---- PLAY COUNT (30-second actual-playback threshold) ----
@@ -828,6 +854,8 @@ function updateNowPlaying(track) {
       };
       nowSub.appendChild(albumSpan);
     }
+
+    _updateNowPlayingSourceChip(track, (document.getElementById('audio') || {}).src || '');
 
     // Quality badge
     const nowQuality = document.getElementById('now-quality');
