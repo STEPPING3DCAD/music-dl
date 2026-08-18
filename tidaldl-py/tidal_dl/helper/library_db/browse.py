@@ -37,6 +37,57 @@ class BrowseMixin:
         ).fetchall()
         return [dict(r) for r in rows], total
 
+    def stamped_album_gallery(self) -> list[dict]:
+        """Build gallery rows from stamped release ids without loading SELECT *."""
+        assert self._conn
+        grouped: dict[str, dict] = {}
+        for row in self._conn.execute(
+            """SELECT release_id, album, artist, title, path, art_available, quality
+               FROM scanned
+               WHERE status != 'unreadable'
+                 AND album IS NOT NULL
+                 AND release_id IS NOT NULL"""
+        ):
+            card = grouped.setdefault(row["release_id"], {
+                "id": row["release_id"],
+                "members": set(),
+                "artists": set(),
+                "track_keys": set(),
+                "cover_path": None,
+                "cover_art_available": None,
+                "best_quality": "",
+            })
+            if row["album"]:
+                card["members"].add(row["album"])
+            if row["artist"]:
+                card["artists"].add(row["artist"])
+            card["track_keys"].add(_album_track_key({
+                "title": row["title"],
+                "artist": row["artist"],
+            }))
+            path = row["path"] or ""
+            art = row["art_available"]
+            current = (not bool(card["cover_art_available"]), card["cover_path"] or "")
+            if card["cover_path"] is None or (not bool(art), path) < current:
+                card["cover_path"] = path
+                card["cover_art_available"] = art
+            quality = str(row["quality"] or "")
+            if quality > card["best_quality"]:
+                card["best_quality"] = quality
+        result = []
+        for card in grouped.values():
+            artists = card["artists"]
+            result.append({
+                "id": card["id"],
+                "members": sorted(card["members"]),
+                "artist": next(iter(artists)) if len(artists) == 1 else "Various Artists",
+                "track_count": len(card["track_keys"]),
+                "cover_path": card["cover_path"],
+                "cover_art_available": card["cover_art_available"],
+                "best_quality": card["best_quality"],
+            })
+        return result
+
     def all_albums(self, query: str = "") -> list[dict]:
         """Return all albums grouped by album name. Multi-artist albums show 'Various Artists'."""
         assert self._conn

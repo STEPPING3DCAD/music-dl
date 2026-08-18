@@ -16,7 +16,7 @@ import sqlite3
 import threading
 import time
 from base64 import b64decode
-from collections import Counter
+from collections import Counter, defaultdict
 from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import urlencode
@@ -551,6 +551,106 @@ def _assessment_payload(assessment, titles: dict[str, str]) -> dict:
         "user_decision": assessment.user_decision,
         "user_decision_superseded": assessment.user_decision_superseded,
     }
+
+
+def _stored_assessment_payload(stored: dict, titles: dict[str, str]) -> dict:
+    evidence = stored.get("evidence") or []
+    caps = {"identity": 100, "recording": 55, "metadata": 25, "catalog": 20, "weak": 5}
+    family_scores = {
+        family: min(
+            cap,
+            sum(int(item.get("points") or 0) for item in evidence if item.get("family") == family),
+        )
+        for family, cap in caps.items()
+    }
+    sources = {
+        source
+        for item in evidence
+        if item.get("family") != "weak" and int(item.get("points") or 0) > 0
+        for source in item.get("sources") or []
+        if source != "filesystem"
+    }
+    vetoes = stored.get("vetoes") or []
+    user_decision = stored.get("user_decision")
+    return {
+        "left_signature": stored["left_signature"],
+        "right_signature": stored["right_signature"],
+        "left_title": titles.get(stored["left_signature"], ""),
+        "right_title": titles.get(stored["right_signature"], ""),
+        "score": stored["score"],
+        "outcome": stored["outcome"],
+        "family_scores": family_scores,
+        "diversity_bonus": min(15, max(0, len(sources) - 1) * 5),
+        "coverage": 0.0,
+        "evidence": evidence,
+        "vetoes": vetoes,
+        "contradictions": stored.get("contradictions") or [],
+        "user_decision": user_decision,
+        "user_decision_superseded": bool(vetoes and user_decision == "group_together"),
+    }
+
+
+def _stamped_album_cards(db: LibraryDB) -> list[dict]:
+    """Gallery cards from stamped release ids plus stored assessments."""
+    from tidal_dl.helper.album_grouping import release_id_for_signatures
+
+    cards = db.stamped_album_gallery()
+    by_id = {card["id"]: card for card in cards}
+    titles: dict[str, str] = {}
+    attached: dict[str, list[dict]] = defaultdict(list)
+    stored_by_card: dict[str, list[dict]] = defaultdict(list)
+    pending: list[tuple[dict, str, str, str]] = []
+    for stored in db.list_grouping_assessments():
+        left = stored["left_signature"]
+        right = stored["right_signature"]
+        left_id = release_id_for_signatures((left,))
+        right_id = release_id_for_signatures((right,))
+        combined_id = release_id_for_signatures((left, right))
+        if left_id in by_id and len(by_id[left_id]["members"]) == 1:
+            titles[left] = by_id[left_id]["members"][0]
+        if right_id in by_id and len(by_id[right_id]["members"]) == 1:
+            titles[right] = by_id[right_id]["members"][0]
+        pending.append((stored, left_id, right_id, combined_id))
+    for stored, left_id, right_id, combined_id in pending:
+        payload = _stored_assessment_payload(stored, titles)
+        for card_id in (left_id, right_id, combined_id):
+            if card_id in by_id:
+                attached[card_id].append(payload)
+                stored_by_card[card_id].append(stored)
+    result = []
+    for card in cards:
+        members = card["members"]
+        matching = stored_by_card.get(card["id"], [])
+        name = members[0] if len(members) == 1 else min(members, key=str.casefold)
+        for stored in matching:
+            title = stored.get("canonical_title")
+            if title in members:
+                name = title
+                break
+        assessments = attached.get(card["id"], [])
+        result.append({
+            "id": card["id"],
+            "name": name,
+            "artist": card["artist"],
+            "track_count": card["track_count"],
+            "cover_path": card["cover_path"],
+            "cover_art_available": card["cover_art_available"],
+            "best_quality": card.get("best_quality") or "",
+            "members": members,
+            "possible_duplicate": any(
+                item["outcome"] == "review" or item["user_decision_superseded"]
+                for item in assessments
+            ),
+            "assessments": assessments,
+        })
+    return sorted(result, key=lambda card: (card["name"].casefold(), card["artist"].casefold()))
+
+
+def _gallery_album_cards(db: LibraryDB) -> list[dict]:
+    """Full gallery: stamps when complete, otherwise one regroup that writes them."""
+    if db.release_stamps_complete():
+        return _stamped_album_cards(db)
+    return _album_cards(db)
 
 
 def _catalog_source_eligible(
@@ -1389,7 +1489,7 @@ def library_artists(
 def all_albums(q: str = Query("", description="Search filter")):
     """Return all albums in the local library as a gallery."""
     db = _get_db()
-    albums = _album_cards(db)
+    albums = _gallery_album_cards(db)
     query = q.strip().casefold()
     if query:
         albums = [
@@ -1564,6 +1664,7 @@ def save_grouping_decision(body: GroupingDecisionRequest):
     ):
         raise HTTPException(status_code=409, detail="Grouping assessment is stale")
     db.commit()
+    _album_cards(db, [*left.rows, *right.rows])
     return {"status": "saved", "decision": body.decision}
 
 

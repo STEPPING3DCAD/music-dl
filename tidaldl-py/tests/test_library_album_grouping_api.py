@@ -598,3 +598,142 @@ def test_recent_albums_keeps_ids_flags_order_and_various_artists(tmp_path, monke
         for albums in grouped_albums
     )
     db.close()
+
+
+def _stamp_unique_album_release_ids(db: LibraryDB) -> None:
+    """Pre-stamp one release id per album title without a full regroup."""
+    assert db._conn
+    albums = [
+        row["album"]
+        for row in db._conn.execute(
+            "SELECT DISTINCT album FROM scanned "
+            "WHERE album IS NOT NULL AND status != 'unreadable'"
+        )
+    ]
+    db._conn.executemany(
+        "UPDATE scanned SET release_id = ? WHERE album = ?",
+        [(f"release:{index:040d}", album) for index, album in enumerate(albums)],
+    )
+    db.commit()
+
+
+def test_all_albums_is_cheap_on_a_12k_row_library(tmp_path, monkeypatch):
+    from tidal_dl.gui.api import library as library_api
+
+    db = LibraryDB(tmp_path / "library.db")
+    db.open()
+    _seed_mac_like_library(db)
+    _stamp_unique_album_release_ids(db)
+    assert db.release_stamps_complete()
+    monkeypatch.setattr(library_api, "_get_db", lambda: db)
+    db.all_tracks = _raise_if_whole_library
+
+    started = time.perf_counter()
+    payload = library_api.all_albums(q="")
+    warmed_ms = (time.perf_counter() - started) * 1000
+
+    assert payload["total"] >= 1_565
+    assert len(payload["albums"]) >= 1_565
+    assert all(album["id"].startswith("release:") for album in payload["albums"])
+    assert all("cover_url" in album for album in payload["albums"])
+    # Same <250ms budget as artist/release and warmed recent-albums.
+    # Full regroup of this fixture is combinations(~1565, 2) and is too
+    # slow for CI; stamps must be the gallery path.
+    assert warmed_ms < 250
+    db.close()
+
+
+def test_all_albums_keeps_review_identity_various_artists_and_query(
+    tmp_path, monkeypatch,
+):
+    from tidal_dl.gui.api import library as library_api
+    from tidal_dl.gui.api.library import _album_cards
+
+    db = LibraryDB(tmp_path / "library.db")
+    db.open()
+    _seed_pair(db)
+    for album, suffix in (("Identity", "ia"), ("Identity (Deluxe)", "ib")):
+        for track in range(1, 5):
+            db.record(
+                f"/music/{suffix}{track}.flac",
+                status="tagged",
+                artist="Identity Artist",
+                album_artist="Identity Artist",
+                title=f"Song {track}",
+                album=album,
+                duration=180 + track,
+                isrc=f"USBBB20{track:05d}",
+                track_number=track,
+                track_total=10,
+                disc_number=1,
+                disc_total=1,
+                provider_namespace="tidal",
+                provider_album_id="identity-1",
+                art_available=False,
+            )
+    for track, artist in enumerate(("Comp A", "Comp B"), start=1):
+        db.record(
+            f"/music/comp/{track}.flac",
+            status="tagged",
+            artist=artist,
+            album_artist="Various Artists",
+            title=f"Comp Song {track}",
+            album="Hits",
+            duration=180,
+            track_number=track,
+            track_total=2,
+        )
+    db.commit()
+    _album_cards(db)
+    monkeypatch.setattr(library_api, "_get_db", lambda: db)
+    db.all_tracks = _raise_if_whole_library
+
+    payload = library_api.all_albums(q="")
+    by_name = {album["name"]: album for album in payload["albums"]}
+    review = [album for album in payload["albums"] if album["name"] in {"Album", "Album (Live)"}]
+    identity = [
+        album for album in payload["albums"]
+        if album["name"] in {"Identity", "Identity (Deluxe)"}
+        or "Identity" in album.get("members", [])
+    ]
+
+    assert len(review) == 2
+    assert all(album["possible_duplicate"] for album in review)
+    assert all(album["assessments"] for album in review)
+    assert all(album["assessments"][0]["score"] >= 60 for album in review)
+    assert len(identity) == 1
+    assert identity[0]["possible_duplicate"] is False
+    assert by_name["Hits"]["artist"] == "Various Artists"
+
+    filtered = library_api.all_albums(q="Hits")
+    assert filtered["total"] == 1
+    assert filtered["albums"][0]["name"] == "Hits"
+    assert library_api.all_albums(q="zzzz-no-match")["total"] == 0
+    db.close()
+
+
+def test_all_albums_does_not_regroup_whole_library_when_stamps_are_complete(
+    tmp_path, monkeypatch,
+):
+    from tidal_dl.gui.api import library as library_api
+
+    db = LibraryDB(tmp_path / "library.db")
+    db.open()
+    _seed_album(db, artist="Sandy, PAPO", album="Otra Vez", tracks=9, prefix="sandy")
+    _stamp_unique_album_release_ids(db)
+    monkeypatch.setattr(library_api, "_get_db", lambda: db)
+
+    calls: list[object] = []
+    real = library_api._album_cards
+
+    def spy(db_arg, rows=None, **kwargs):
+        calls.append(rows)
+        return real(db_arg, rows, **kwargs)
+
+    monkeypatch.setattr(library_api, "_album_cards", spy)
+
+    payload = library_api.all_albums(q="")
+
+    assert payload["total"] == 1
+    assert all(rows is not None for rows in calls)
+    db.close()

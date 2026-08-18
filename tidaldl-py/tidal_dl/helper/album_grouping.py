@@ -557,8 +557,12 @@ def accepted_components(
     return components, review
 
 
+def release_id_for_signatures(signatures: Iterable[str]) -> str:
+    return "release:" + _canonical_json_hash(sorted(signatures))
+
+
 def card_id(groups: Iterable[LocalAlbumGroup]) -> str:
-    return "release:" + _canonical_json_hash(sorted(group.signature for group in groups))
+    return release_id_for_signatures(group.signature for group in groups)
 
 
 def canonical_title(
