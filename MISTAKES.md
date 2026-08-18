@@ -7,6 +7,13 @@
 **Root cause:** `.pill` is a 36px box with padding but was not a flex-centered box, so the label did not sit in the capsule. `.filter-pills` had horizontal padding only (`0 2px`). A 36px pill and the focused input’s 4px gold glow met across the 16px `.search-area` gap. PR 132 already named both defects and the CSS fix, but that branch stayed behind master and was never re-applied.
 
 **Prevention:** Flex-center every `.pill` label (`display: flex; align-items: center; justify-content: center`) and `align-items: center` the row. Keep `.filter-pills` top padding (`8px 2px 0`) so an active chip cannot meet a rounded gold control above it. Do not give `.pill.active` a different height or padding. Leave `.album-search-filters .pill` at 28px. `button.pill` (Play/Shuffle, grouping, load-more) shares this chrome.
+## 2026-08-18 — Library remount lost Plays, search, and the way back
+
+**What happened:** Tetrarch opened a song/album cell from Library → Plays, landed on the album, and had no way back to that Plays list. Library and Plays in the sidebar were the only exits, and both felt like starting over.
+
+**Root cause:** `navigate()` remounts and only saved `scrollY` in `_viewState`. Breadcrumbs are destination jumps, not a stack — album crumbs go to Library. `renderLibrary` wiped `libraryQuery` on every mount and reloaded albums/artists with `''`, so even a Library remount dropped search. `librarySort` survived as a global, but the Plays context still felt gone because there was no previous-view pop.
+
+**Prevention:** Keep a `_navStack` of `{ view, librarySort, libraryQuery, scrollY }`. Default `navigate()` pushes the outgoing snapshot. `{ jump: true }` / `{ replace: true }` (sidebar, Sync Library) clear the stack. `{ back: true }` pops and restores library sort/query before `renderLibrary`. Do not wipe `libraryQuery` on mount. Show a quiet `.nav-back` chevron on drill-ins only when the stack is non-empty. Do not treat sidebar clicks as stack pops.
 
 ## 2026-08-18 — Lyrics panel stayed empty for years
 

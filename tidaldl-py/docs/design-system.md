@@ -307,6 +307,13 @@ padding: 0;
 - Focus: accent border glow (`0 0 0 4px var(--accent-glow)`). `.search-area` keeps a 16px column gap; `.filter-pills` adds `padding: 8px 2px 0` so a 36px active chip cannot kiss that gold rail.
 - Filter / Library sort chips: shared `.pill` is a flex-centered 36px capsule (`align-items` + `justify-content: center`). Do not give `.pill.active` a different height or padding. Album search chips stay smaller (`.album-search-filters .pill` min-height 28px). `button.pill` uses the same chrome.
 
+### Nav Back
+- Quiet 24px chevron (`.nav-back`) on drill-in views (`artist:`, `localalbum:`, `localrelease:`, `album:`) when the nav stack is non-empty
+- Hidden on top-level sidebar views, including `recent-added`, and when the stack is empty
+- Muted color, gold accent on hover; `aria-label="Back"`
+- Sits on the existing breadcrumb/header row — not a toolbar
+- Sidebar nav items and Sync Library are jumps (clear the stack). They do not walk it.
+
 ---
 
 ## 8. Security Conventions
