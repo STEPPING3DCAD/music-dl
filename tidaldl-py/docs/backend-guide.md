@@ -556,6 +556,14 @@ already shares a stamp.
 | `GET` | `/downloads/history` | Past downloads |
 | `DELETE` | `/downloads/history` | Clear history |
 
+Artist, album, and playlist search cards reuse `.album-card` / `.album-card-meta` /
+`.album-card-title`. The API already sends `name`; the legend must stay visible
+under the photo. Do not let `.album-card { overflow: hidden }` plus a sibling
+`div.album-card-art { height: 100% }` clip the caption. Scope cover-fill
+(`height: 100%; object-fit: cover`) to `img` inside `.album-card-art-wrap`, keep
+art `aspect-ratio: 1`, and use `align-items: start` on `.album-grid` /
+`.album-gallery`. Tidal search `img` alt is the item name.
+
 ### Playback
 
 | Method | Path | Purpose |

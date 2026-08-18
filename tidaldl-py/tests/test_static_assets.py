@@ -1,5 +1,3 @@
-from tests.gui_js_source import GUI_JS_FILES, read_gui_js
-
 """Tests that static asset resolution works in both normal and frozen modes.
 
 Catches the _MEIPASS bug: PyInstaller onefile bundles datas in the extraction
@@ -9,9 +7,15 @@ fallback, the app serves stale/missing assets from the wrong location.
 
 from pathlib import Path
 from unittest.mock import patch
+import re
 import sys
 
 from tests.gui_js_source import GUI_JS_FILES, read_gui_js
+
+
+def _css_rule_bodies(css: str, selector: str) -> list[str]:
+    pattern = re.compile(rf"(?m)^{re.escape(selector)} \{{([^}}]*)\}}")
+    return [body.strip() for body in pattern.findall(css)]
 
 STATIC_DIR = Path(__file__).resolve().parents[1] / "tidal_dl" / "gui" / "static"
 REQUIRED_FILES = ["index.html", "favicon.ico", "routes.js", *GUI_JS_FILES, "style.css"]
@@ -212,6 +216,39 @@ class TestAppJsFeatureMarkers:
         assert "outline:" in css.split(
             ".album-search-filters .pill:focus-visible"
         )[1].split("}")[0]
+
+    def test_search_cards_keep_visible_titles_and_square_art(self):
+        js = read_gui_js()
+        css = (STATIC_DIR / "style.css").read_text()
+        results_source = js.split("function renderSearchResults(")[1].split(
+            "function _trackKey("
+        )[0]
+        local_artists = js.split("} else if (type === 'artists') {")[1].split(
+            "container.appendChild(grid);"
+        )[0]
+
+        assert "textEl('div', item.name || '', 'album-card-title')" in results_source
+        assert "img.alt = item.name || '';" in results_source
+        assert "img.alt = '';" not in results_source
+        assert "textEl('div', a.name || 'Unknown', 'album-card-title')" in local_artists
+        assert "alt: a.name || ''" in local_artists
+
+        bare_art = _css_rule_bodies(css, ".album-card-art")
+        assert bare_art, "square sibling .album-card-art rule is missing"
+        assert all("height: 100%" not in body for body in bare_art)
+        assert any("aspect-ratio: 1" in body for body in bare_art)
+
+        wrap_art = _css_rule_bodies(css, ".album-card-art-wrap .album-card-art")
+        assert wrap_art, "cover fill must target img inside .album-card-art-wrap"
+        assert any(
+            "height: 100%" in body and "object-fit: cover" in body
+            for body in wrap_art
+        )
+
+        grid = _css_rule_bodies(css, ".album-grid")
+        gallery = _css_rule_bodies(css, ".album-gallery")
+        assert any("align-items: start" in body for body in grid)
+        assert any("align-items: start" in body for body in gallery)
 
     def test_album_results_have_one_header_and_filtered_empty_path(self):
         js = read_gui_js()
