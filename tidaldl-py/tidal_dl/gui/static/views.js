@@ -1202,7 +1202,7 @@ function renderSearchResults(container, data, showHeader = true) {
       const artDiv = h('div', { className: 'album-card-art' });
       if (item.cover_url) {
         const img = h('img', { src: item.cover_url, loading: 'lazy' });
-        img.alt = '';
+        img.alt = item.name || '';
         img.onerror = function() {
           this.style.display = 'none';
           artDiv.appendChild(h('div', { className: 'art-gradient', style: { background: artGradient(item.id || item.name) } }));

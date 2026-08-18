@@ -1,5 +1,13 @@
 # Mistakes
 
+## 2026-08-18 — Artist search tiles showed photos with no name
+
+**What happened:** Searching Tetrarch (David Diaz) by Artist showed a grid of square photos and no readable name under or on the tiles.
+
+**Root cause:** Search already put `item.name` in `.album-card-title`. A later `.album-card-art { height: 100%; object-fit: cover }` rule, meant for `img` inside `.album-card-art-wrap`, also hit Tidal’s sibling `div.album-card-art`. Grid stretch plus `.album-card { overflow: hidden }` then clipped `.album-card-meta`. Tidal search images used `alt: ''`.
+
+**Prevention:** Keep square art with `aspect-ratio: 1`. Scope `height: 100%; object-fit: cover` to `.album-card-art-wrap .album-card-art`. Set `align-items: start` on `.album-grid` / `.album-gallery` so cards grow for the caption. Artist `img` alt is the name; the legend is visible title text, not overlay-only.
+
 ## 2026-08-18 — Cold boot waited on Tidal before the sidecar was ready
 
 **What happened:** Tauri stayed on the spinner until lifespan finished a serial Tidal `resolve_source` (Hi-Fi health, gist key refresh, OAuth restore, quality probe). Each of those calls could use the 45s download timeout against a 30s health poll. Home then awaited `/home/recent` before `navigate('home')`, and first `/api/home` paid a NAS `Path.is_dir()`/`stat` plus unused extras (completionist join, peak hours, format breakdown, best-streak, week-vs-last).

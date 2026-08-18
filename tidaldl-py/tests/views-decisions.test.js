@@ -834,3 +834,203 @@ describe('recently added loading state', () => {
     expect(resultsArea.children.some(child => child.className === 'empty-state')).toBe(true);
   });
 });
+
+function searchCardElement(tag) {
+  return {
+    tag,
+    children: [],
+    style: {},
+    className: '',
+    alt: '',
+    src: '',
+    appendChild(child) { this.children.push(child); return child; },
+    addEventListener() {},
+    set textContent(value) { this._text = String(value); this.children = []; },
+    get textContent() {
+      return (this._text || '') + this.children.map(child => child.textContent).join('');
+    },
+  };
+}
+
+function searchCardH(tag, props = {}, ...children) {
+  const node = searchCardElement(tag);
+  Object.assign(node, props);
+  children.forEach(child => child && node.appendChild(child));
+  return node;
+}
+
+function searchCardTextEl(tag, value, className) {
+  return searchCardH(tag, { textContent: value, className });
+}
+
+function walkSearchNode(node, visit) {
+  if (!node || typeof node !== 'object') return;
+  visit(node);
+  (node.children || []).forEach(child => walkSearchNode(child, visit));
+}
+
+function findSearchNodes(root, predicate) {
+  const matches = [];
+  walkSearchNode(root, node => { if (predicate(node)) matches.push(node); });
+  return matches;
+}
+
+function loadSearchResultsRenderer(searchType) {
+  const functionBody = viewsSource
+    .split('function renderSearchResults(container, data, showHeader = true) {')[1]
+    ?.split('\nfunction _trackKey(')[0];
+  if (!functionBody) throw new Error('renderSearchResults not found');
+
+  return new Function(
+    'state',
+    'h',
+    'textEl',
+    'artGradient',
+    'a11yClick',
+    'navigateAlbum',
+    'navigate',
+    'loadPlaylistTracks',
+    `function renderSearchResults(container, data, showHeader = true) {${functionBody}
+     return renderSearchResults;`,
+  )(
+    { searchType },
+    searchCardH,
+    searchCardTextEl,
+    () => 'gradient',
+    () => {},
+    () => {},
+    () => {},
+    () => {},
+  );
+}
+
+function loadLocalArtistSearchRenderer() {
+  const block = viewsSource.match(
+    /\} else if \(type === 'artists'\) \{[\s\S]*?container\.appendChild\(grid\);\n    \}/,
+  );
+  if (!block) throw new Error('local artist search cards not found');
+  const body = block[0]
+    .replace("} else if (type === 'artists') {", '')
+    .replace(/\n    \}$/, '');
+  return new Function(
+    'h',
+    'textEl',
+    'artGradient',
+    'a11yClick',
+    'navigate',
+    'localItems',
+    'container',
+    body,
+  );
+}
+
+function renderSearchContainer() {
+  return {
+    children: [],
+    get firstChild() { return this.children[0] || null; },
+    removeChild(child) {
+      this.children = this.children.filter(item => item !== child);
+      return child;
+    },
+    appendChild(child) {
+      this.children.push(child);
+      return child;
+    },
+  };
+}
+
+describe('artist search card captions', () => {
+  test('Tidal artist tiles show the name as visible title text and img alt', () => {
+    const renderSearchResults = loadSearchResultsRenderer('artists');
+    const container = renderSearchContainer();
+    const name = 'Tetrarch (David Diaz)';
+
+    renderSearchResults(container, {
+      artists: [{ id: 1, name, cover_url: 'https://example.test/tetrarch.jpg', roles: 'Artist' }],
+    }, false);
+
+    const titles = findSearchNodes(container, node => node.className === 'album-card-title');
+    const images = findSearchNodes(container, node => node.tag === 'img');
+    expect(titles.map(node => node.textContent)).toEqual([name]);
+    expect(images.map(node => node.alt)).toEqual([name]);
+    expect(container.children.map(child => child.textContent).join('')).toContain(name);
+  });
+
+  test('local artist tiles show the name as visible title text', () => {
+    const renderLocalArtists = loadLocalArtistSearchRenderer();
+    const container = renderSearchContainer();
+    const name = 'Tetrarch (David Diaz)';
+
+    renderLocalArtists(
+      searchCardH,
+      searchCardTextEl,
+      () => 'gradient',
+      () => {},
+      () => {},
+      [{ name, cover_url: '/library/cover/1', track_count: 12 }],
+      container,
+    );
+
+    const titles = findSearchNodes(container, node => node.className === 'album-card-title');
+    const images = findSearchNodes(container, node => node.tag === 'img');
+    expect(titles.map(node => node.textContent)).toEqual([name]);
+    expect(images.map(node => node.alt)).toEqual([name]);
+    expect(container.children[0].textContent).toContain(name);
+  });
+
+  test('album and playlist search cards keep a visible title', () => {
+    const albums = loadSearchResultsRenderer('albums');
+    const playlists = loadSearchResultsRenderer('playlists');
+    const albumContainer = renderSearchContainer();
+    const playlistContainer = renderSearchContainer();
+
+    albums(albumContainer, {
+      albums: [{
+        id: 9,
+        name: 'Unstable',
+        artist: 'Tetrarch',
+        cover_url: 'https://example.test/u.jpg',
+        quality: 'LOSSLESS',
+      }],
+    }, false);
+    playlists(playlistContainer, {
+      playlists: [{
+        id: 3,
+        name: 'Metal Mix',
+        cover_url: 'https://example.test/p.jpg',
+        num_tracks: 20,
+      }],
+    }, false);
+
+    expect(
+      findSearchNodes(albumContainer, node => node.className === 'album-card-title')
+        .map(node => node.textContent),
+    ).toEqual(['Unstable']);
+    expect(
+      findSearchNodes(playlistContainer, node => node.className === 'album-card-title')
+        .map(node => node.textContent),
+    ).toEqual(['Metal Mix']);
+  });
+
+  test('card CSS does not stretch cover art over the caption', () => {
+    const css = readFileSync(
+      join(import.meta.dir, '../tidal_dl/gui/static/style.css'),
+      'utf8',
+    );
+    const rule = (selector) => {
+      const matches = [...css.matchAll(new RegExp(
+        `^${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\{([^}]*)\\}`,
+        'gm',
+      ))];
+      return matches.map(match => match[1]);
+    };
+
+    expect(rule('.album-card-art').some(body => body.includes('height: 100%'))).toBe(false);
+    expect(rule('.album-card-art').some(body => body.includes('aspect-ratio: 1'))).toBe(true);
+    expect(rule('.album-card-art-wrap .album-card-art').some(body =>
+      body.includes('height: 100%') && body.includes('object-fit: cover'),
+    )).toBe(true);
+    expect(rule('.album-grid').some(body => body.includes('align-items: start'))).toBe(true);
+    expect(rule('.album-gallery').some(body => body.includes('align-items: start'))).toBe(true);
+  });
+});
