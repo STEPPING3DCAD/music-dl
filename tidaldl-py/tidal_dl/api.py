@@ -111,14 +111,14 @@ def getVersion() -> str:
     return _API_KEYS["version"]
 
 
-def refresh_api_keys() -> bool:
+def refresh_api_keys(timeout: float | None = None) -> bool:
     """Refresh API keys from the remote gist on demand."""
     global _API_KEYS
 
     try:
         resp = requests.get(
             "https://api.github.com/gists/48d01f5a24b4b7b37f19443977c22cd6",
-            timeout=REQUESTS_TIMEOUT_SEC,
+            timeout=REQUESTS_TIMEOUT_SEC if timeout is None else timeout,
         )
         resp.raise_for_status()
     except requests.RequestException as exc:

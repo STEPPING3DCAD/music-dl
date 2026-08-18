@@ -583,6 +583,14 @@ describe('download badge and requeue decisions', () => {
     expect(badge.style.display).toBe('');
   });
 
+  test('active download card shows Indexing... during post-processing', () => {
+    const card = viewsSource.split('function updateActiveDownload(container, data) {')[1];
+    expect(card).toBeTruthy();
+    expect(card).toContain("data.status === 'indexing'");
+    expect(card).toContain('Indexing...');
+    expect(card).not.toMatch(/data\.status === 'queued' \? 'Waiting\.\.\.' : 'Downloading'/);
+  });
+
   test('single-track download can be requeued after a missed terminal event', () => {
     const downloadTrack = viewsSource.split('async function downloadTrack(track, btn) {')[1];
     expect(downloadTrack).toBeTruthy();
@@ -615,5 +623,414 @@ describe('Tidal album filter decisions', () => {
     expect(filterTidalAlbums(albums, 'max', 'all').some(album => album.id === 5)).toBe(false);
     expect(filterTidalAlbums([{ id: 6, quality: 'MAX', explicit: false }], 'max', 'all')).toEqual([]);
     expect(filterTidalAlbums([{ id: 7, quality: 'HIGH', explicit: 'true' }], 'all', 'explicit')).toEqual([]);
+  });
+});
+
+function loadArtistTile() {
+  const helperSource = viewsSource.match(
+    /function _artistTile\(artist, hero\) \{[\s\S]*?\n\}/,
+  );
+  if (!helperSource) throw new Error('artist tile helper not found');
+  return new Function(
+    'h',
+    'textEl',
+    'navigate',
+    'a11yClick',
+    'fetch',
+    `${helperSource[0]}\nreturn _artistTile;`,
+  )(
+    (tag, props = {}, ...children) => {
+      const node = {
+        tag,
+        ...props,
+        children: [],
+        appendChild(child) { this.children.push(child); return child; },
+        addEventListener() {},
+        textContent: props.textContent || '',
+      };
+      children.forEach(child => node.appendChild(child));
+      return node;
+    },
+    (tag, value, className) => ({ tag, textContent: value, className, children: [] }),
+    () => {},
+    () => {},
+    () => Promise.resolve({ json: async () => ({}) }),
+  );
+}
+
+describe('artist album count copy', () => {
+  test('hero tile singularizes one album', () => {
+    const tile = loadArtistTile()({ name: 'Sandy, PAPO', play_count: 4, album_count: 1, track_count: 9 }, true);
+    const text = JSON.stringify(tile);
+    expect(text).toContain('1 album');
+    expect(text).not.toContain('1 albums');
+  });
+
+  test('hero tile keeps plural albums', () => {
+    const tile = loadArtistTile()({ name: 'Artist', play_count: 4, album_count: 2, track_count: 9 }, true);
+    expect(JSON.stringify(tile)).toContain('2 albums');
+  });
+});
+
+describe('local album detail cover fetch', () => {
+  test('skips artist albums when prefetched data already has cover_url', () => {
+    const coverBlock = viewsSource
+      .split('async function renderLocalAlbumDetail(container, artistName, albumName, prefetchedData) {')[1]
+      ?.split('// Album header')[0];
+    if (!coverBlock) throw new Error('album detail cover block not found');
+    expect(coverBlock).toMatch(/prefetchedData(?: &&|\.)cover_url|'cover_url' in prefetchedData/);
+    expect(coverBlock).toMatch(/if \(!coverUrl\b/);
+  });
+});
+
+describe('artist and album loading state', () => {
+  test('artist gallery uses a visible loading hint instead of skeleton-row', () => {
+    const gallery = viewsSource
+      .split('async function renderArtistGallery(container, artistName) {')[1]
+      ?.split('// ---- LOCAL ALBUM DETAIL')[0];
+    if (!gallery) throw new Error('artist gallery not found');
+    expect(gallery).not.toContain('skeleton-row');
+    expect(gallery).toMatch(/Loading albums|home-loading-hint|skeleton-track/);
+  });
+
+  test('album detail uses a visible loading hint instead of skeleton-row', () => {
+    const detail = viewsSource
+      .split('async function renderLocalAlbumDetail(container, artistName, albumName, prefetchedData) {')[1]
+      ?.split('\nasync function ')[0];
+    if (!detail) throw new Error('album detail not found');
+    expect(detail).not.toContain('skeleton-row');
+    expect(detail).toMatch(/Loading tracks|home-loading-hint|skeleton-track/);
+  });
+});
+
+function loadRecentAlbumsExpanded(fetchPage) {
+  const functionBody = viewsSource
+    .split('async function loadLibraryRecentAlbumsExpanded(resultsArea, append) {')[1]
+    ?.split('\nfunction renderLibrary(container) {')[0];
+  if (!functionBody) throw new Error('recent albums loader not found');
+
+  function element(tag) {
+    return {
+      tag,
+      children: [],
+      style: {},
+      classList: {
+        add() {},
+        remove() {},
+        contains() { return false; },
+      },
+      appendChild(child) { this.children.push(child); return child; },
+      remove() {},
+      querySelector(selector) {
+        return this.children.find(child =>
+          selector.split('.').every(part => !part || (child.className || '').split(/\s+/).includes(part))
+        ) || null;
+      },
+      set textContent(value) { this._text = String(value); this.children = []; },
+      get textContent() {
+        return (this._text || '') + this.children.map(child => child.textContent).join('');
+      },
+    };
+  }
+  const h = (tag, props = {}, ...children) => {
+    const node = element(tag);
+    Object.assign(node, props);
+    children.forEach(child => child && node.appendChild(child));
+    return node;
+  };
+  const textEl = (tag, value, className) => h(tag, { textContent: value, className });
+  const renderRecentAlbumRow = (album) => textEl('div', album.name || 'album', 'recent-album-row');
+
+  return new Function(
+    'loadLibraryRecentAlbumsPage',
+    'LIBRARY_PAGE_SIZE',
+    'h',
+    'textEl',
+    'renderRecentAlbumRow',
+    '_recentTimeGroup',
+    'toast',
+    'document',
+    `let libraryOffset = 0;
+     let libraryTotal = 0;
+     async function loadLibraryRecentAlbumsExpanded(resultsArea, append) {${functionBody}
+     return loadLibraryRecentAlbumsExpanded;`,
+  )(
+    fetchPage,
+    12,
+    h,
+    textEl,
+    renderRecentAlbumRow,
+    () => 'Today',
+    () => {},
+    { getElementById() { return null; } },
+  );
+}
+
+describe('recently added loading state', () => {
+  test('paints a home-loading-hint before the recent-albums request resolves', async () => {
+    const source = viewsSource
+      .split('async function loadLibraryRecentAlbumsExpanded(resultsArea, append) {')[1]
+      ?.split('\nfunction renderLibrary(container) {')[0];
+    if (!source) throw new Error('recent albums loader not found');
+    const beforeAwait = source.split('await loadLibraryRecentAlbumsPage')[0];
+    expect(beforeAwait).toContain('home-loading-hint');
+    expect(beforeAwait).toMatch(/Loading albums/);
+    expect(source).not.toContain('skeleton-row');
+
+    let resolvePage;
+    const pendingPage = new Promise(resolve => { resolvePage = resolve; });
+    const load = loadRecentAlbumsExpanded(() => pendingPage);
+    const resultsArea = {
+      children: [],
+      firstChild: null,
+      appendChild(child) {
+        this.children.push(child);
+        this.firstChild = this.children[0];
+        return child;
+      },
+      removeChild(child) {
+        this.children = this.children.filter(item => item !== child);
+        this.firstChild = this.children[0] || null;
+        return child;
+      },
+      querySelector() { return null; },
+      get textContent() { return this.children.map(child => child.textContent).join(''); },
+    };
+
+    const pending = load(resultsArea, false);
+    expect(resultsArea.textContent).toContain('Loading albums');
+    expect(resultsArea.children.some(child => child.className === 'home-loading-hint')).toBe(true);
+
+    resolvePage({ albums: [{ name: 'Otra Vez', artist: 'Sandy, PAPO', track_count: 9, recent_at: 1 }], total: 1 });
+    await pending;
+    expect(resultsArea.textContent).not.toContain('Loading albums');
+    expect(resultsArea.textContent).toContain('Otra Vez');
+  });
+
+  test('replaces the hint with an error state when recent albums fail', async () => {
+    const load = loadRecentAlbumsExpanded(async () => { throw new Error('HTTP 500'); });
+    const resultsArea = {
+      children: [],
+      firstChild: null,
+      appendChild(child) {
+        this.children.push(child);
+        this.firstChild = this.children[0];
+        return child;
+      },
+      removeChild(child) {
+        this.children = this.children.filter(item => item !== child);
+        this.firstChild = this.children[0] || null;
+        return child;
+      },
+      querySelector() { return null; },
+      get textContent() { return this.children.map(child => child.textContent).join(''); },
+    };
+
+    await load(resultsArea, false);
+
+    expect(resultsArea.textContent).toContain('Could not load recently added albums');
+    expect(resultsArea.textContent).toContain('HTTP 500');
+    expect(resultsArea.textContent).not.toContain('Loading albums');
+    expect(resultsArea.children.some(child => child.className === 'empty-state')).toBe(true);
+  });
+});
+
+function searchCardElement(tag) {
+  return {
+    tag,
+    children: [],
+    style: {},
+    className: '',
+    alt: '',
+    src: '',
+    appendChild(child) { this.children.push(child); return child; },
+    addEventListener() {},
+    set textContent(value) { this._text = String(value); this.children = []; },
+    get textContent() {
+      return (this._text || '') + this.children.map(child => child.textContent).join('');
+    },
+  };
+}
+
+function searchCardH(tag, props = {}, ...children) {
+  const node = searchCardElement(tag);
+  Object.assign(node, props);
+  children.forEach(child => child && node.appendChild(child));
+  return node;
+}
+
+function searchCardTextEl(tag, value, className) {
+  return searchCardH(tag, { textContent: value, className });
+}
+
+function walkSearchNode(node, visit) {
+  if (!node || typeof node !== 'object') return;
+  visit(node);
+  (node.children || []).forEach(child => walkSearchNode(child, visit));
+}
+
+function findSearchNodes(root, predicate) {
+  const matches = [];
+  walkSearchNode(root, node => { if (predicate(node)) matches.push(node); });
+  return matches;
+}
+
+function loadSearchResultsRenderer(searchType) {
+  const functionBody = viewsSource
+    .split('function renderSearchResults(container, data, showHeader = true) {')[1]
+    ?.split('\nfunction _trackKey(')[0];
+  if (!functionBody) throw new Error('renderSearchResults not found');
+
+  return new Function(
+    'state',
+    'h',
+    'textEl',
+    'artGradient',
+    'a11yClick',
+    'navigateAlbum',
+    'navigate',
+    'loadPlaylistTracks',
+    `function renderSearchResults(container, data, showHeader = true) {${functionBody}
+     return renderSearchResults;`,
+  )(
+    { searchType },
+    searchCardH,
+    searchCardTextEl,
+    () => 'gradient',
+    () => {},
+    () => {},
+    () => {},
+    () => {},
+  );
+}
+
+function loadLocalArtistSearchRenderer() {
+  const block = viewsSource.match(
+    /\} else if \(type === 'artists'\) \{[\s\S]*?container\.appendChild\(grid\);\n    \}/,
+  );
+  if (!block) throw new Error('local artist search cards not found');
+  const body = block[0]
+    .replace("} else if (type === 'artists') {", '')
+    .replace(/\n    \}$/, '');
+  return new Function(
+    'h',
+    'textEl',
+    'artGradient',
+    'a11yClick',
+    'navigate',
+    'localItems',
+    'container',
+    body,
+  );
+}
+
+function renderSearchContainer() {
+  return {
+    children: [],
+    get firstChild() { return this.children[0] || null; },
+    removeChild(child) {
+      this.children = this.children.filter(item => item !== child);
+      return child;
+    },
+    appendChild(child) {
+      this.children.push(child);
+      return child;
+    },
+  };
+}
+
+describe('artist search card captions', () => {
+  test('Tidal artist tiles show the name as visible title text and img alt', () => {
+    const renderSearchResults = loadSearchResultsRenderer('artists');
+    const container = renderSearchContainer();
+    const name = 'Tetrarch (David Diaz)';
+
+    renderSearchResults(container, {
+      artists: [{ id: 1, name, cover_url: 'https://example.test/tetrarch.jpg', roles: 'Artist' }],
+    }, false);
+
+    const titles = findSearchNodes(container, node => node.className === 'album-card-title');
+    const images = findSearchNodes(container, node => node.tag === 'img');
+    expect(titles.map(node => node.textContent)).toEqual([name]);
+    expect(images.map(node => node.alt)).toEqual([name]);
+    expect(container.children.map(child => child.textContent).join('')).toContain(name);
+  });
+
+  test('local artist tiles show the name as visible title text', () => {
+    const renderLocalArtists = loadLocalArtistSearchRenderer();
+    const container = renderSearchContainer();
+    const name = 'Tetrarch (David Diaz)';
+
+    renderLocalArtists(
+      searchCardH,
+      searchCardTextEl,
+      () => 'gradient',
+      () => {},
+      () => {},
+      [{ name, cover_url: '/library/cover/1', track_count: 12 }],
+      container,
+    );
+
+    const titles = findSearchNodes(container, node => node.className === 'album-card-title');
+    const images = findSearchNodes(container, node => node.tag === 'img');
+    expect(titles.map(node => node.textContent)).toEqual([name]);
+    expect(images.map(node => node.alt)).toEqual([name]);
+    expect(container.children[0].textContent).toContain(name);
+  });
+
+  test('album and playlist search cards keep a visible title', () => {
+    const albums = loadSearchResultsRenderer('albums');
+    const playlists = loadSearchResultsRenderer('playlists');
+    const albumContainer = renderSearchContainer();
+    const playlistContainer = renderSearchContainer();
+
+    albums(albumContainer, {
+      albums: [{
+        id: 9,
+        name: 'Unstable',
+        artist: 'Tetrarch',
+        cover_url: 'https://example.test/u.jpg',
+        quality: 'LOSSLESS',
+      }],
+    }, false);
+    playlists(playlistContainer, {
+      playlists: [{
+        id: 3,
+        name: 'Metal Mix',
+        cover_url: 'https://example.test/p.jpg',
+        num_tracks: 20,
+      }],
+    }, false);
+
+    expect(
+      findSearchNodes(albumContainer, node => node.className === 'album-card-title')
+        .map(node => node.textContent),
+    ).toEqual(['Unstable']);
+    expect(
+      findSearchNodes(playlistContainer, node => node.className === 'album-card-title')
+        .map(node => node.textContent),
+    ).toEqual(['Metal Mix']);
+  });
+
+  test('card CSS does not stretch cover art over the caption', () => {
+    const css = readFileSync(
+      join(import.meta.dir, '../tidal_dl/gui/static/style.css'),
+      'utf8',
+    );
+    const rule = (selector) => {
+      const matches = [...css.matchAll(new RegExp(
+        `^${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\{([^}]*)\\}`,
+        'gm',
+      ))];
+      return matches.map(match => match[1]);
+    };
+
+    expect(rule('.album-card-art').some(body => body.includes('height: 100%'))).toBe(false);
+    expect(rule('.album-card-art').some(body => body.includes('aspect-ratio: 1'))).toBe(true);
+    expect(rule('.album-card-art-wrap .album-card-art').some(body =>
+      body.includes('height: 100%') && body.includes('object-fit: cover'),
+    )).toBe(true);
+    expect(rule('.album-grid').some(body => body.includes('align-items: start'))).toBe(true);
+    expect(rule('.album-gallery').some(body => body.includes('align-items: start'))).toBe(true);
   });
 });

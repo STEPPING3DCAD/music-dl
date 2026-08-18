@@ -17,6 +17,26 @@ function loadDecisionHelpers() {
   return new Function(`${helperSource[0]}\nreturn { _setupMustBlock, _authStateNeedsExpiredBanner };`)();
 }
 
+function loadNowPlayingDownloadHidden() {
+  const helperSource = playerSource.match(
+    /function _nowPlayingDownloadHidden\(track, audioSrc\) \{[\s\S]*?\n\}/,
+  );
+
+  if (!helperSource) throw new Error('now-playing download helper not found');
+
+  return new Function(`${helperSource[0]}\nreturn _nowPlayingDownloadHidden;`)();
+}
+
+function loadNowPlayingSource() {
+  const helperSource = playerSource.match(
+    /function _nowPlayingSource\(track, audioSrc\) \{[\s\S]*?\n\}/,
+  );
+
+  if (!helperSource) throw new Error('now-playing source helper not found');
+
+  return new Function(`${helperSource[0]}\nreturn _nowPlayingSource;`)();
+}
+
 function loadSearchRefreshHelper(state, document, doSearch) {
   const helperSource = playerSource.match(
     /async function _refreshSearchAfterLogin\(\) \{[\s\S]*?\n\}/,
@@ -276,6 +296,42 @@ function loadLoginSuccessHandler(deps = {}) {
   );
 }
 
+function loadInitApp(deps) {
+  const functionBody = playerSource
+    .split('async function _initApp() {')[1]
+    ?.split('\n// Setup check on load')[0];
+  if (!functionBody) throw new Error('_initApp not found');
+
+  return new Function(
+    'api',
+    'state',
+    'refreshStatusLights',
+    '_restorePlayerPrefs',
+    '_restoreQueue',
+    '_restorePosition',
+    'initUpdater',
+    '_checkWebUpdate',
+    '_syncRecentFromServer',
+    'navigate',
+    'normalizeView',
+    'location',
+    `async function _initApp() {${functionBody}\nreturn _initApp;`,
+  )(
+    deps.api || (async () => ({})),
+    deps.state || {},
+    deps.refreshStatusLights || (() => {}),
+    deps._restorePlayerPrefs || (() => {}),
+    deps._restoreQueue || (() => {}),
+    deps._restorePosition || (() => {}),
+    deps.initUpdater || (() => {}),
+    deps._checkWebUpdate || (() => {}),
+    deps._syncRecentFromServer,
+    deps.navigate,
+    deps.normalizeView || ((view) => view || 'home'),
+    deps.location || { hash: '' },
+  );
+}
+
 function loadRecentSync(recentlyPlayed, api) {
   const functionBody = playerSource
     .split('async function _syncRecentFromServer() {')[1]
@@ -378,6 +434,105 @@ describe('web update decisions', () => {
   });
 });
 
+describe('now-playing download visibility', () => {
+  test('hides Download for a local library track', () => {
+    const hidden = loadNowPlayingDownloadHidden();
+
+    expect(hidden({ is_local: true, name: 'Huelepega' }, '')).toBe(true);
+  });
+
+  test('shows Download for a Tidal-only queue item', () => {
+    const hidden = loadNowPlayingDownloadHidden();
+
+    expect(hidden({ id: 42, name: 'Huelepega', artist: 'Sandy, PAPO', is_local: false }, '/api/playback/stream/42')).toBe(false);
+  });
+
+  test('hides Download when a Tidal item is already stamped local', () => {
+    const hidden = loadNowPlayingDownloadHidden();
+
+    expect(hidden({
+      id: 42,
+      is_local: true,
+      local_path: '/music/Sandy, PAPO/Otra Vez/Huelepega.flac',
+    }, '/api/playback/stream/42')).toBe(true);
+    expect(hidden({
+      id: 42,
+      is_local: false,
+      local_path: '/music/Sandy, PAPO/Otra Vez/Huelepega.flac',
+    }, '/api/playback/stream/42')).toBe(true);
+    expect(hidden({
+      id: 42,
+      path: '/music/Sandy, PAPO/Otra Vez/Huelepega.flac',
+    }, '/api/playback/stream/42')).toBe(true);
+  });
+
+  test('hides Download when audio is already a local playback URL', () => {
+    const hidden = loadNowPlayingDownloadHidden();
+
+    expect(hidden(
+      { id: 42, is_local: false },
+      '/api/playback/local?path=%2Fmusic%2FHuelepega.flac',
+    )).toBe(true);
+  });
+});
+
+describe('now-playing source chip', () => {
+  test('matches the audio src over queue flags', () => {
+    const source = loadNowPlayingSource();
+
+    expect(source(
+      { id: 42, is_local: false },
+      '/api/playback/local?path=%2Fmusic%2FHuelepega.flac',
+    )).toBe('local');
+    expect(source(
+      { id: 42, is_local: true, local_path: '/music/Huelepega.flac' },
+      '/api/playback/stream/42',
+    )).toBe('tidal');
+  });
+
+  test('falls back to on-disk vs Tidal id when src is empty', () => {
+    const source = loadNowPlayingSource();
+
+    expect(source({ is_local: true, name: 'Huelepega' }, '')).toBe('local');
+    expect(source({ path: '/music/Huelepega.flac' }, '')).toBe('local');
+    expect(source({ local_path: '/music/Huelepega.flac' }, '')).toBe('local');
+    expect(source({ id: 42, name: 'Huelepega' }, '')).toBe('tidal');
+  });
+
+  test('hides when idle and pairs source with the download hide rule', () => {
+    const source = loadNowPlayingSource();
+    const hidden = loadNowPlayingDownloadHidden();
+
+    expect(source(null, '')).toBe(null);
+
+    const localSrc = '/api/playback/local?path=%2Fmusic%2FHuelepega.flac';
+    const localTrack = {
+      id: 42,
+      is_local: true,
+      local_path: '/music/Sandy, PAPO/Otra Vez/Huelepega.flac',
+    };
+    expect(source(localTrack, localSrc)).toBe('local');
+    expect(hidden(localTrack, localSrc)).toBe(true);
+
+    const streamTrack = { id: 99, name: 'Huelepega', is_local: false };
+    const streamSrc = '/api/playback/stream/99';
+    expect(source(streamTrack, streamSrc)).toBe('tidal');
+    expect(hidden(streamTrack, streamSrc)).toBe(false);
+  });
+
+  test('paints a text source-tag in the now-sub-row', () => {
+    const html = readFileSync(
+      join(import.meta.dir, '../tidal_dl/gui/static/index.html'),
+      'utf8',
+    );
+
+    expect(html).toContain('id="now-source"');
+    expect(html).toMatch(/now-sub-row[\s\S]*id="now-source"/);
+    expect(playerSource).toContain("el.className = 'source-tag ' + (source === 'local' ? 'local-tag' : 'tidal-tag')");
+    expect(playerSource).toContain('el.textContent = source');
+  });
+});
+
 describe('local playback decisions', () => {
   test('uses either local path key and streams only remote tracks', () => {
     const makeAudio = () => ({
@@ -411,6 +566,24 @@ describe('local playback decisions', () => {
     expect(pathAudio.src).not.toContain('null');
     expect(pathAudio.src).not.toContain('undefined');
     expect(invalidLocalAudio.src).toBe('');
+  });
+
+  test('plays a Tidal item from disk when a local path is stamped', () => {
+    const audio = {
+      src: '',
+      muted: false,
+      pause: () => {},
+      addEventListener: () => {},
+      load: () => {},
+    };
+
+    loadPlayTrack(audio, { playing: false })({
+      id: 42,
+      is_local: false,
+      local_path: '/music/Huelepega.flac',
+    });
+
+    expect(audio.src).toBe('/api/playback/local?path=%2Fmusic%2FHuelepega.flac');
   });
 
   test('loads a selected local source after installing the readiness listener', () => {
@@ -630,6 +803,30 @@ describe('recent history sync decisions', () => {
     await syncRecentFromServer();
 
     expect(recentlyPlayed[0].played_at).toBe(10_000_000_000);
+  });
+
+  test('Home navigation is not gated on /home/recent', async () => {
+    let navigated = null;
+    let resolveRecent;
+    const recentHang = new Promise((resolve) => {
+      resolveRecent = resolve;
+    });
+
+    const initApp = loadInitApp({
+      _syncRecentFromServer: () => recentHang,
+      navigate: (view) => {
+        navigated = view;
+      },
+    });
+
+    const pending = initApp();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(navigated).toBe('home');
+
+    resolveRecent();
+    await pending;
   });
 
   test('keeps the actually newer duplicate after normalizing server timestamps', async () => {

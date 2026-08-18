@@ -1,5 +1,3 @@
-from tests.gui_js_source import GUI_JS_FILES, read_gui_js
-
 """Tests that static asset resolution works in both normal and frozen modes.
 
 Catches the _MEIPASS bug: PyInstaller onefile bundles datas in the extraction
@@ -9,9 +7,15 @@ fallback, the app serves stale/missing assets from the wrong location.
 
 from pathlib import Path
 from unittest.mock import patch
+import re
 import sys
 
 from tests.gui_js_source import GUI_JS_FILES, read_gui_js
+
+
+def _css_rule_bodies(css: str, selector: str) -> list[str]:
+    pattern = re.compile(rf"(?m)^{re.escape(selector)} \{{([^}}]*)\}}")
+    return [body.strip() for body in pattern.findall(css)]
 
 STATIC_DIR = Path(__file__).resolve().parents[1] / "tidal_dl" / "gui" / "static"
 REQUIRED_FILES = ["index.html", "favicon.ico", "routes.js", *GUI_JS_FILES, "style.css"]
@@ -90,6 +94,27 @@ class TestAppJsFeatureMarkers:
         assert "loading: index < 6 ? 'eager' : 'lazy'" in gallery_source
         assert "img.onerror = function() {" in gallery_source
         assert "artWrap.style.background = artGradient(album.name);" in gallery_source
+        assert "data.albums.length + ' album' + (data.albums.length !== 1 ? 's' : '')" in gallery_source
+        assert "data.albums.length + ' albums'" not in gallery_source
+        assert "skeleton-row" not in gallery_source
+        assert "Loading albums" in gallery_source or "home-loading-hint" in gallery_source
+
+    def test_artist_hero_tile_singularizes_album_count(self):
+        js = read_gui_js()
+        tile_source = js.split("function _artistTile(artist, hero) {")[1].split("\nfunction ")[0]
+        assert "artist.album_count + ' album' + (artist.album_count !== 1 ? 's' : '')" in tile_source
+        assert "artist.album_count + ' albums'" not in tile_source
+
+    def test_local_album_detail_skips_artist_albums_when_cover_is_prefetched(self):
+        js = read_gui_js()
+        detail_source = js.split(
+            "async function renderLocalAlbumDetail(container, artistName, albumName, prefetchedData) {"
+        )[1].split("\nasync function ")[0]
+        assert "prefetchedData" in detail_source
+        assert "cover_url" in detail_source.split("// Album header")[0]
+        assert "if (!coverUrl" in detail_source.split("// Album header")[0]
+        assert "skeleton-row" not in detail_source
+        assert "Loading tracks" in detail_source or "home-loading-hint" in detail_source
 
     def test_has_csrf_token_handling(self):
         js = read_gui_js()
@@ -191,6 +216,39 @@ class TestAppJsFeatureMarkers:
         assert "outline:" in css.split(
             ".album-search-filters .pill:focus-visible"
         )[1].split("}")[0]
+
+    def test_search_cards_keep_visible_titles_and_square_art(self):
+        js = read_gui_js()
+        css = (STATIC_DIR / "style.css").read_text()
+        results_source = js.split("function renderSearchResults(")[1].split(
+            "function _trackKey("
+        )[0]
+        local_artists = js.split("} else if (type === 'artists') {")[1].split(
+            "container.appendChild(grid);"
+        )[0]
+
+        assert "textEl('div', item.name || '', 'album-card-title')" in results_source
+        assert "img.alt = item.name || '';" in results_source
+        assert "img.alt = '';" not in results_source
+        assert "textEl('div', a.name || 'Unknown', 'album-card-title')" in local_artists
+        assert "alt: a.name || ''" in local_artists
+
+        bare_art = _css_rule_bodies(css, ".album-card-art")
+        assert bare_art, "square sibling .album-card-art rule is missing"
+        assert all("height: 100%" not in body for body in bare_art)
+        assert any("aspect-ratio: 1" in body for body in bare_art)
+
+        wrap_art = _css_rule_bodies(css, ".album-card-art-wrap .album-card-art")
+        assert wrap_art, "cover fill must target img inside .album-card-art-wrap"
+        assert any(
+            "height: 100%" in body and "object-fit: cover" in body
+            for body in wrap_art
+        )
+
+        grid = _css_rule_bodies(css, ".album-grid")
+        gallery = _css_rule_bodies(css, ".album-gallery")
+        assert any("align-items: start" in body for body in grid)
+        assert any("align-items: start" in body for body in gallery)
 
     def test_album_results_have_one_header_and_filtered_empty_path(self):
         js = read_gui_js()
@@ -326,6 +384,16 @@ class TestAppJsFeatureMarkers:
         assert "loadLibraryRecentShelf" not in js
         assert "library-shelf" not in js
 
+    def test_recently_added_paints_home_loading_hint_before_fetch(self):
+        js = read_gui_js()
+        loader = js.split("async function loadLibraryRecentAlbumsExpanded(resultsArea, append) {")[1].split(
+            "\nfunction renderLibrary(container) {"
+        )[0]
+        before_await = loader.split("await loadLibraryRecentAlbumsPage")[0]
+        assert "home-loading-hint" in before_await
+        assert "Loading albums" in before_await
+        assert "skeleton-row" not in loader
+
     def test_has_sleep_timer(self):
         js = read_gui_js()
         assert "_sleepTimerId" in js, "Sleep timer missing"
@@ -382,3 +450,13 @@ class TestAppJsFeatureMarkers:
         assert "status: us.status || us.phase || 'idle'" in js
         assert "available_version: us.available_version || us.version || ''" in js
         assert "error_message: us.error_message || us.error || ''" in js
+
+
+class TestLibraryScanStatusLabel:
+    def test_sync_button_uses_named_scan_phase(self):
+        js = read_gui_js()
+        assert "function _scanStatusLabel(status)" in js
+        assert "textNode.textContent = _scanStatusLabel(status);" in js
+        assert "phase === 'discovering'" in js
+        assert "phase === 'error'" in js
+        assert "previous library kept" in js

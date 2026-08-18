@@ -152,8 +152,12 @@ class PlaybackMixin:
             "genre_breakdown": genre_breakdown,
         }
 
-    def home_stats(self) -> dict:
-        """Aggregate all data needed for the Home view in one call."""
+    def home_stats(self, *, extras: bool = True) -> dict:
+        """Aggregate data for the Home view.
+
+        First-paint tiles use extras=False so /api/home stays off NAS probes and
+        unused completionist / peak-hour / streak / format work.
+        """
         assert self._conn
         c = self._conn
 
@@ -311,40 +315,46 @@ class PlaybackMixin:
                 elif d < check:
                     break
 
-        # Peak hours — 24-element list, play count per hour of day
         peak_hours = [0] * 24
-        for row in c.execute("SELECT played_at FROM play_events").fetchall():
-            hour = datetime.datetime.fromtimestamp(row["played_at"]).hour
-            peak_hours[hour] += 1
+        peak_hour = None
+        this_week_plays = 0
+        last_week_plays = 0
+        unplayed_count = 0
+        format_breakdown: list[dict] = []
+        if extras:
+            # Peak hours — 24-element list, play count per hour of day
+            for row in c.execute("SELECT played_at FROM play_events").fetchall():
+                hour = datetime.datetime.fromtimestamp(row["played_at"]).hour
+                peak_hours[hour] += 1
 
-        peak_hour = peak_hours.index(max(peak_hours)) if any(h > 0 for h in peak_hours) else None
+            peak_hour = peak_hours.index(max(peak_hours)) if any(h > 0 for h in peak_hours) else None
 
-        # This week vs last week play counts
-        this_week_plays = c.execute(
-            "SELECT COUNT(*) FROM play_events WHERE played_at >= ?",
-            (week_start,),
-        ).fetchone()[0]
+            # This week vs last week play counts
+            this_week_plays = c.execute(
+                "SELECT COUNT(*) FROM play_events WHERE played_at >= ?",
+                (week_start,),
+            ).fetchone()[0]
 
-        last_week_start = week_start - 7 * 86400
-        last_week_plays = c.execute(
-            "SELECT COUNT(*) FROM play_events WHERE played_at >= ? AND played_at < ?",
-            (last_week_start, week_start),
-        ).fetchone()[0]
+            last_week_start = week_start - 7 * 86400
+            last_week_plays = c.execute(
+                "SELECT COUNT(*) FROM play_events WHERE played_at >= ? AND played_at < ?",
+                (last_week_start, week_start),
+            ).fetchone()[0]
 
-        # Tracks never played
-        unplayed_count = c.execute(
-            "SELECT COUNT(*) FROM scanned WHERE (play_count = 0 OR play_count IS NULL) AND status != 'unreadable'"
-        ).fetchone()[0]
+            # Tracks never played
+            unplayed_count = c.execute(
+                "SELECT COUNT(*) FROM scanned WHERE (play_count = 0 OR play_count IS NULL) AND status != 'unreadable'"
+            ).fetchone()[0]
 
-        # Track count by audio format
-        format_breakdown = [
-            {"format": r["format"], "count": r["cnt"]}
-            for r in c.execute(
-                """SELECT format, COUNT(*) as cnt FROM scanned
-                   WHERE format IS NOT NULL AND status != 'unreadable'
-                   GROUP BY format ORDER BY cnt DESC"""
-            ).fetchall()
-        ]
+            # Track count by audio format
+            format_breakdown = [
+                {"format": r["format"], "count": r["cnt"]}
+                for r in c.execute(
+                    """SELECT format, COUNT(*) as cnt FROM scanned
+                       WHERE format IS NOT NULL AND status != 'unreadable'
+                       GROUP BY format ORDER BY cnt DESC"""
+                ).fetchall()
+            ]
 
         # Album with most combined plays (from play_events — authoritative source)
         top_album = None
@@ -381,57 +391,59 @@ class PlaybackMixin:
         except sqlite3.OperationalError:
             favorites_count = 0
 
-        # Best-ever listening streak (longest consecutive-day run)
         best_streak = 0
-        streak_days = [
-            r[0]
-            for r in c.execute(
-                "SELECT DISTINCT date(played_at, 'unixepoch', 'localtime') as d FROM play_events ORDER BY d"
-            ).fetchall()
-        ]
-        if streak_days:
-            current_run = 1
-            for i in range(1, len(streak_days)):
-                prev = datetime.datetime.strptime(streak_days[i - 1], "%Y-%m-%d")
-                curr = datetime.datetime.strptime(streak_days[i], "%Y-%m-%d")
-                if (curr - prev).days == 1:
-                    current_run += 1
-                else:
-                    best_streak = max(best_streak, current_run)
-                    current_run = 1
-            best_streak = max(best_streak, current_run)
+        completionist_total = 0
+        completionist_complete = 0
+        recent_albums: list[dict] = []
+        if extras:
+            # Best-ever listening streak (longest consecutive-day run)
+            streak_days = [
+                r[0]
+                for r in c.execute(
+                    "SELECT DISTINCT date(played_at, 'unixepoch', 'localtime') as d FROM play_events ORDER BY d"
+                ).fetchall()
+            ]
+            if streak_days:
+                current_run = 1
+                for i in range(1, len(streak_days)):
+                    prev = datetime.datetime.strptime(streak_days[i - 1], "%Y-%m-%d")
+                    curr = datetime.datetime.strptime(streak_days[i], "%Y-%m-%d")
+                    if (curr - prev).days == 1:
+                        current_run += 1
+                    else:
+                        best_streak = max(best_streak, current_run)
+                        current_run = 1
+                best_streak = max(best_streak, current_run)
 
-        # Completionist albums: albums where every scanned track has been played
-        # Single query instead of N+1
-        completionist_row = c.execute(
-            """SELECT
-                 COUNT(*) as total,
-                 SUM(CASE WHEN played_count >= track_count THEN 1 ELSE 0 END) as complete
-               FROM (
-                 SELECT s.album, s.artist, COUNT(*) as track_count,
-                        COUNT(DISTINCT pe.path) as played_count
-                 FROM scanned s
-                 LEFT JOIN play_events pe ON pe.path = s.path
-                 WHERE s.album IS NOT NULL AND s.status != 'unreadable'
-                 GROUP BY s.album, s.artist
-               )"""
-        ).fetchone()
-        completionist_total = completionist_row["total"] if completionist_row else 0
-        completionist_complete = completionist_row["complete"] if completionist_row else 0
+            # Completionist albums: albums where every scanned track has been played
+            completionist_row = c.execute(
+                """SELECT
+                     COUNT(*) as total,
+                     SUM(CASE WHEN played_count >= track_count THEN 1 ELSE 0 END) as complete
+                   FROM (
+                     SELECT s.album, s.artist, COUNT(*) as track_count,
+                            COUNT(DISTINCT pe.path) as played_count
+                     FROM scanned s
+                     LEFT JOIN play_events pe ON pe.path = s.path
+                     WHERE s.album IS NOT NULL AND s.status != 'unreadable'
+                     GROUP BY s.album, s.artist
+                   )"""
+            ).fetchone()
+            completionist_total = completionist_row["total"] if completionist_row else 0
+            completionist_complete = completionist_row["complete"] if completionist_row else 0
 
-        # Recently scanned albums (3 most recent by rowid)
-        recent_albums = [
-            {"album": r["album"], "artist": r["artist"], "cover_path": r["cover_path"]}
-            for r in c.execute(
-                """SELECT album, artist, MAX(rowid) as latest, MIN(path) as cover_path
-                   FROM scanned
-                   WHERE album IS NOT NULL AND status != 'unreadable'
-                   GROUP BY album, artist
-                   ORDER BY latest DESC LIMIT 3"""
-            ).fetchall()
-        ]
+            recent_albums = [
+                {"album": r["album"], "artist": r["artist"], "cover_path": r["cover_path"]}
+                for r in c.execute(
+                    """SELECT album, artist, MAX(rowid) as latest, MIN(path) as cover_path
+                       FROM scanned
+                       WHERE album IS NOT NULL AND status != 'unreadable'
+                       GROUP BY album, artist
+                       ORDER BY latest DESC LIMIT 3"""
+                ).fetchall()
+            ]
 
-        return {
+        stats = {
             "top_artist": top_artist,
             "top_artists": top_artists,
             "most_replayed": most_replayed,
@@ -445,16 +457,25 @@ class PlaybackMixin:
             "album_artists": album_artists,
             "total_plays": total_plays,
             "streak": streak,
-            "peak_hours": peak_hours,
-            "peak_hour": peak_hour,
-            "week_vs_last": {"this_week": this_week_plays, "last_week": last_week_plays},
-            "unplayed_count": unplayed_count,
-            "format_breakdown": format_breakdown,
             "top_album": top_album,
             "collection_growth": collection_growth,
             "favorites_count": favorites_count,
             "this_week": this_week,
-            "best_streak": best_streak,
-            "completionist_albums": {"complete": completionist_complete, "total": completionist_total},
-            "recent_albums": recent_albums,
         }
+        if extras:
+            stats.update(
+                {
+                    "peak_hours": peak_hours,
+                    "peak_hour": peak_hour,
+                    "week_vs_last": {"this_week": this_week_plays, "last_week": last_week_plays},
+                    "unplayed_count": unplayed_count,
+                    "format_breakdown": format_breakdown,
+                    "best_streak": best_streak,
+                    "completionist_albums": {
+                        "complete": completionist_complete,
+                        "total": completionist_total,
+                    },
+                    "recent_albums": recent_albums,
+                }
+            )
+        return stats

@@ -106,7 +106,7 @@ t.stream_lock          # Lock — serializes stream ops during Atmos switching
 - `_ensure_token_fresh(refresh_window_sec=300)` — auto-refresh if expiring within 5 min
 - `_try_login_with_key_rotation()` — keeps authenticated tidalapi login resilient across bundled client credentials
 - Token expiry handles both `float` (timestamp) and `datetime` from tidalapi
-- GUI startup passes its current `Settings` to `Tidal` and resolves the configured source non-interactively. It only performs quiet token restoration, so a first-run GUI becomes ready for the user-initiated Connect Tidal flow instead of opening OAuth during lifespan startup.
+- GUI startup marks the sidecar ready after `LibraryDB.open` + migrate and `recover_download_jobs`. It then restores Tidal in the background with `resolve_source(..., allow_interactive_login=False)` and starts a configured Discord bot after ready. First-run GUI still becomes ready for the user-initiated Connect Tidal flow instead of opening OAuth during lifespan startup. Hi-Fi, gist, and quality-probe calls used by restore are capped at `SOURCE_RESOLVE_TIMEOUT_SEC` (2s) so a dead network cannot eat the 30s Tauri spinner.
 - `_probe_subscription_quality()` reports observed provider capability only. Lower or unknown delivery warns; it never mutates or persists configured/session quality.
 
 ### HandlingApp()
@@ -215,7 +215,7 @@ TIDAL_CDN_HOSTS  = {"audio.tidal.com", "sp-ad-cf.audio.tidal.com", ...}
 
 ## 7. Database Schema
 
-SQLite at `~/.config/music-dl/library.db`. Schema version 8, WAL mode, and a
+SQLite at `~/.config/music-dl/library.db`. Schema version 9, WAL mode, and a
 5-second busy timeout.
 
 ### Tables
@@ -249,9 +249,10 @@ SQLite at `~/.config/music-dl/library.db`. Schema version 8, WAL mode, and a
 | `waveform` | TEXT | Cached standard-resolution waveform JSON |
 | `waveform_hires` | TEXT | Cached high-resolution waveform JSON |
 | `art_available` | INTEGER | Local artwork availability; `NULL` until checked |
+| `release_id` | TEXT | Current grouped release card id; stamped during album-card builds. NULL after v9 migrate until a full regroup or a scoped card build writes it. A stamp miss recovers with one full regroup, then later lookups stay index-only. |
 | `scanned_at` | INTEGER | Unix timestamp |
 
-Indexes: `idx_scanned_status`, `idx_scanned_isrc`
+Indexes: `idx_scanned_status`, `idx_scanned_isrc`, `idx_scanned_release_id`
 
 **`album_grouping_assessments`** — explainable release-card decisions
 
@@ -302,7 +303,7 @@ Index: `idx_play_events_at`
 |--------|------|-------|
 | `id` | INTEGER PK | Auto-increment job ID |
 | `kind` | TEXT NOT NULL | `download` or `upgrade` |
-| `status` | TEXT NOT NULL | `queued`, `running`, `retrying`, `paused`, `done`, `error`, `cancelled`, `interrupted` |
+| `status` | TEXT NOT NULL | `queued`, `running`, `indexing`, `retrying`, `paused`, `done`, `error`, `cancelled`, `interrupted` |
 | `track_id` | INTEGER NOT NULL | Tidal track ID |
 | `name` | TEXT | Display title |
 | `artist` | TEXT | Display artist |
@@ -320,15 +321,17 @@ Index: `idx_play_events_at`
 
 Indexes: `idx_download_jobs_status_created`, `idx_download_jobs_track_id`
 
-Job creation uses an atomic `BEGIN IMMEDIATE` transaction so two requests cannot enqueue active duplicate work for the same `track_id`. Queue claiming also uses `BEGIN IMMEDIATE` and updates only a still-queued row before returning it to the worker.
+Job creation uses an atomic `BEGIN IMMEDIATE` transaction so two requests cannot enqueue active duplicate work for the same `track_id`. Queue claiming also uses `BEGIN IMMEDIATE` and updates only a still-queued row before returning it to the worker. Every `BEGIN IMMEDIATE` site goes through `LibraryDB.write_transaction(immediate=True)`, which holds a per-database process lock for that short SQL burst. A transient lock is retried *outside* that process lock with a 50ms acquire timeout so a foreign reserved writer cannot pin every other writer behind the 5s `busy_timeout`. The download worker treats a remaining lock error as a deferred claim and keeps running; it does not die.
 
-Startup recovery rule: queued jobs stay queued. `running`, `retrying`, and `paused` jobs become `interrupted`. Terminal jobs stay terminal.
+Startup recovery rule: queued jobs stay queued. `running`, `indexing`, `retrying`, and `paused` jobs become `interrupted`. Terminal jobs stay terminal.
 
 Pause rule: global queue pause does not rewrite queued backlog rows to `paused`; queued jobs remain `queued` so they can resume after restart.
 
-FastAPI lifespan creates `DownloadJobService`, stores it on `app.state.download_jobs`, registers the service event hub with the running event loop, starts the persisted-job worker, and stops that worker during lifespan shutdown. Tests pass `job_db_path` to `create_app()` so API smoke tests use an isolated temporary job database instead of the user's real `library.db`.
+FastAPI lifespan creates `DownloadJobService`, stores it on `app.state.download_jobs`, registers the service event hub with the running event loop, starts the persisted-job worker after recovery commits, and stops that worker during lifespan shutdown. Tests pass `job_db_path` to `create_app()` so API smoke tests use an isolated temporary job database instead of the user's real `library.db`.
 
-Lifespan also constructs `Tidal(Settings())` and uses `resolve_source(..., allow_interactive_login=False)`. This preserves the existing Hi-Fi selection and fallback policy while preventing a browser OAuth flow from blocking server readiness.
+**Boot-path rule:** mark `ready` / health 200 after migrate + `recover_download_jobs`. Restore Tidal and start the Discord bot after ready. Never group albums, walk `scan_new_downloads`, or start a library scan during lifespan. The worker must not claim a job before recovery commits.
+
+Lifespan constructs `Tidal(Settings())` after ready and uses `resolve_source(..., allow_interactive_login=False)` on a background thread. This preserves the existing Hi-Fi selection and fallback policy while preventing a browser OAuth flow or a hung Hi-Fi/gist/quality probe from blocking server readiness. Failed restore surfaces the existing auth status; it does not fake a signed-in session.
 
 Normal downloads, playlist sync, bot download requests, and upgrade requests all enqueue through `DownloadJobService`, so active duplicate suppression is shared across job kinds and enforced by the `download_jobs` table instead of route-local in-memory state. The worker claims both normal download jobs and upgrade jobs. Upgrade cleanup, quality ranking, album resolution, and trash helpers live in `tidal_dl.gui.services.upgrade_jobs`; route modules do not own download or upgrade execution.
 
@@ -357,7 +360,7 @@ Normal downloads, playlist sync, bot download requests, and upgrade requests all
 
 ### Migrations
 
-Additive only. `open()` reads SQLite's native `PRAGMA user_version`: databases below version 8 run these migrations and record version 8 in the same commit; current-schema opens configure their existing pragmas without rerunning migration writes.
+Additive only. `open()` reads SQLite's native `PRAGMA user_version`: databases below version 9 run these migrations and record version 9 in the same commit; current-schema opens configure their existing pragmas without rerunning migration writes.
 
 1. **v1 → v2**: Add `album`, `duration`, `quality`, `format` columns to `scanned`
 2. **v2 → v3**: Add `play_count`, `last_played`, `genre` to `scanned`
@@ -366,14 +369,17 @@ Additive only. `open()` reads SQLite's native `PRAGMA user_version`: databases b
 5. **v5 → v6**: Add `codec` and `metadata_complete` to `scanned`; backfill unambiguous native codecs and repair remaining legacy rows on the next scan
 6. **v6 → v7**: Add nullable release identity, position, and total fields to `scanned`; queue existing readable rows for one metadata repair pass
 7. **v7 → v8**: Add `album_grouping_assessments` for explainable scores, catalog state, and current user choices
-8. **Late additions**: Add `cover_url` and `quality` to `download_history`
-9. **Download jobs and favorites**: Create their tables and lookup indexes when absent
+8. **v8 → v9**: Add `release_id` on `scanned` so one-artist/one-release reads can load those rows without regrouping the whole library
+9. **Late additions**: Add `cover_url` and `quality` to `download_history`
+10. **Download jobs and favorites**: Create their tables and lookup indexes when absent
 
 Pattern: check `PRAGMA table_info()`, `ALTER TABLE ADD COLUMN` if missing. Never destructive.
 
 ### Local scan facts
 
 The scanner is the authority for local display metadata and quality. Codec, not container extension or decoded bit depth, decides whether a local file is lossy or lossless. `M4A` may contain AAC or ALAC, so an uninspected M4A remains Unknown.
+
+Library cache rows are not deleted until a scan traversal succeeds. Do not clear, age, or prune `scanned` rows at scan start. Mark-and-sweep skipped trash paths (`#recycle`, `.Trash`, and the shared skip list in `library_scanner.py`) and missing files only after a complete walk. An interrupted or failed scan must leave the previous good cache intact. Stage metadata outside a writer transaction and commit short batches; never hold a writer lock across filesystem walks or tag reads. Scan status must expose a named `phase` and increment `scanned` during discovery so the UI cannot sit on `scanned:0,total:0` with no explanation. Do not mutagen already-tagged rows that already have a real artist/title/album — a leftover `metadata_complete=0` from a schema migration is not a reason to re-read thousands of NAS files. Discover/walk first; leftover repair is a cheap DB filter plus placeholder rows only. Never open skipped-directory paths for repair.
 
 Metadata resolution order is meaningful embedded tag, then a conservative path fallback relative to a configured root, then Unknown. Path fallback requires `artist/album/file`; it may strip an `<artist> - ` album-folder prefix and replace generic titles such as `Track 05` with a meaningful filename. The same pass reads release identity from Vorbis comments, ID3 frames, and MP4 atoms. Missing release fields stay null. Resolution updates only `library.db` and never writes audio files.
 
@@ -386,7 +392,15 @@ db.open()                    # PRAGMA journal_mode=WAL, busy_timeout=5000
 db.upsert_track(...)         # INSERT OR REPLACE
 db.commit()
 db.close()
+
+# Writers: compute first, then one short transaction. Never hold the
+# reserved lock across grouping, filesystem/network I/O, or callbacks.
+with db.write_transaction(immediate=True):
+    db.save_grouping_assessment(...)
+    db.stamp_release_ids(cards)
 ```
+
+API routes, the background scanner, album enrichment, and `DownloadJobService` each open their own connection. WAL readers stay concurrent. Writers serialize at `write_transaction` / `begin_immediate`, not by sharing one connection across threads. Lock retries release the process lock before sleeping.
 
 **GUI singleton** (`gui/api/library.py`):
 ```python
@@ -432,8 +446,10 @@ POST /api/download {track_ids: [123, 456]}
   │    ├─ Commit successful track ISRC before any second LibraryDB writer
   │    ├─ Gate on `DownloadOutcome`
   │    │  ├─ `FAILED` → existing error path; never record completion
-  │    │  └─ `DOWNLOADED`, `COPIED`, `SKIPPED` → terminal success:
-  │    │     ├─ Scan new downloads into LibraryDB
+  │    │  └─ `DOWNLOADED`, `COPIED`, `SKIPPED` → index, then terminal success:
+  │    │     ├─ Mark job "indexing" and broadcast progress status "indexing"
+  │    │     ├─ Index the completed file path(s) into LibraryDB
+  │    │     │  (no full-library `rglob`; fallback walks prune skipped trash dirs)
   │    │     ├─ Record in download_history
   │    │     ├─ Mark job "done"
   │    │     └─ Broadcast SSE: {"type": "complete", "status": "done"}
@@ -460,7 +476,7 @@ The failed-history renderer shows the stored terminal reason beside `Failed` and
 - On connect, `DownloadJobService.initial_events()` emits running job `progress` events and one `batch_queued` summary whose `count` is the remaining queued jobs
 - Queue events (`batch_queued`, `queue_paused`, `queue_resumed`, `queue_cancelled`) include `queued_count`, `active_count`, and `paused`
 - Claim/retry `progress` events use the same `_queue_event` envelope so they carry fresh `queued_count` / `active_count` / `paused`. The client applies those counts immediately; it does not wait for a later non-progress event to drop the “Waiting to start…” card
-- `_update_job` and `_mark_retrying` refuse to write `queued` / `running` / `retrying` / `paused` after cancel, so a later metadata or retry update cannot resurrect a Cancel All’d job
+- `_update_job` and `_mark_retrying` refuse to write `queued` / `running` / `indexing` / `retrying` / `paused` after cancel, so a later metadata or retry update cannot resurrect a Cancel All’d job. After indexing, the worker also refuses terminal `done` if cancel was requested or the row is already `cancelled`.
 - If `_mark_retrying` cannot write `retrying`, it marks the job cancelled and returns false so the retry loop exits instead of sleeping through backoff
 - The Downloads Active list is a snapshot of `/downloads/active/snapshot` plus `/downloads/queue-state`, not an accumulation of SSE cards
 - Worker/service broadcasts push events through the hub; disconnect unsubscribes the queue
@@ -513,11 +529,21 @@ use FastAPI's `/api/docs` or `gui/api/__init__.py` for the complete current set.
 | Method | Path | Purpose |
 |--------|------|---------|
 | `GET` | `/library` | Paginated local tracks, grouped by artist |
+| `GET` | `/library/recent-albums` | First page of recently added releases |
 | `POST` | `/library/scan` | Trigger background library scan |
-| `GET` | `/library/scan-status` | Poll scan progress |
+| `GET` | `/library/scan/status` | Poll scan progress: `{scanning, scanned, total, done, phase, error}`. `phase` is `idle`, `preparing`, `repairing`, `discovering`, `indexing`, `sweeping`, `finalizing`, `done`, or `error`. During discovery `total` may be 0 while `scanned` increments. |
 
 Home statistics use the aggregate database queries behind `GET /home`; grouped
 album cards are built only by album-library routes, not during Home loading.
+
+`GET /library/recent-albums` pages album recency in SQL (scan vs download,
+Various Artists when a title has multiple artists) without a per-album
+cover-art subquery. Cards are grouped from the current page titles plus any
+already-stamped release members, so warmed IDs match a prior full or
+artist-scoped stamp. It does not expand to every album by the page artists
+and does not run full-library combinations. Cover URLs come from that page
+subset. Review-pair badges appear when the sibling title is on the page or
+already shares a stamp.
 
 ### Search & Download
 
@@ -529,6 +555,14 @@ album cards are built only by album-library routes, not during Home loading.
 | `GET` | `/downloads/active/snapshot` | Current active jobs and queued count |
 | `GET` | `/downloads/history` | Past downloads |
 | `DELETE` | `/downloads/history` | Clear history |
+
+Artist, album, and playlist search cards reuse `.album-card` / `.album-card-meta` /
+`.album-card-title`. The API already sends `name`; the legend must stay visible
+under the photo. Do not let `.album-card { overflow: hidden }` plus a sibling
+`div.album-card-art { height: 100% }` clip the caption. Scope cover-fill
+(`height: 100%; object-fit: cover`) to `img` inside `.album-card-art-wrap`, keep
+art `aspect-ratio: 1`, and use `align-items: start` on `.album-grid` /
+`.album-gallery`. Tidal search `img` alt is the item name.
 
 ### Playback
 
@@ -550,7 +584,7 @@ than activating stale hard-coded fallback hosts.
 |--------|------|---------|
 | `GET` | `/playlists` | Tidal playlists with local match info |
 | `GET` | `/albums/{album_id}/tracks` | Album detail with track list |
-| `GET` | `/albums/lookup` | Resolve album metadata by artist and album name |
+| `GET` | `/albums/lookup` | Resolve album metadata by artist and album name. Marks `is_local` plus `path` / `local_path` from album-scoped title+artist on that release's library files, not ISRC |
 | `GET` | `/home` | Dashboard stats (top artists, genres, play counts) |
 | `GET` | `/duplicates/preview` | Find ISRC-based duplicates |
 | `POST` | `/duplicates/clean` | Remove duplicate files |
@@ -617,7 +651,7 @@ class BaseConfig(Generic[ConfigModelT]):
 |----------|-------|---------|
 | JobEventHub client list | `threading.Lock` | Acquired on add/remove/iterate |
 | Rate limit counters | `threading.Lock` | Acquired on backoff decisions |
-| LibraryDB | SQLite WAL + `busy_timeout=5000` | Concurrent reads, serialized writes with 5s retry |
+| LibraryDB | WAL readers + `write_transaction` / `begin_immediate` | Concurrent reads; short reserved writes; per-db lock; bounded lock retry |
 | TTLCache | `threading.Lock` | Acquired on get/set/invalidate |
 | DownloadCheckpoint | `threading.Lock` | Acquired on status read/write |
 | Tidal stream ops | `Tidal.stream_lock` | Serializes Atmos session switching |
@@ -664,7 +698,7 @@ except (json.JSONDecodeError, KeyError):
 
 - DB reconnects every 5 minutes (`_DB_MAX_AGE = 300`)
 - Duplicates endpoints run in `asyncio.to_thread()` so `os.path.exists()` on NAS doesn't block the event loop
-- `busy_timeout=5000` handles NAS-induced SQLite lock contention
+- `busy_timeout=5000` is a last-resort wait, not a license to hold the writer lock. Grouping, scans, and post-download indexing compute first, then persist. The worker retries a transient lock instead of exiting.
 
 ---
 
@@ -679,6 +713,7 @@ except (json.JSONDecodeError, KeyError):
    accept localhost origins only; direct LAN use is unsupported.
 6. **Migrations are additive.** `ALTER TABLE ADD COLUMN`. Never drop, rename, or restructure. Schema grows forward.
 7. **Config corruption is recoverable.** `.bak` fallback, tolerant deserialization, defaults for missing fields.
-8. **NAS mounts are unreliable.** Reconnect on staleness, run I/O off the event loop, use WAL + busy timeout.
+8. **NAS mounts are unreliable.** Reconnect on staleness, run I/O off the event loop, use WAL + short write transactions. Do not hold the SQLite writer lock across grouping, scans, or downloads; `busy_timeout` is only a last-resort wait.
 9. **Audio path is sacred.** No Web Audio API, no signal processing. Files stream bit-perfect from disk to browser `<audio>` element.
 10. **Rate limits are respected.** Exponential backoff on 429, recovery on sustained success. Never retry immediately.
+11. **Library cache rows survive until a scan traversal succeeds.** Do not clear, age, or prune `scanned` rows at scan start. Sweep skipped or stale paths only after a complete walk. Interrupted or failed scans leave the previous good cache intact. Do not hold a writer transaction across filesystem walks or tag reads. Scan status must expose a named phase and increment `scanned` during discovery. Do not re-read tags for already-tagged rows with real identity; walk before leftover placeholder repair.

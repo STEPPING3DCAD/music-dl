@@ -121,15 +121,54 @@ class ScannedMixin:
         ).fetchall()
         return {r["path"] for r in rows}
 
-    def metadata_repair_worklist(self) -> list[dict]:
-        """Return cached rows that need one audio metadata inspection."""
+    _INCOMPLETE_IDENTITY_SQL = """
+        COALESCE(metadata_complete, 0) != 1
+        AND (
+            NULLIF(TRIM(COALESCE(title, '')), '') IS NULL
+            OR NULLIF(TRIM(COALESCE(artist, '')), '') IS NULL
+            OR NULLIF(TRIM(COALESCE(album, '')), '') IS NULL
+            OR lower(TRIM(artist)) = 'unknown artist'
+            OR lower(TRIM(album)) = 'unknown album'
+            OR lower(TRIM(title)) LIKE 'track %'
+        )
+    """
+
+    def stamp_complete_identity_rows(self) -> int:
+        """Mark tagged identity as complete without opening audio files."""
         assert self._conn
+        with self.write_transaction():
+            cursor = self._conn.execute(
+                """UPDATE scanned SET metadata_complete = 1
+                   WHERE COALESCE(metadata_complete, 0) != 1
+                     AND NULLIF(TRIM(title), '') IS NOT NULL
+                     AND NULLIF(TRIM(artist), '') IS NOT NULL
+                     AND NULLIF(TRIM(album), '') IS NOT NULL
+                     AND lower(TRIM(artist)) != 'unknown artist'
+                     AND lower(TRIM(album)) != 'unknown album'
+                     AND lower(TRIM(title)) NOT LIKE 'track %'"""
+            )
+            return int(cursor.rowcount or 0)
+
+    def metadata_repair_worklist(self) -> list[dict]:
+        """Return cached rows that still have placeholder or missing identity.
+
+        Rows that are already tagged with a real artist/title/album are not
+        inspected again, even if a schema migration left ``metadata_complete``
+        at 0 or ``codec`` is NULL. Skipped-directory paths stay out of the
+        worklist so repair never opens ``#recycle`` files.
+        """
+        assert self._conn
+        from tidal_dl.helper.library_scanner import path_has_skipped_scan_dir
+
         rows = self._conn.execute(
-            """SELECT * FROM scanned
-               WHERE COALESCE(metadata_complete, 0) != 1 OR codec IS NULL
+            f"""SELECT * FROM scanned
+               WHERE {self._INCOMPLETE_IDENTITY_SQL}
                ORDER BY path ASC"""
         ).fetchall()
-        return [dict(row) for row in rows]
+        return [
+            dict(row) for row in rows
+            if not path_has_skipped_scan_dir(row["path"])
+        ]
 
     def get(self, path: str) -> dict | None:
         """Return full cached metadata for a single path, or None."""
@@ -355,6 +394,26 @@ class ScannedMixin:
                 metadata_complete, now,
             ),
         )
+
+    def clear_release_ids(self) -> None:
+        """Drop stamped release ids before a full-library regroup."""
+        assert self._conn
+        self._conn.execute("UPDATE scanned SET release_id = NULL")
+
+    def stamp_release_ids(self, cards: list[dict]) -> None:
+        """Remember which scanned rows belong to each grouped release card."""
+        assert self._conn
+        updates = [
+            (card["id"], row["path"])
+            for card in cards
+            for row in card.get("tracks") or []
+            if row.get("path")
+        ]
+        if updates:
+            self._conn.executemany(
+                "UPDATE scanned SET release_id = ? WHERE path = ?",
+                updates,
+            )
 
     def remove(self, path: str) -> None:
         """Remove a path from the ledger (e.g. file deleted)."""

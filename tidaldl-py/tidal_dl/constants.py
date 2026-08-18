@@ -10,6 +10,10 @@ LEGACY_APP_NAME: str = "tidal-dl"
 
 CTX_TIDAL: str = "tidal"
 REQUESTS_TIMEOUT_SEC: int = 45
+# Boot / source-restore network cap. Tauri polls health for 30s; a 45s Hi-Fi,
+# gist, or quality-probe hang used to pin the spinner. 2s is enough for a live
+# host and fails fast on a dead network. Download transfers keep REQUESTS_TIMEOUT_SEC.
+SOURCE_RESOLVE_TIMEOUT_SEC: float = 2.0
 EXTENSION_LYRICS: str = ".lrc"
 UNIQUIFY_THRESHOLD: int = 99
 FILENAME_SANITIZE_PLACEHOLDER: str = "_"

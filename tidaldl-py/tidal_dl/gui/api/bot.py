@@ -462,6 +462,7 @@ _STATUS_NORMALIZE = {
     "queued": "queued",
     "running": "in-progress",
     "downloading": "in-progress",
+    "indexing": "in-progress",
     "retrying": "in-progress",
     "paused": "queued",
     "done": "completed",

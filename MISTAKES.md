@@ -1,5 +1,53 @@
 # Mistakes
 
+## 2026-08-18 — Artist search tiles showed photos with no name
+
+**What happened:** Searching Tetrarch (David Diaz) by Artist showed a grid of square photos and no readable name under or on the tiles.
+
+**Root cause:** Search already put `item.name` in `.album-card-title`. A later `.album-card-art { height: 100%; object-fit: cover }` rule, meant for `img` inside `.album-card-art-wrap`, also hit Tidal’s sibling `div.album-card-art`. Grid stretch plus `.album-card { overflow: hidden }` then clipped `.album-card-meta`. Tidal search images used `alt: ''`.
+
+**Prevention:** Keep square art with `aspect-ratio: 1`. Scope `height: 100%; object-fit: cover` to `.album-card-art-wrap .album-card-art`. Set `align-items: start` on `.album-grid` / `.album-gallery` so cards grow for the caption. Artist `img` alt is the name; the legend is visible title text, not overlay-only.
+
+## 2026-08-18 — Now-playing Download shown for a file already in the library
+
+**What happened:** Playing a downloaded track (Huelepega / Sandy, PAPO / Otra Vez) still showed `#now-download` on the now-playing bar. Repeat-one and mid-play did not matter. The footer treated the queue item as a Tidal download target.
+
+**Root cause:** `updateNowPlayingButtons` hid Download only when `current.is_local` was truthy. Tidal-shaped queue items (search, album tracks, Show on Tidal) often have an `id` and omit `is_local` even when the same recording is on disk. `album_lookup` then forced `is_local = False` and only restored it on a `(title, artist, album)` triple against Tidal's album string, without stamping `path` / `local_path`. A leftover ISRC `path` from `_serialize_track` was ignored by the player, which also streams unless `is_local` is set.
+
+**Prevention:** Hide `#now-download` when `is_local`, `path` / `local_path`, or the audio src is `/api/playback/local`. Stamp `is_local` plus `path` / `local_path` from album-scoped title+artist (the queried release's files), never ISRC. Clicking Download on a local track toasts "Already in your library" and must not enqueue again. The now-playing bar must name the source: `#now-source` uses the track-row `source-tag` chip and prefers the audio src (`/api/playback/local` → local, `/api/playback/stream/` → tidal) over queue flags.
+
+## 2026-08-18 — Now-playing bar did not name Local vs Tidal
+
+**What happened:** While a downloaded track played, the footer showed title, artist — album, and quality, but not whether audio came from the file or a Tidal stream.
+
+**Root cause:** Track rows already paint `source-tag` / `local-tag` / `tidal-tag`. The now-playing bar did not. Queue `is_local` alone is also the wrong signal; a library match should play `/api/playback/local`.
+
+**Prevention:** Paint `#now-source` in `.now-sub-row` with those classes and the text `local` or `tidal`. Prefer audio src, then on-disk flags vs Tidal id. Hide when idle.
+
+## 2026-08-18 — Cold boot waited on Tidal before the sidecar was ready
+
+**What happened:** Tauri stayed on the spinner until lifespan finished a serial Tidal `resolve_source` (Hi-Fi health, gist key refresh, OAuth restore, quality probe). Each of those calls could use the 45s download timeout against a 30s health poll. Home then awaited `/home/recent` before `navigate('home')`, and first `/api/home` paid a NAS `Path.is_dir()`/`stat` plus unused extras (completionist join, peak hours, format breakdown, best-streak, week-vs-last).
+
+**Root cause:** Lifespan treated Tidal network and optional bot install as ready-path work. The worker already recovered before claim, but ready was written only after Tidal returned. The Home body gated first paint on a 4ms recent fetch that was not required to show the existing “Loading your library…” hint.
+
+**Prevention:** Ready after migrate + download-job recovery. Restore Tidal silently after ready (`allow_interactive_login=False`); start the Discord bot after ready. Cap Hi-Fi / gist / quality-probe timeouts at ~2s. Do not await `/home/recent` before navigating Home. First `/api/home` returns the tiles Home actually renders and must not probe NAS or compute unused extras. Never group or scan on boot.
+
+## 2026-08-18 — Sync Library spent minutes mutagen-reading already-tagged rows
+
+**What happened:** After mark-and-sweep, isolated Mac Sync preserved 11,974 / 8,554 good / 3,420 skipped rows and named phases worked. First increment was 0.46s. Then `phase=repairing` sat on Synology tag reads (279/8402 at 46s; 1871/3002 at 188s). The old 90s 0/0 hang became a long repair.
+
+**Root cause:** `_background_scan` called `_reconcile_library_rows` before the walk. `metadata_repair_worklist` selected `metadata_complete != 1 OR codec IS NULL`. Schema v7 sets `metadata_complete=0` on every non-unreadable row when release columns are added, so thousands of already-tagged tracks were mutagen-read on the NAS.
+
+**Prevention:** Worklist is placeholder/missing identity only. Stamp complete identity in a cheap DB update. Do not open `#recycle` or already-tagged files. Discover/walk first; leftover repair is after first progress. No start-of-scan deletes.
+
+## 2026-08-18 — Fingerprint sweep write skipped `write_transaction` after rebase onto 135
+
+**What happened:** Rebasing scan-safety onto `717ec5a` applied the fingerprint fast-path sweep as `set_meta` + `commit`. That commit predates PR 135’s writer helper.
+
+**Root cause:** The follow-up commit only added the DB-only recycle drop. It did not go through the new `write_transaction` contract that 135 added for every short library persist.
+
+**Prevention:** After rebasing scanner work onto the lock-contention helper, wrap remaining `set_meta` / `record` / `remove` persists in `write_transaction`. Keep mark-and-sweep (no start-of-scan deletes) and 135’s short writer bursts together.
+
 ## 2026-08-17 — Search type chips kissed the gold rail and sat off-center
 
 **What happened:** The active Tracks pill sat flush against the search input’s gold curve. “Tracks” also rode high in the capsule, so it did not share a line with Albums / Artists / Playlists. Library sort pills share the same chrome.
@@ -7,6 +55,46 @@
 **Root cause:** `.filter-pills` had horizontal padding only (`0 2px`). `.pill` is a 36px box with padding but was not a flex-centered box, so the label sat at the top of the extra height. The active gold fill makes that offset visible; inactive pills only show glyphs.
 
 **Prevention:** Keep vertical padding (or column gap) on the shared search chrome so an active chip cannot meet a rounded gold control above it. Flex-center every `.pill` label and `align-items: center` the row so active and inactive chips share one line. Do not give `.pill.active` a different height or padding.
+
+## 2026-08-17 — Sync Library deleted cache rows before the walk finished
+
+**What happened:** On a clean copy of the real Mac library DB (schema v9, 11,974 rows), Sync Library stayed on `Scanning...` for 90s with `/api/library/scan/status` stuck at `{"scanning":true,"scanned":0,"total":0,"done":false}`. The isolated cache shrank to 8,554 rows before the process exited. Stale `#recycle` tracks stayed visible because the walk never completed.
+
+**Root cause:** `_background_scan` backed up the DB, then called `drop_skipped_scan_paths()` and committed deletes before reconcile/walk finished. Status was only reset after that pre-walk work, so a Synology-backed reconcile or a locked backup looked like a 0/0 black hole. Writer transactions also stayed open across mutagen/ffmpeg reads (commit every 50 records), and full-library `_album_cards(include_artwork=True)` ran on the scan thread. A matching scan fingerprint also skipped the walk entirely, so stale `#recycle` rows could survive a later Sync.
+
+**Prevention:** Never delete or age `scanned` rows at scan start. Mark-and-sweep skipped/stale paths only after a successful traversal, including the unchanged-fingerprint fast path (DB-only drop, no walk). An interrupted or failed scan must preserve the previous good cache. Do not read or repair rows under skipped directories. Expose a named `phase` immediately and increment `scanned` during discovery even when `total` is unknown. Stage metadata outside a writer transaction; commit short batches only. Keep the skipped-directory list centralized in `library_scanner.py`. Do not hold the scan busy state on full-library album grouping.
+
+## 2026-08-17 — Recently Added stayed blank while a cover-art subquery scanned the library
+
+**What happened:** Recently Added showed only the search shell and filter pills for ~3s. Warmed `/library/recent-albums` was 2.998s / 3.007s on the 11,974-row Mac library after PR 133 cut grouping from 25–53s to ~2.5–3s.
+
+**Root cause:** The remaining cost was not page grouping. `recent_albums_page` `GROUP BY album`'d the whole library with a correlated cover-art subquery that `SCAN`ned the path PK once per album (~500–800ms on a local 12k/1.5k fixture; ~3s on NAS-backed SQLite). The endpoint then discarded that cover data and used `_album_cards`. The route also awaited the API before painting any results copy, so the wait was a blank shell.
+
+**Prevention:** Page recency without per-album cover-art subqueries. Group only the current page titles plus already-stamped release members. Do not call `tracks_for_artist` for every page artist. Paint a Home-style `home-loading-hint` before the fetch. Lock the warmed 12-item page to the same <250ms budget as artist/release.
+
+## 2026-08-17 — Library grouping held the SQLite writer lock until the download worker died
+
+**What happened:** The Mac release-candidate gate saw repeated `sqlite3.OperationalError: database is locked` for minutes. A source-profile worker died at `BEGIN IMMEDIATE` while library API / scan writes were in flight. Port 8878 looked like a long scan; it was lock contention. Live v1.7.5 was left untouched.
+
+**Root cause:** `_album_cards` called `save_grouping_assessment` inside the candidate loop. The first INSERT opened an implicit write transaction. Later `assess_pair` CPU, artwork reads, more inserts, `clear_release_ids`, and `stamp_release_ids` all ran before `commit()`. Scan/index paths did the same: `db.record()` then metadata/waveform/genre I/O before the next commit. API, scanner, enrichment, and `DownloadJobService` each open their own `LibraryDB` connection. WAL readers are fine; one reserved writer blocks every other `BEGIN IMMEDIATE`. The worker’s claim is uncaught, so a 5-second busy timeout killed the thread instead of retrying.
+
+**Prevention:** Compute grouping, filesystem/network I/O, metadata reads, and callbacks first. Persist in one short `write_transaction`. Never hold a SQLite writer lock across that work. Multiple `LibraryDB` connections serialize writes at that helper (`BEGIN IMMEDIATE` + per-db lock). Retry a transient lock *outside* the process lock with a short acquire busy timeout — do not sit in `PRAGMA busy_timeout=5000` while holding that lock. The download worker must catch a remaining lock error and keep running to a terminal job state.
+
+## 2026-08-17 — Post-download `rglob` walked Synology `#recycle` and stalled the worker
+
+**What happened:** After a track finished, Downloads History showed Done while Active stayed on "Waiting to start...". The worker was busy. On a Synology library, `scan_new_downloads` used `Path.rglob("*")` on the configured download root, so it recursively entered `#recycle` and other trash trees. Large deleted folders kept the next jobs queued and pegged the worker.
+
+**Root cause:** Local library indexing already skipped trash-like directory names through `is_skipped_scan_dir` / `os.walk` pruning. The post-download indexer did not. It also marked the job `done` and wrote History before that walk finished, so the UI looked idle while the worker was still scanning.
+
+**Prevention:** Index the completed file path(s) directly. If a walk is required, reuse the centralized skip helpers and prune those directories. Keep the job in an `indexing` status (and show that status) until post-processing finishes, then mark `done`.
+
+## 2026-08-17 — Full-library album grouping on a single-artist/release read
+
+**What happened:** Artist page and release detail took 25–53s each on a 12k-row library. SQLite itself was instant. A bad release id 404'd in ~50s.
+
+**Root cause:** `artist_albums`, `artist_album_tracks`, and `release_tracks` called `_album_cards(db)`, which is not just “group everything.” On the live Mac it ran `build_local_album_groups(db.all_tracks())` on 11,844 rows, then `find_candidates` = `combinations(1565 albums, 2)` = 1,223,830 pairs, then `assess_pair` plus SQLite writes. In-flight CPU was 98% in `normalize_text()` (`unicodedata.combining`). After the release-tracks GET, `renderLocalAlbumDetail` re-fetched artist albums only for cover. Artist/album “loading” used `skeleton-row`, which has no CSS, so the wait was a blank page. “1 albums” was both the Home hero tile and the gallery count.
+
+**Prevention:** Group only the rows for that artist, the current recent-albums page, or a stamped release id. Do not call full-library grouping on those reads. After v9 migrate, `release_id` is NULL; a stamp miss for a real hash must recover with one full `_album_cards(db)` that writes every stamp, then return the card. A miss on a complete index 404s without walking. Skip the artist-albums cover fetch when the release payload already has `cover_url`. Use a visible Home-style loading hint, not an unstyled `skeleton-row`. Singularize both the hero tile and the gallery count.
 
 ## 2026-08-16 — Local scan indexed Synology `#recycle` as an artist
 

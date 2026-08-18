@@ -536,6 +536,13 @@ class TestDownloadGateway:
         assert status.json()["status"] == "queued"
         assert status.json()["title"] == "Track 123"
 
+    def test_download_status_maps_indexing_to_in_progress(self, bot_client):
+        from tidal_dl.gui.api.bot import _normalize_status
+
+        assert _normalize_status("indexing") == "in-progress"
+        assert _normalize_status("running") == "in-progress"
+        assert _normalize_status("done") == "completed"
+
 
 class TestLoggingSafety:
     """R7: Sensitive material not leaked in bot API code."""

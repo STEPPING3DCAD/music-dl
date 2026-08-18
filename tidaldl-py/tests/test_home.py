@@ -483,6 +483,92 @@ def test_volume_available_cache_returns_cached_result_without_probing(monkeypatc
     assert probes["n"] == 1, "cache miss — probe ran more than once inside TTL"
 
 
+def _seed_home_12k_library(db: LibraryDB, *, tracks: int = 11_974, albums: int = 1_565) -> None:
+    """~12k-row / ~1.5k-album fixture matching the live Mac library shape."""
+    assert db._conn
+    tracks_per_album = 7
+    bulk_albums = albums - 1
+    rows = []
+    scanned_at = 1_700_000_000
+    for album_index in range(bulk_albums):
+        artist = f"Artist {album_index // 80}"
+        album = f"Album {album_index:04d}"
+        album_time = scanned_at + album_index
+        for track in range(1, tracks_per_album + 1):
+            rows.append((
+                f"/music/{artist}/{album}/{track:02d}.flac",
+                "tagged",
+                artist,
+                f"Song {track}",
+                album,
+                artist,
+                180,
+                track,
+                tracks_per_album,
+                album_time,
+            ))
+    remainder = tracks - len(rows)
+    for extra in range(max(remainder, 0)):
+        rows.append((
+            f"/music/pad/{extra}.flac",
+            "tagged",
+            "Pad Artist",
+            f"Pad {extra}",
+            "Pad Album",
+            "Pad Artist",
+            180,
+            extra + 1,
+            remainder,
+            scanned_at,
+        ))
+    db._conn.executemany(
+        """INSERT INTO scanned (path, status, artist, title, album, album_artist,
+                                duration, track_number, track_total, scanned_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        rows,
+    )
+    db.commit()
+
+
+def test_api_home_first_payload_is_fast_on_12k_without_nas(api_home_client, tmp_path, monkeypatch):
+    """First /api/home tiles must be sub-second on a 12k fixture without a NAS probe."""
+    import tidal_dl.gui.api.home as home_api
+    import tidal_dl.gui.api.library as library_api
+
+    db = LibraryDB(tmp_path / "library.db")
+    db.open()
+    _seed_home_12k_library(db)
+    db.close()
+    home_api._invalidate_db_cache()
+
+    def fail_nas_probe():
+        raise AssertionError("first /api/home must not probe NAS Path.is_dir()/stat")
+
+    monkeypatch.setattr(library_api, "_scan_directories", fail_nas_probe)
+    monkeypatch.setattr(home_api, "_volume_available_cached", fail_nas_probe)
+
+    host = {"host": "localhost:8765"}
+    started = time.perf_counter()
+    resp = api_home_client.get("/api/home", headers=host)
+    elapsed_ms = (time.perf_counter() - started) * 1000
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["track_count"] >= 11_974
+    assert data["album_count"] >= 1_565
+    assert "total_plays" in data
+    assert "this_week" in data
+    assert "weekly_activity" in data
+    assert len(data["weekly_activity"]) == 7
+    assert data.get("volume_available") is not False
+    assert "completionist_albums" not in data
+    assert "peak_hours" not in data
+    assert "format_breakdown" not in data
+    assert "best_streak" not in data
+    assert "week_vs_last" not in data
+    assert elapsed_ms < 1000
+
+
 def test_volume_available_cache_expires_after_ttl(monkeypatch):
     """After TTL elapses, the next call re-probes and refreshes the cache."""
     import tidal_dl.gui.api.home as home_api

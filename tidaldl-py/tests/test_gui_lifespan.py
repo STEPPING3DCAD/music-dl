@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+import time
 import warnings
 
 from fastapi.testclient import TestClient
@@ -29,6 +31,7 @@ def test_gui_lifespan_invokes_noninteractive_source_resolution(tmp_path):
     app = create_app(port=8765, job_db_path=tmp_path / "jobs.db")
     with TestClient(app) as client:
         response = client.get("/api/server/health", headers={"host": "localhost:8765"})
+        _wait_for_source_restore(app)
 
     assert response.status_code == 200
     assert response.json()["status"] == "ready"
@@ -49,3 +52,142 @@ def test_health_returns_structured_daemon_state():
     assert data["port"] == 8765
     assert data["base_url"] == "http://127.0.0.1:8765"
     assert data["health_url"] == "http://127.0.0.1:8765/api/server/health"
+
+
+def _wait_for_source_restore(app, timeout: float = 2.0) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if getattr(app.state, "source_restore_attempted", False):
+            return
+        time.sleep(0.01)
+    raise AssertionError("Tidal restore was not attempted after ready")
+
+
+def test_health_ready_does_not_wait_for_blocked_tidal_probe(tmp_path, monkeypatch):
+    """Sidecar health must clear without waiting on a hanging Tidal probe."""
+    entered = threading.Event()
+    release = threading.Event()
+    result: dict[str, object] = {}
+
+    def hanging_resolve(self, *args, **kwargs):
+        entered.set()
+        release.wait(timeout=30)
+        return False
+
+    monkeypatch.setattr("tidal_dl.config.Tidal.resolve_source", hanging_resolve)
+
+    app = create_app(port=8765, job_db_path=tmp_path / "jobs.db")
+
+    def run_client() -> None:
+        started = time.monotonic()
+        with TestClient(app) as client:
+            result["startup_ms"] = (time.monotonic() - started) * 1000
+            result["response"] = client.get(
+                "/api/server/health",
+                headers={"host": "localhost:8765"},
+            )
+
+    worker = threading.Thread(target=run_client, name="lifespan-health-client")
+    worker.start()
+    worker.join(timeout=2.5)
+    still_blocked = worker.is_alive()
+    release.set()
+    worker.join(timeout=2)
+
+    assert still_blocked is False
+    assert result.get("startup_ms", 10_000) < 2000
+    response = result["response"]
+    assert response.status_code == 200
+    assert response.json()["status"] == "ready"
+    assert entered.wait(timeout=1)
+
+
+def test_tidal_restore_still_runs_after_ready(tmp_path, monkeypatch):
+    """Quiet Tidal restore must still happen after health is ready."""
+    restore_started = threading.Event()
+
+    def spy_resolve(self, *args, **kwargs):
+        restore_started.set()
+        return False
+
+    monkeypatch.setattr("tidal_dl.config.Tidal.resolve_source", spy_resolve)
+
+    app = create_app(port=8765, job_db_path=tmp_path / "jobs.db")
+    with TestClient(app) as client:
+        response = client.get("/api/server/health", headers={"host": "localhost:8765"})
+        assert response.status_code == 200
+        assert response.json()["status"] == "ready"
+        assert restore_started.wait(timeout=2)
+
+    assert app.state.source_restore_attempted is True
+    assert app.state.source_restored is False
+    assert app.state.source_restore_error is None
+
+
+def test_recover_download_jobs_runs_before_first_claim(tmp_path, monkeypatch):
+    """Worker must not claim until recover_download_jobs has committed."""
+    order: list[str] = []
+    recovered = threading.Event()
+    claimed = threading.Event()
+
+    from tidal_dl.gui.services.download_job_service import DownloadJobService
+    from tidal_dl.helper.library_db import LibraryDB
+
+    original_recover = LibraryDB.recover_download_jobs
+    original_claim = LibraryDB.claim_next_download_job
+
+    def recover(self):
+        result = original_recover(self)
+        order.append("recover")
+        recovered.set()
+        return result
+
+    def claim(self, *args, **kwargs):
+        if recovered.is_set():
+            order.append("claim")
+            claimed.set()
+        else:
+            order.append("claim-before-recover")
+            claimed.set()
+        return original_claim(self, *args, **kwargs)
+
+    monkeypatch.setattr(LibraryDB, "recover_download_jobs", recover)
+    monkeypatch.setattr(LibraryDB, "claim_next_download_job", claim)
+
+    db_path = tmp_path / "jobs.db"
+    seeder = DownloadJobService(db_path=db_path, autostart=False)
+    seeder.enqueue_download([4242])
+
+    app = create_app(port=8765, job_db_path=db_path)
+    with TestClient(app) as client:
+        response = client.get("/api/server/health", headers={"host": "localhost:8765"})
+        assert response.status_code == 200
+        assert recovered.wait(timeout=2)
+        claimed.wait(timeout=1)
+
+    assert "recover" in order
+    assert "claim-before-recover" not in order
+    assert order.index("recover") == 0
+
+
+def test_lifespan_does_not_scan_or_group_on_boot(tmp_path, monkeypatch):
+    """Ready must not walk downloads or rebuild album cards."""
+
+    def fail_scan(*_args, **_kwargs):
+        raise AssertionError("lifespan must not scan downloads on boot")
+
+    def fail_cards(*_args, **_kwargs):
+        raise AssertionError("lifespan must not group albums on boot")
+
+    monkeypatch.setattr(
+        "tidal_dl.gui.services.download_job_service.scan_new_downloads",
+        fail_scan,
+    )
+    monkeypatch.setattr("tidal_dl.gui.api.library._album_cards", fail_cards)
+
+    app = create_app(port=8765, job_db_path=tmp_path / "jobs.db")
+    with TestClient(app) as client:
+        response = client.get("/api/server/health", headers={"host": "localhost:8765"})
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ready"

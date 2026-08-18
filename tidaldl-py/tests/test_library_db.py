@@ -73,7 +73,7 @@ class TestPragmas:
             "album_artist", "release_date", "track_number", "track_total",
             "disc_number", "disc_total", "musicbrainz_release_id",
             "musicbrainz_release_group_id", "provider_namespace",
-            "provider_album_id", "barcode",
+            "provider_album_id", "barcode", "release_id",
         } <= cols
         assert row is not None
         assert row["status"] == "tagged"
@@ -419,11 +419,13 @@ class TestDownloadJobs:
         running = db.create_download_job_if_not_active(kind="download", track_id=2)
         retrying = db.create_download_job_if_not_active(kind="download", track_id=3)
         paused = db.create_download_job_if_not_active(kind="download", track_id=4)
+        indexing = db.create_download_job_if_not_active(kind="download", track_id=6)
         done = db.create_download_job_if_not_active(kind="download", track_id=5)
 
         db.update_download_job(running, status="running")
         db.update_download_job(retrying, status="retrying")
         db.update_download_job(paused, status="paused")
+        db.update_download_job(indexing, status="indexing")
         db.update_download_job(done, status="done")
         db.recover_download_jobs()
 
@@ -431,6 +433,7 @@ class TestDownloadJobs:
         assert db.get_download_job(running)["status"] == "interrupted"
         assert db.get_download_job(retrying)["status"] == "interrupted"
         assert db.get_download_job(paused)["status"] == "interrupted"
+        assert db.get_download_job(indexing)["status"] == "interrupted"
         assert db.get_download_job(done)["status"] == "done"
 
 
@@ -678,7 +681,7 @@ class TestMigration:
                     "quality_probes", "library_meta", "download_history", "favorites"}
         assert expected.issubset(tables)
 
-    def test_v1_to_v8_migration(self, tmp_path):
+    def test_v1_to_v9_migration(self, tmp_path):
         """Create a v1-style DB, then open with LibraryDB to trigger migration."""
         db_path = tmp_path / "legacy.db"
         conn = sqlite3.connect(str(db_path))
@@ -708,7 +711,8 @@ class TestMigration:
         assert "musicbrainz_release_id" in cols
         assert "provider_album_id" in cols
         assert "barcode" in cols
-        assert LibraryDB._SCHEMA_VERSION == 8
+        assert "release_id" in cols
+        assert LibraryDB._SCHEMA_VERSION == 9
         assert (
             db._conn.execute("PRAGMA user_version").fetchone()[0]
             == LibraryDB._SCHEMA_VERSION

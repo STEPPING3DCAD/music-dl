@@ -366,7 +366,7 @@ function _artistTile(artist, hero) {
   body.appendChild(textEl('div', artist.play_count + ' plays', 'bento-sub'));
   const stats = [];
   if (artist.track_count) stats.push(artist.track_count + ' tracks');
-  if (artist.album_count) stats.push(artist.album_count + ' albums');
+  if (artist.album_count) stats.push(artist.album_count + ' album' + (artist.album_count !== 1 ? 's' : ''));
   if (artist.genre) stats.push(artist.genre);
   if (stats.length) {
     body.appendChild(textEl('div', stats.join(' · '), 'bento-artist-stats'));
@@ -1202,7 +1202,7 @@ function renderSearchResults(container, data, showHeader = true) {
       const artDiv = h('div', { className: 'album-card-art' });
       if (item.cover_url) {
         const img = h('img', { src: item.cover_url, loading: 'lazy' });
-        img.alt = '';
+        img.alt = item.name || '';
         img.onerror = function() {
           this.style.display = 'none';
           artDiv.appendChild(h('div', { className: 'art-gradient', style: { background: artGradient(item.id || item.name) } }));
@@ -1654,7 +1654,7 @@ async function renderArtistGallery(container, artistName) {
 
   const grid = h('div', { className: 'album-gallery' });
   container.appendChild(grid);
-  grid.appendChild(h('div', { className: 'skeleton-row' }));
+  grid.appendChild(textEl('p', 'Loading albums…', 'home-loading-hint'));
 
   try {
     const data = await api('/library/artist/' + encodeURIComponent(artistName) + '/albums');
@@ -1669,7 +1669,7 @@ async function renderArtistGallery(container, artistName) {
     }
 
     const titleRow = header.querySelector('.artist-gallery-title-row');
-    if (titleRow) titleRow.appendChild(textEl('span', data.albums.length + ' albums', 'artist-gallery-count'));
+    if (titleRow) titleRow.appendChild(textEl('span', data.albums.length + ' album' + (data.albums.length !== 1 ? 's' : ''), 'artist-gallery-count'));
 
     data.albums.forEach((album, index) => {
       const card = h('div', { className: 'album-card' });
@@ -1715,10 +1715,13 @@ async function renderArtistGallery(container, artistName) {
 
 // ---- LOCAL ALBUM DETAIL (from library click) ----
 async function renderLocalReleaseDetail(container, releaseHash) {
+  container.appendChild(textEl('p', 'Loading tracks…', 'home-loading-hint'));
   try {
     const data = await api('/library/releases/' + encodeURIComponent(releaseHash) + '/tracks');
+    while (container.firstChild) container.removeChild(container.firstChild);
     renderLocalAlbumDetail(container, data.artist, data.album, data);
   } catch (err) {
+    while (container.firstChild) container.removeChild(container.firstChild);
     container.appendChild(h('div', { className: 'empty-state' },
       textEl('div', 'Could not load release', 'empty-state-title'),
       textEl('div', err.message, 'empty-state-sub')
@@ -1736,13 +1739,14 @@ async function renderLocalAlbumDetail(container, artistName, albumName, prefetch
     { label: albumName },
   ]));
 
-  // Fetch album info for cover art
-  let coverUrl = '';
-  try {
-    const albumsData = await api('/library/artist/' + encodeURIComponent(artistName) + '/albums');
-    const match = (albumsData.albums || []).find(a => a.name === albumName);
-    if (match) coverUrl = match.cover_url;
-  } catch (_) {}
+  let coverUrl = (prefetchedData && prefetchedData.cover_url) || '';
+  if (!coverUrl && !(prefetchedData && 'cover_url' in prefetchedData)) {
+    try {
+      const albumsData = await api('/library/artist/' + encodeURIComponent(artistName) + '/albums');
+      const match = (albumsData.albums || []).find(a => a.name === albumName);
+      if (match) coverUrl = match.cover_url;
+    } catch (_) {}
+  }
 
   // Album header
   const albumHeader = h('div', { className: 'album-detail-header' });
@@ -1797,7 +1801,7 @@ async function renderLocalAlbumDetail(container, artistName, albumName, prefetch
 
   const trackList = h('div', { className: 'tracks' });
   wrapper.appendChild(trackList);
-  trackList.appendChild(h('div', { className: 'skeleton-row' }));
+  trackList.appendChild(textEl('p', 'Loading tracks…', 'home-loading-hint'));
 
   try {
     const data = prefetchedData || await api('/library/artist/' + encodeURIComponent(artistName) + '/album/' + encodeURIComponent(albumName) + '/tracks');
@@ -2568,6 +2572,13 @@ function renderRecentAlbumRow(album) {
 }
 
 async function loadLibraryRecentAlbumsExpanded(resultsArea, append) {
+  if (!append) {
+    while (resultsArea.firstChild) resultsArea.removeChild(resultsArea.firstChild);
+    resultsArea.appendChild(h('div', { className: 'results-header' },
+      textEl('div', 'Recently Added', 'results-title'),
+    ));
+    resultsArea.appendChild(textEl('p', 'Loading albums…', 'home-loading-hint'));
+  }
   try {
     const data = await loadLibraryRecentAlbumsPage(LIBRARY_PAGE_SIZE, libraryOffset);
     const albums = data.albums || [];
@@ -2843,6 +2854,23 @@ function _navText(el) {
   return t;
 }
 
+function _scanStatusLabel(status) {
+  const phase = status && status.phase;
+  if (phase === 'error' || (status && status.error)) return ' Sync failed';
+  if (phase === 'discovering' && status.scanned > 0) {
+    return ' Found ' + Number(status.scanned).toLocaleString();
+  }
+  if (status && status.total > 0 && status.scanned > 0) {
+    return ' ' + status.scanned + '/' + status.total;
+  }
+  if (phase && phase !== 'done' && phase !== 'idle') {
+    return ' ' + phase.charAt(0).toUpperCase() + phase.slice(1) + '...';
+  }
+  if (status && status.scanned > 0) return ' New: ' + status.scanned;
+  if (status && status.total > 0) return ' Checking... ' + Number(status.total).toLocaleString();
+  return ' Scanning...';
+}
+
 async function triggerScan(btn, resultsArea, rescan) {
   if (!btn) return;
   const textNode = _navText(btn);
@@ -2860,13 +2888,7 @@ async function triggerScan(btn, resultsArea, rescan) {
   libraryScanPoll = setInterval(async () => {
     try {
       const status = await api('/library/scan/status');
-      if (status.scanned > 0) {
-        textNode.textContent = ' New: ' + status.scanned;
-      } else if (status.total > 0) {
-        textNode.textContent = ' Checking... ' + status.total.toLocaleString();
-      } else {
-        textNode.textContent = ' Scanning...';
-      }
+      textNode.textContent = _scanStatusLabel(status);
       if (status.done || !status.scanning) {
         clearInterval(libraryScanPoll);
         libraryScanPoll = null;
@@ -2877,7 +2899,11 @@ async function triggerScan(btn, resultsArea, rescan) {
         _libraryAlbumCache.clear();
         _failedAlbumArtUrls.clear();
         await loadLibrary(resultsArea, false);
-        toast('Library synced — ' + status.scanned + ' files indexed', 'success');
+        if (status.phase === 'error' || status.error) {
+          toast('Library sync failed — previous library kept', 'error');
+        } else {
+          toast('Library synced — ' + status.scanned + ' files indexed', 'success');
+        }
       }
     } catch (_) {
       clearInterval(libraryScanPoll);
@@ -4001,7 +4027,7 @@ function updateActiveDownload(container, data) {
   // Progress bar
   const barWrap = h('div', { className: 'dl-progress-wrap' });
   const barFill = h('div', { className: 'dl-progress-fill' });
-  if (data.status === 'downloading') {
+  if (data.status === 'downloading' || data.status === 'indexing') {
     barFill.classList.add('dl-progress-active');
     barFill.style.width = (data.progress || 0) + '%';
   } else {
@@ -4012,8 +4038,13 @@ function updateActiveDownload(container, data) {
   barWrap.appendChild(barFill);
   info.appendChild(barWrap);
 
+  const statusLabel = data.status === 'queued'
+    ? 'Waiting...'
+    : data.status === 'indexing'
+      ? 'Indexing...'
+      : 'Downloading';
   const statusText = textEl('div',
-    data.status === 'queued' ? 'Waiting...' : 'Downloading',
+    statusLabel,
     'dl-card-status' + (data.status === 'queued' ? ' dl-status-queued' : '')
   );
   info.appendChild(statusText);

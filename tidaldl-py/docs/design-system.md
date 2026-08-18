@@ -273,6 +273,8 @@ padding: 0;
 - 96px height, 3-column grid: `1fr 1fr 1fr`
 - Glassmorphism: `backdrop-filter: blur(60px) saturate(1.3)`
 - Play button: 42px circle, `--text` bg, `--bg` icon
+- `#now-download` is hidden when the playing track is already on disk (`is_local`, `path` / `local_path`, or audio src `/api/playback/local`). No extra player chrome.
+- `#now-source` reuses the track-row `source-tag` / `local-tag` / `tidal-tag` chip and names `local` or `tidal` from the audio src (`/api/playback/local` vs `/api/playback/stream/`), then on-disk flags vs Tidal id. Hidden when idle.
 
 ### Queue Panel
 - Fixed right, 380px wide, slide-in
