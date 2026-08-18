@@ -256,7 +256,7 @@ Your browser opens automatically. The wizard handles the rest.
 - **Waveform visualizer** — pre-computed amplitude data drives a ripple animation from the playhead, zero audio post-processing
 - **Playlist sync** — point it at a Tidal playlist and it downloads only the tracks you don't have
 - **Favorites** — mark tracks you love, access them from one place
-- **Local lyrics** — synced `.lrc` sidecars and embedded tag fallback, rendered in the player with no network lookups. See [`tidaldl-py/docs/local-lyrics.md`](tidaldl-py/docs/local-lyrics.md).
+- **Lyrics** — the now-playing panel reads a sidecar `.lrc` or embedded tags first, then Tidal `track.lyrics()` when signed in. Save lyrics writes that sidecar for the current local file so later plays work offline. Download-time embed/sidecar stay opt-in. See [`tidaldl-py/docs/local-lyrics.md`](tidaldl-py/docs/local-lyrics.md).
 - **Setup wizard** — first-run experience that walks you through Tidal login and library paths
 - **Discord bot (optional)** — single-user, single-guild companion that streams and downloads from your library over Discord voice. Configure it from the GUI's DJAI view; when valid config exists, the app starts the bot in the background, reuses any live recorded bot process after backend restarts, and stops it when the app exits. The Discord remote panel handles search, playlists, playback controls, and repeat. See [`apps/discord-bot/README.md`](apps/discord-bot/README.md) and [`tidaldl-py/docs/bot-onboarding.md`](tidaldl-py/docs/bot-onboarding.md).
 

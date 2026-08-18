@@ -2766,6 +2766,25 @@ body {
   filter: blur(28px) saturate(1.05);
 }
 
+.lyrics-save {
+  position: absolute;
+  top: 20px;
+  left: 20px;
+  z-index: 2;
+  height: 36px;
+  padding: 0 14px;
+  border: 1px solid var(--glass-border);
+  border-radius: 999px;
+  background: rgba(15, 14, 13, 0.45);
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.lyrics-save[hidden] {
+  display: none;
+}
+
 .lyrics-close {
   position: absolute;
   top: 20px;
