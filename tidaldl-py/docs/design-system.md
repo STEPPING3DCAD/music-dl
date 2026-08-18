@@ -304,7 +304,8 @@ padding: 0;
 ### Search
 - Debounce: 300ms
 - Input: pill-shaped, 40px radius
-- Focus: accent border glow
+- Focus: accent border glow (`0 0 0 4px var(--accent-glow)`). `.search-area` keeps a 16px column gap; `.filter-pills` adds `padding: 8px 2px 0` so a 36px active chip cannot kiss that gold rail.
+- Filter / Library sort chips: shared `.pill` is a flex-centered 36px capsule (`align-items` + `justify-content: center`). Do not give `.pill.active` a different height or padding. Album search chips stay smaller (`.album-search-filters .pill` min-height 28px). `button.pill` uses the same chrome.
 
 ---
 

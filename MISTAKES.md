@@ -1,5 +1,13 @@
 # Mistakes
 
+## 2026-08-18 — Library sort pills sat low in the gold capsule
+
+**What happened:** Library Artist / Album / Title / Plays chips used `.filter-pills` / `.pill`. Active Plays sat low in the gold capsule (more space above the letters than below). Search type chips had the same chrome: the active chip also sat flush against the search field’s gold curve.
+
+**Root cause:** `.pill` is a 36px box with padding but was not a flex-centered box, so the label did not sit in the capsule. `.filter-pills` had horizontal padding only (`0 2px`). A 36px pill and the focused input’s 4px gold glow met across the 16px `.search-area` gap. PR 132 already named both defects and the CSS fix, but that branch stayed behind master and was never re-applied.
+
+**Prevention:** Flex-center every `.pill` label (`display: flex; align-items: center; justify-content: center`) and `align-items: center` the row. Keep `.filter-pills` top padding (`8px 2px 0`) so an active chip cannot meet a rounded gold control above it. Do not give `.pill.active` a different height or padding. Leave `.album-search-filters .pill` at 28px. `button.pill` (Play/Shuffle, grouping, load-more) shares this chrome.
+
 ## 2026-08-18 — Lyrics panel stayed empty for years
 
 **What happened:** Opening Lyrics on now-playing (including library files with no `.lrc` / tags, and Tidal-only streams) showed nothing. Live 1.7.6 `GET /api/lyrics/local` returned `{mode: none}` because download settings `lyrics_embed` and `lyrics_file` default off, so `metadata_write` never called `track.lyrics()`.
