@@ -1094,7 +1094,6 @@ def _background_scan(rescan: bool) -> None:
 
         dropped = drop_skipped_scan_paths(db)
         if dropped:
-            db.commit()
             print(f"[library] Dropped {dropped} rows under skipped directories")
 
         if not rescan:
@@ -1233,8 +1232,8 @@ def _background_scan(rescan: bool) -> None:
                     "mtimes": [os.stat(str(d)).st_mtime for d in sorted(scan_dirs)],
                     "known_count": final_known,
                 }, sort_keys=True)
-                db.set_meta("scan_fingerprint", finger)
-                db.commit()
+                with db.write_transaction():
+                    db.set_meta("scan_fingerprint", finger)
             except OSError:
                 pass
 

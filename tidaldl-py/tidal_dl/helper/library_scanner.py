@@ -64,12 +64,15 @@ def path_has_skipped_scan_dir(path: str | pathlib.Path) -> bool:
 
 def drop_skipped_scan_paths(library_db: LibraryDB) -> int:
     """Remove already-indexed rows whose path walks through a skipped directory."""
-    removed = 0
-    for path in library_db.known_paths():
-        if path_has_skipped_scan_dir(path):
+    stale = [
+        path for path in library_db.known_paths() if path_has_skipped_scan_dir(path)
+    ]
+    if not stale:
+        return 0
+    with library_db.write_transaction():
+        for path in stale:
             library_db.remove(path)
-            removed += 1
-    return removed
+    return len(stale)
 
 
 # ---------------------------------------------------------------------------
@@ -190,9 +193,9 @@ def scan_directory(
 ) -> ScanResult:
     """Walk *root* recursively, extract ISRCs, and populate *library_db*.
 
-    The caller is responsible for calling ``library_db.commit()`` after this
-    function returns (unless ``dry_run`` is True, in which case no writes
-    are performed at all).
+    Writes are flushed in short ``write_transaction`` batches so ISRC
+    extraction never holds the reserved lock. A trailing caller ``commit()``
+    is harmless. ``dry_run`` performs no writes.
 
     Args:
         root (pathlib.Path): Directory to scan recursively.
@@ -206,6 +209,15 @@ def scan_directory(
     """
     result = ScanResult()
     start = time.monotonic()
+    pending: list[tuple[str, pathlib.Path]] = []
+
+    def flush_pending() -> None:
+        if dry_run or not pending:
+            return
+        with library_db.write_transaction():
+            for isrc, file_path in pending:
+                library_db.register_isrc_path(isrc, file_path)
+        pending.clear()
 
     if not dry_run:
         drop_skipped_scan_paths(library_db)
@@ -243,9 +255,12 @@ def scan_directory(
                 continue
 
             if not dry_run:
-                library_db.register_isrc_path(isrc, file_path)
+                pending.append((isrc, file_path))
+                if len(pending) >= 50:
+                    flush_pending()
 
             result.isrcs_found += 1
 
+    flush_pending()
     result.elapsed_sec = time.monotonic() - start
     return result

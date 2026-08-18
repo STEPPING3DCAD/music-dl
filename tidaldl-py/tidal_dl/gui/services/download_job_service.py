@@ -900,8 +900,8 @@ class DownloadJobService:
     def _record_history(self, **fields) -> None:
         db = self._open_db()
         try:
-            db.record_download(**fields)
-            db.commit()
+            with db.write_transaction():
+                db.record_download(**fields)
         finally:
             db.close()
 

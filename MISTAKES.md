@@ -14,7 +14,7 @@
 
 **Root cause:** `_album_cards` called `save_grouping_assessment` inside the candidate loop. The first INSERT opened an implicit write transaction. Later `assess_pair` CPU, artwork reads, more inserts, `clear_release_ids`, and `stamp_release_ids` all ran before `commit()`. Scan/index paths did the same: `db.record()` then metadata/waveform/genre I/O before the next commit. API, scanner, enrichment, and `DownloadJobService` each open their own `LibraryDB` connection. WAL readers are fine; one reserved writer blocks every other `BEGIN IMMEDIATE`. The worker’s claim is uncaught, so a 5-second busy timeout killed the thread instead of retrying.
 
-**Prevention:** Compute grouping, filesystem/network I/O, metadata reads, and callbacks first. Persist in one short `write_transaction`. Never hold a SQLite writer lock across that work. Multiple `LibraryDB` connections serialize writes at that helper (`BEGIN IMMEDIATE` + per-db lock + bounded retry). The download worker must catch a transient lock and keep running to a terminal job state.
+**Prevention:** Compute grouping, filesystem/network I/O, metadata reads, and callbacks first. Persist in one short `write_transaction`. Never hold a SQLite writer lock across that work. Multiple `LibraryDB` connections serialize writes at that helper (`BEGIN IMMEDIATE` + per-db lock). Retry a transient lock *outside* the process lock with a short acquire busy timeout — do not sit in `PRAGMA busy_timeout=5000` while holding that lock. The download worker must catch a remaining lock error and keep running to a terminal job state.
 
 ## 2026-08-17 — Post-download `rglob` walked Synology `#recycle` and stalled the worker
 

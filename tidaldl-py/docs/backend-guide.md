@@ -321,7 +321,7 @@ Index: `idx_play_events_at`
 
 Indexes: `idx_download_jobs_status_created`, `idx_download_jobs_track_id`
 
-Job creation uses an atomic `BEGIN IMMEDIATE` transaction so two requests cannot enqueue active duplicate work for the same `track_id`. Queue claiming also uses `BEGIN IMMEDIATE` and updates only a still-queued row before returning it to the worker. Every `BEGIN IMMEDIATE` site goes through `LibraryDB.write_transaction(immediate=True)`, which holds a per-database process lock for that short SQL burst and retries a transient lock a bounded number of times. The download worker treats a remaining lock error as a deferred claim and keeps running; it does not die.
+Job creation uses an atomic `BEGIN IMMEDIATE` transaction so two requests cannot enqueue active duplicate work for the same `track_id`. Queue claiming also uses `BEGIN IMMEDIATE` and updates only a still-queued row before returning it to the worker. Every `BEGIN IMMEDIATE` site goes through `LibraryDB.write_transaction(immediate=True)`, which holds a per-database process lock for that short SQL burst. A transient lock is retried *outside* that process lock with a 50ms acquire timeout so a foreign reserved writer cannot pin every other writer behind the 5s `busy_timeout`. The download worker treats a remaining lock error as a deferred claim and keeps running; it does not die.
 
 Startup recovery rule: queued jobs stay queued. `running`, `indexing`, `retrying`, and `paused` jobs become `interrupted`. Terminal jobs stay terminal.
 
@@ -396,7 +396,7 @@ with db.write_transaction(immediate=True):
     db.stamp_release_ids(cards)
 ```
 
-API routes, the background scanner, album enrichment, and `DownloadJobService` each open their own connection. WAL readers stay concurrent. Writers serialize at `write_transaction` / `begin_immediate`, not by sharing one connection across threads.
+API routes, the background scanner, album enrichment, and `DownloadJobService` each open their own connection. WAL readers stay concurrent. Writers serialize at `write_transaction` / `begin_immediate`, not by sharing one connection across threads. Lock retries release the process lock before sleeping.
 
 **GUI singleton** (`gui/api/library.py`):
 ```python

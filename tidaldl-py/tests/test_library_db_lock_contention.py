@@ -130,7 +130,7 @@ def test_worker_begin_immediate_survives_overlapping_album_card_write(tmp_path, 
         assert second_assess_started.wait(timeout=5)
         try:
             claim_result["row"] = _claim_with_short_busy(db_path)
-        except Exception as exc:  # noqa: BLE001
+        except sqlite3.OperationalError as exc:
             claim_result["error"] = exc
         finally:
             claim_finished.set()
@@ -173,6 +173,152 @@ def test_worker_begin_immediate_survives_overlapping_album_card_write(tmp_path, 
     assert stored.status.value == "done"
 
 
+def test_scan_metadata_io_does_not_block_worker_begin_immediate(tmp_path, monkeypatch):
+    """Post-download indexing must not hold the writer lock while reading tags."""
+    from tidal_dl.gui.api import library as library_api
+    from tidal_dl.gui.services.download_job_service import scan_new_downloads
+
+    library_dir = tmp_path / "music"
+    first = library_dir / "a.wav"
+    second = library_dir / "b.wav"
+    _write_wav(first)
+    _write_wav(second)
+
+    db_path = tmp_path / "library.db"
+    db = LibraryDB(db_path)
+    db.open()
+    job_id = db.create_download_job_if_not_active(kind="download", track_id=321)
+    db.close()
+    assert job_id is not None
+
+    second_read_started = threading.Event()
+    claim_finished = threading.Event()
+    claim_result: dict[str, object] = {}
+    reads = 0
+    real_read = library_api._read_metadata
+
+    def hooked_read(path, roots):
+        nonlocal reads
+        result = real_read(path, roots)
+        reads += 1
+        if reads == 2:
+            second_read_started.set()
+            assert claim_finished.wait(timeout=5)
+        return result
+
+    monkeypatch.setattr(library_api, "_read_metadata", hooked_read)
+
+    def claim_while_scanning() -> None:
+        assert second_read_started.wait(timeout=5)
+        try:
+            claim_result["row"] = _claim_with_short_busy(db_path)
+        except sqlite3.OperationalError as exc:
+            claim_result["error"] = exc
+        finally:
+            claim_finished.set()
+
+    claimer = threading.Thread(target=claim_while_scanning)
+    claimer.start()
+    scan_db = LibraryDB(db_path)
+    scan_db.open()
+    try:
+        scan_new_downloads(
+            scan_db,
+            SimpleNamespace(data=SimpleNamespace(download_base_path=str(library_dir))),
+        )
+    finally:
+        scan_db.close()
+        if not claim_finished.is_set():
+            claim_finished.set()
+        claimer.join(timeout=5)
+
+    assert reads >= 2
+    assert "error" not in claim_result, repr(claim_result.get("error"))
+    claimed = claim_result.get("row")
+    assert isinstance(claimed, dict)
+    assert claimed["id"] == job_id
+    assert claimed["status"] == "running"
+
+
+def test_upgrade_cleanup_trash_io_does_not_block_worker_begin_immediate(tmp_path, monkeypatch):
+    """Upgrade cleanup must trash files before opening a reserved write."""
+    from tidal_dl.gui.services import upgrade_jobs
+
+    album_dir = tmp_path / "Artist" / "Album"
+    album_dir.mkdir(parents=True)
+    old_path = album_dir / "old.flac"
+    sibling = album_dir / "sibling.flac"
+    new_path = album_dir / "new.flac"
+    for path in (old_path, sibling, new_path):
+        path.write_bytes(b"audio")
+
+    db_path = tmp_path / "library.db"
+    db = LibraryDB(db_path)
+    db.open()
+    for path in (old_path, sibling, new_path):
+        db.record(
+            str(path),
+            status="tagged",
+            isrc="USAAA2199999",
+            artist="Artist",
+            title="Song",
+            album="Album",
+        )
+    db.commit()
+    job_id = db.create_download_job_if_not_active(kind="download", track_id=654)
+    db.close()
+    assert job_id is not None
+
+    second_trash_started = threading.Event()
+    claim_finished = threading.Event()
+    claim_result: dict[str, object] = {}
+    trashes = 0
+    real_trash = upgrade_jobs.trash_file
+
+    def hooked_trash(path: str) -> None:
+        nonlocal trashes
+        real_trash(path)
+        trashes += 1
+        if trashes == 2:
+            second_trash_started.set()
+            assert claim_finished.wait(timeout=5)
+
+    monkeypatch.setattr(upgrade_jobs, "trash_file", hooked_trash)
+
+    def claim_while_trashing() -> None:
+        assert second_trash_started.wait(timeout=5)
+        try:
+            claim_result["row"] = _claim_with_short_busy(db_path)
+        except sqlite3.OperationalError as exc:
+            claim_result["error"] = exc
+        finally:
+            claim_finished.set()
+
+    claimer = threading.Thread(target=claim_while_trashing)
+    claimer.start()
+    cleanup_db = LibraryDB(db_path)
+    cleanup_db.open()
+    try:
+        removed = upgrade_jobs.cleanup_replaced_track_files(
+            cleanup_db,
+            old_path=str(old_path),
+            new_path=str(new_path),
+        )
+    finally:
+        cleanup_db.close()
+        if not claim_finished.is_set():
+            claim_finished.set()
+        claimer.join(timeout=5)
+
+    assert trashes >= 2
+    assert set(removed) == {str(old_path), str(sibling)}
+    assert "error" not in claim_result, repr(claim_result.get("error"))
+    claimed = claim_result.get("row")
+    assert isinstance(claimed, dict)
+    assert claimed["id"] == job_id
+    assert claimed["status"] == "running"
+
+
 def test_worker_loop_survives_transient_lock_and_reaches_done(tmp_path, monkeypatch):
     """A held writer must fail BEGIN IMMEDIATE once; the worker thread must stay alive."""
     from tidal_dl.gui.services import download_job_service as job_mod
@@ -181,7 +327,15 @@ def test_worker_loop_survives_transient_lock_and_reaches_done(tmp_path, monkeypa
     output = tmp_path / "music" / "Song.wav"
     _write_wav(output)
     service = DownloadJobService(db_path=db_path, autostart=False)
-    service.enqueue_download([123])
+    queued = service.enqueue_download([123])
+    assert queued["status"] == "queued"
+    inspect_db = LibraryDB(db_path)
+    inspect_db.open()
+    assert inspect_db._conn is not None
+    job_row = inspect_db._conn.execute("SELECT id FROM download_jobs").fetchone()
+    inspect_db.close()
+    assert job_row is not None
+    job_id = int(job_row["id"])
     fakes = _download_fakes(output)
     monkeypatch.setattr(job_mod, "Settings", fakes[0])
     monkeypatch.setattr(job_mod, "Tidal", fakes[1])
@@ -243,7 +397,7 @@ def test_worker_loop_survives_transient_lock_and_reaches_done(tmp_path, monkeypa
     deadline = threading.Event()
     finished = False
     for _ in range(40):
-        stored = service.get_job_for_test(1)
+        stored = service.get_job_for_test(job_id)
         if stored is not None and stored.status.value == "done":
             finished = True
             break

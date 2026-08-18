@@ -38,12 +38,12 @@ class DownloadsMixin:
     def clear_download_history(self, status: str | None = None) -> int:
         """Delete download history entries. If status is given, only delete that status."""
         assert self._conn
-        if status:
-            cur = self._conn.execute("DELETE FROM download_history WHERE status = ?", (status,))
-        else:
-            cur = self._conn.execute("DELETE FROM download_history")
-        self._conn.commit()
-        return cur.rowcount
+        with self.write_transaction():
+            if status:
+                cur = self._conn.execute("DELETE FROM download_history WHERE status = ?", (status,))
+            else:
+                cur = self._conn.execute("DELETE FROM download_history")
+            return cur.rowcount
 
     def create_download_job_if_not_active(
         self,
@@ -159,14 +159,14 @@ class DownloadsMixin:
         """Mark jobs that were active during shutdown as interrupted."""
         assert self._conn
         now = time.time()
-        cur = self._conn.execute(
-            """UPDATE download_jobs
-               SET status = 'interrupted', finished_at = COALESCE(finished_at, ?)
-               WHERE status IN ('running', 'indexing', 'retrying', 'paused')""",
-            (now,),
-        )
-        self._conn.commit()
-        return int(cur.rowcount)
+        with self.write_transaction():
+            cur = self._conn.execute(
+                """UPDATE download_jobs
+                   SET status = 'interrupted', finished_at = COALESCE(finished_at, ?)
+                   WHERE status IN ('running', 'indexing', 'retrying', 'paused')""",
+                (now,),
+            )
+            return int(cur.rowcount)
 
     def has_active_download_job(self, track_id: int) -> bool:
         """Return True if a track has active queued/running work."""
