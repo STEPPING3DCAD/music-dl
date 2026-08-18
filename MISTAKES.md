@@ -1,5 +1,13 @@
 # Mistakes
 
+## 2026-08-17 — Sync Library deleted cache rows before the walk finished
+
+**What happened:** On a clean copy of the real Mac library DB (schema v9, 11,974 rows), Sync Library stayed on `Scanning...` for 90s with `/api/library/scan/status` stuck at `{"scanning":true,"scanned":0,"total":0,"done":false}`. The isolated cache shrank to 8,554 rows before the process exited. Stale `#recycle` tracks stayed visible because the walk never completed.
+
+**Root cause:** `_background_scan` called `drop_skipped_scan_paths()` and committed deletes at scan start, before backup/reconcile/walk finished. Status was only reset after that pre-walk work, so a Synology-backed reconcile or a locked backup looked like a 0/0 black hole. Writer transactions also stayed open across mutagen/ffmpeg reads (commit every 50 records), and full-library `_album_cards(include_artwork=True)` ran on the scan thread.
+
+**Prevention:** Never delete or age `scanned` rows at scan start. Mark-and-sweep skipped/stale paths only after a successful traversal. An interrupted or failed scan must preserve the previous good cache. Expose a named `phase` immediately and increment `scanned` during discovery even when `total` is unknown. Stage metadata outside a writer transaction; commit short batches only. Keep the skipped-directory list centralized in `library_scanner.py`. Do not hold the scan busy state on full-library album grouping.
+
 ## 2026-08-17 — Recently Added stayed blank while a cover-art subquery scanned the library
 
 **What happened:** Recently Added showed only the search shell and filter pills for ~3s. Warmed `/library/recent-albums` was 2.998s / 3.007s on the 11,974-row Mac library after PR 133 cut grouping from 25–53s to ~2.5–3s.

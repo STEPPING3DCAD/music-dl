@@ -72,7 +72,13 @@ _db_opened_at: float = 0  # Compatibility alias for tests/debugging.
 _DB_MAX_AGE = 300  # Force reconnect every 5 min to catch stale NAS handles
 _scan_lock = threading.Lock()
 _scan_running = False
-_scan_progress = {"scanned": 0, "total": 0, "done": True}
+_scan_progress = {
+    "scanned": 0,
+    "total": 0,
+    "done": True,
+    "phase": "idle",
+    "error": None,
+}
 _db_local = threading.local()
 _db_generation = 0
 _db_generation_lock = threading.Lock()
@@ -857,6 +863,7 @@ def _background_album_enrichment() -> None:
     try:
         db = LibraryDB(Path(path_config_base()) / "library.db")
         db.open()
+        _album_cards(db, include_artwork=True)
         _enrich_album_candidates(db)
     finally:
         if db is not None:
@@ -870,11 +877,34 @@ def _schedule_album_enrichment() -> None:
 
 
 def _finish_album_scan(db: LibraryDB) -> None:
-    """Persist local assessments, release scan resources, then enrich."""
-    _album_cards(db, include_artwork=True)
+    """Release scan resources, then score and enrich off the scan thread."""
     db.close()
     _invalidate_db_cache()
     _schedule_album_enrichment()
+
+
+def _new_scan_progress(**overrides) -> dict:
+    progress = {
+        "scanned": 0,
+        "total": 0,
+        "done": False,
+        "phase": "preparing",
+        "error": None,
+    }
+    progress.update(overrides)
+    return progress
+
+
+def _update_scan_progress(**overrides) -> None:
+    global _scan_progress
+    with _scan_lock:
+        _scan_progress = {**_scan_progress, **overrides}
+
+
+def _flush_scan_records(db: LibraryDB, records: list[dict]) -> None:
+    """Write a short batch so FS work never sits in a writer txn."""
+    _flush_record_batch(db, records)
+    records.clear()
 
 
 def _scan_directories() -> list[Path]:
@@ -1005,9 +1035,14 @@ def _flush_record_batch(db: LibraryDB, batch: list[dict]) -> None:
 
 def _reconcile_library_rows(db: LibraryDB, *, scan_dirs: list[Path]) -> int:
     """Resolve legacy metadata facts once without repeating waveform work."""
+    worklist = db.metadata_repair_worklist()
+    db.commit()
     pending: list[dict] = []
     repaired = 0
-    for row in db.metadata_repair_worklist():
+    total = len(worklist)
+    if total:
+        _update_scan_progress(phase="repairing", scanned=0, total=total, done=False)
+    for row in worklist:
         file_path = Path(row["path"])
         if not file_path.is_file():
             continue
@@ -1054,16 +1089,18 @@ def _reconcile_library_rows(db: LibraryDB, *, scan_dirs: list[Path]) -> int:
                 "metadata_complete": True,
             })
         repaired += 1
+        _update_scan_progress(phase="repairing", scanned=repaired, total=total, done=False)
         if len(pending) >= 50:
-            _flush_record_batch(db, pending)
-            pending.clear()
-    _flush_record_batch(db, pending)
+            _flush_scan_records(db, pending)
+    _flush_scan_records(db, pending)
     return repaired
 
 
 def _background_scan(rescan: bool) -> None:
     """Walk all configured dirs, read tags for unknown files, prune deleted ones."""
-    global _scan_running, _scan_progress
+    global _scan_running
+    db = None
+    _update_scan_progress(**_new_scan_progress(phase="preparing"))
     try:
         scan_dirs = _scan_directories()
 
@@ -1087,14 +1124,8 @@ def _background_scan(rescan: bool) -> None:
         # delete every row because disk_paths would be empty.
         if not scan_dirs:
             print("[library] No scan directories reachable — skipping scan to preserve cache")
-            with _scan_lock:
-                _scan_progress = {"scanned": 0, "total": 0, "done": True}
-            db.close()
+            _update_scan_progress(phase="done", scanned=0, total=0, done=True, error=None)
             return
-
-        dropped = drop_skipped_scan_paths(db)
-        if dropped:
-            print(f"[library] Dropped {dropped} rows under skipped directories")
 
         if not rescan:
             repaired = _reconcile_library_rows(db, scan_dirs=scan_dirs)
@@ -1102,6 +1133,7 @@ def _background_scan(rescan: bool) -> None:
                 print(f"[library] Repaired metadata for {repaired} cached rows")
 
         known = set() if rescan else db.known_paths()
+        db.commit()
 
         # --- Fast-path: skip walk if nothing changed on disk ---
         import json as _json
@@ -1117,114 +1149,131 @@ def _background_scan(rescan: bool) -> None:
 
         if not rescan and finger:
             stored = db.get_meta("scan_fingerprint")
+            db.commit()
             if stored == finger:
                 print("[library] Scan directories unchanged — skipping")
-                with _scan_lock:
-                    _scan_progress = {"scanned": 0, "total": 0, "done": True}
+                _update_scan_progress(phase="done", scanned=0, total=0, done=True, error=None)
                 _finish_album_scan(db)
+                db = None
                 return
 
-        with _scan_lock:
-            _scan_progress = {"scanned": 0, "total": 0, "done": False}
+        _update_scan_progress(phase="discovering", scanned=0, total=0, done=False, error=None)
         disk_paths: set[str] = set()
 
-        if scan_dirs:
-            # Phase 1: Walk filesystem — fast, just collect paths
-            for scan_dir in scan_dirs:
-                for walk_root, dirs, files in os.walk(scan_dir):
-                    dirs[:] = [name for name in dirs if not is_skipped_scan_dir(name)]
-                    for fname in files:
-                        f = Path(walk_root) / fname
-                        if path_has_skipped_scan_dir(f):
-                            continue
-                        if f.is_symlink():  # symlink → arbitrary target recorded as trusted path (DB poisoning)
-                            continue
-                        if f.suffix.lower() not in _AUDIO_EXTENSIONS:
-                            continue
-                        disk_paths.add(str(f))
-                        _scan_progress["total"] = len(disk_paths)
+        # Phase 1: Walk filesystem — no DB writes. Skip trash trees without descent.
+        for scan_dir in scan_dirs:
+            for walk_root, dirs, files in os.walk(scan_dir):
+                dirs[:] = [name for name in dirs if not is_skipped_scan_dir(name)]
+                for fname in files:
+                    f = Path(walk_root) / fname
+                    if path_has_skipped_scan_dir(f):
+                        continue
+                    if f.is_symlink():  # symlink → arbitrary target recorded as trusted path (DB poisoning)
+                        continue
+                    if f.suffix.lower() not in _AUDIO_EXTENSIONS:
+                        continue
+                    disk_paths.add(str(f))
+                    _update_scan_progress(
+                        phase="discovering",
+                        scanned=len(disk_paths),
+                        total=0,
+                        done=False,
+                    )
 
-            # Phase 2: Read metadata + waveform only for NEW files (the diff)
-            from tidal_dl.helper.waveform import extract_both, peaks_to_json
+        # Phase 2: Read metadata + waveform only for NEW files (the diff)
+        from tidal_dl.helper.waveform import extract_both, peaks_to_json
 
-            new_paths = disk_paths - known
-            _scan_progress["scanned"] = 0
-            pending_records: list[dict] = []
-            for path_str in new_paths:
-                file_path = Path(path_str)
-                art_available = _has_local_art(file_path)
-                meta = _read_metadata(file_path, scan_dirs)
-                if meta:
-                    # Extract waveform peaks (single ffmpeg decode, ~30ms per file)
-                    waveform_json = None
-                    hires_json = None
-                    both = extract_both(Path(path_str))
-                    if both:
-                        waveform_json = peaks_to_json(both[0])
-                        hires_json = peaks_to_json(both[1])
-
-                    pending_records.append({
-                        "path": path_str,
-                        "status": "tagged" if meta["isrc"] else "needs_isrc",
-                        "isrc": meta["isrc"] or None,
-                        "artist": meta["artist"],
-                        "title": meta["name"],
-                        "album": meta["album"],
-                        "album_artist": meta.get("album_artist"),
-                        "release_date": meta.get("release_date"),
-                        "track_number": meta.get("track_number"),
-                        "track_total": meta.get("track_total"),
-                        "disc_number": meta.get("disc_number"),
-                        "disc_total": meta.get("disc_total"),
-                        "musicbrainz_release_id": meta.get("musicbrainz_release_id"),
-                        "musicbrainz_release_group_id": meta.get("musicbrainz_release_group_id"),
-                        "provider_namespace": meta.get("provider_namespace"),
-                        "provider_album_id": meta.get("provider_album_id"),
-                        "barcode": meta.get("barcode"),
-                        "duration": meta["duration"],
-                        "genre": meta.get("genre"),
-                        "quality": meta["quality"],
-                        "fmt": meta["format"],
-                        "codec": meta["codec"],
-                        "metadata_complete": True,
-                        "waveform": waveform_json,
-                        "waveform_hires": hires_json,
-                        "art_available": art_available,
-                    })
-                else:
-                    pending_records.append({
-                        "path": path_str,
-                        "status": "unreadable",
-                        "art_available": art_available,
-                        "codec": "unknown",
-                        "metadata_complete": True,
-                    })
-                if len(pending_records) >= 50:
-                    _flush_record_batch(db, pending_records)
-                    pending_records.clear()
-                _scan_progress["scanned"] += 1
-
-            _flush_record_batch(db, pending_records)
-
-            # Prune deleted files — with safety threshold for volume remounts
-            stale = known - disk_paths
-            if len(stale) > 0.5 * len(known) and len(known) > 100:
-                print(
-                    f"[library] Skipping prune: {len(stale)}/{len(known)} paths would be removed"
-                    " — possible volume remount"
-                )
+        new_paths = disk_paths - known
+        pending: list[dict] = []
+        indexed = 0
+        _update_scan_progress(
+            phase="indexing",
+            scanned=0,
+            total=len(new_paths),
+            done=False,
+        )
+        for path_str in new_paths:
+            file_path = Path(path_str)
+            art_available = _has_local_art(file_path)
+            meta = _read_metadata(file_path, scan_dirs)
+            if meta:
+                waveform_json = None
+                hires_json = None
+                both = extract_both(Path(path_str))
+                if both:
+                    waveform_json = peaks_to_json(both[0])
+                    hires_json = peaks_to_json(both[1])
+                pending.append({
+                    "path": path_str,
+                    "status": "tagged" if meta["isrc"] else "needs_isrc",
+                    "isrc": meta["isrc"] or None,
+                    "artist": meta["artist"],
+                    "title": meta["name"],
+                    "album": meta["album"],
+                    "album_artist": meta.get("album_artist"),
+                    "release_date": meta.get("release_date"),
+                    "track_number": meta.get("track_number"),
+                    "track_total": meta.get("track_total"),
+                    "disc_number": meta.get("disc_number"),
+                    "disc_total": meta.get("disc_total"),
+                    "musicbrainz_release_id": meta.get("musicbrainz_release_id"),
+                    "musicbrainz_release_group_id": meta.get("musicbrainz_release_group_id"),
+                    "provider_namespace": meta.get("provider_namespace"),
+                    "provider_album_id": meta.get("provider_album_id"),
+                    "barcode": meta.get("barcode"),
+                    "duration": meta["duration"],
+                    "genre": meta.get("genre"),
+                    "quality": meta["quality"],
+                    "fmt": meta["format"],
+                    "codec": meta["codec"],
+                    "metadata_complete": True,
+                    "waveform": waveform_json,
+                    "waveform_hires": hires_json,
+                    "art_available": art_available,
+                })
             else:
-                if stale:
-                    with db.write_transaction():
-                        for p in stale:
-                            db.remove(p)
+                pending.append({
+                    "path": path_str,
+                    "status": "unreadable",
+                    "art_available": art_available,
+                    "codec": "unknown",
+                    "metadata_complete": True,
+                })
+            indexed += 1
+            if len(pending) >= 50:
+                _flush_scan_records(db, pending)
+            _update_scan_progress(
+                phase="indexing",
+                scanned=indexed,
+                total=len(new_paths),
+                done=False,
+            )
+        _flush_scan_records(db, pending)
 
-        with _scan_lock:
-            _scan_progress["done"] = True
+        # Sweep only after a successful traversal. Skipped trash rows and
+        # deleted files stay until this point so an interrupted scan cannot
+        # leave a partially emptied cache.
+        _update_scan_progress(phase="sweeping", done=False)
+        dropped = drop_skipped_scan_paths(db)
+        if dropped:
+            print(f"[library] Dropped {dropped} rows under skipped directories")
+        stale = known - disk_paths
+        skipped_stale = {path for path in stale if path_has_skipped_scan_dir(path)}
+        prune = stale - skipped_stale
+        if len(prune) > 0.5 * len(known) and len(known) > 100:
+            print(
+                f"[library] Skipping prune: {len(prune)}/{len(known)} paths would be removed"
+                " — possible volume remount"
+            )
+        elif prune:
+            with db.write_transaction():
+                for path in prune:
+                    db.remove(path)
+
+        _update_scan_progress(phase="finalizing", done=False)
 
         # Save scan fingerprint so next scan can skip if nothing changed
         if finger:
-            # Recompute with final known_count (scan may have added/removed rows)
             try:
                 final_known = len(db.known_paths()) if not rescan else len(disk_paths)
                 finger = _json.dumps({
@@ -1238,13 +1287,14 @@ def _background_scan(rescan: bool) -> None:
                 pass
 
         # Backfill genres for tracks scanned before genre support was added.
-        # Runs AFTER scan is marked done so the UI doesn't show a stuck spinner.
-        # Limit to 200 files per scan to avoid long NAS hangs.
+        # Read tags first, then write a short batch so NAS I/O is not inside
+        # a writer transaction.
         missing = db._conn.execute(
             "SELECT path FROM scanned WHERE (genre IS NULL OR genre = '') AND status != 'unreadable' LIMIT 200"
         ).fetchall()
+        db.commit()
+        genre_updates: list[tuple[str, str]] = []
         if missing:
-            genre_updates: list[tuple[str, str]] = []
             for row in missing:
                 p = Path(row[0])
                 try:
@@ -1270,10 +1320,24 @@ def _background_scan(rescan: bool) -> None:
                         genre_updates,
                     )
 
-        # Local scoring completes with the scan. Optional network work gets its
-        # own background pass so it cannot extend the scan's busy state.
+        _update_scan_progress(
+            phase="done",
+            done=True,
+            scanned=indexed,
+            total=len(new_paths),
+            error=None,
+        )
         _finish_album_scan(db)
+        db = None
+    except Exception as exc:  # noqa: BLE001
+        print(f"[library] Scan failed: {exc}")
+        _update_scan_progress(phase="error", done=True, error=str(exc))
     finally:
+        if db is not None:
+            try:
+                db.close()
+            except Exception:  # noqa: BLE001, S110
+                pass
         with _scan_lock:
             _scan_running = False
 
@@ -1646,7 +1710,7 @@ def scan_library(
         if _scan_running:
             return {"status": "already_running", **_scan_progress}
         _scan_running = True
-        _scan_progress = {"scanned": 0, "total": 0, "done": False}
+        _scan_progress = _new_scan_progress(phase="preparing")
 
     thread = threading.Thread(target=_background_scan, args=(rescan,), daemon=True)
     thread.start()
