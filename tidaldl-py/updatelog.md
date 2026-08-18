@@ -20,6 +20,17 @@ uv tool install --from git+https://github.com/alfdav/music-dl.git#subdirectory=t
 
 ---
 
+## v1.7.6 (2026-08-18)
+- Skip NAS trash dirs (`#recycle` and similar) from the local library scan ([#131](https://github.com/alfdav/music-dl/pull/131)).
+- Stop full-library album grouping on artist and release reads ([#133](https://github.com/alfdav/music-dl/pull/133)).
+- Stop post-download scans from walking library trash ([#134](https://github.com/alfdav/music-dl/pull/134)).
+- Recently Added shows a loading hint and stays under 250ms warmed ([#137](https://github.com/alfdav/music-dl/pull/137)).
+- Library writes no longer lock the download worker ([#135](https://github.com/alfdav/music-dl/pull/135)).
+- Keep the library cache intact until Sync Library walk succeeds; skip tag repair on already-complete rows ([#136](https://github.com/alfdav/music-dl/pull/136)).
+- Cold boot: sidecar ready before Tidal restore and bot start ([#138](https://github.com/alfdav/music-dl/pull/138)).
+- Show artist names on search tiles ([#139](https://github.com/alfdav/music-dl/pull/139)).
+- Hide now-playing Download when the track is already local, and name Local vs Tidal on the now-playing bar ([#140](https://github.com/alfdav/music-dl/pull/140)).
+
 ## v1.7.5 (2026-08-16)
 - Accept Blue Lossless (LOSSLESS FLAC) when Hi-Res is requested but Tidal only publishes the track at a lower lossless tier; lossy AAC is still rejected ([#128](https://github.com/alfdav/music-dl/pull/128)).
 - Drive the Downloads Active list and badge from the queue snapshot so a missed SSE event no longer leaves a stale active card.
