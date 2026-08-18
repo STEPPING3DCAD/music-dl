@@ -1,5 +1,13 @@
 # Mistakes
 
+## 2026-08-18 — Cold boot waited on Tidal before the sidecar was ready
+
+**What happened:** Tauri stayed on the spinner until lifespan finished a serial Tidal `resolve_source` (Hi-Fi health, gist key refresh, OAuth restore, quality probe). Each of those calls could use the 45s download timeout against a 30s health poll. Home then awaited `/home/recent` before `navigate('home')`, and first `/api/home` paid a NAS `Path.is_dir()`/`stat` plus unused extras (completionist join, peak hours, format breakdown, best-streak, week-vs-last).
+
+**Root cause:** Lifespan treated Tidal network and optional bot install as ready-path work. The worker already recovered before claim, but ready was written only after Tidal returned. The Home body gated first paint on a 4ms recent fetch that was not required to show the existing “Loading your library…” hint.
+
+**Prevention:** Ready after migrate + download-job recovery. Restore Tidal silently after ready (`allow_interactive_login=False`); start the Discord bot after ready. Cap Hi-Fi / gist / quality-probe timeouts at ~2s. Do not await `/home/recent` before navigating Home. First `/api/home` returns the tiles Home actually renders and must not probe NAS or compute unused extras. Never group or scan on boot.
+
 ## 2026-08-18 — Sync Library spent minutes mutagen-reading already-tagged rows
 
 **What happened:** After mark-and-sweep, isolated Mac Sync preserved 11,974 / 8,554 good / 3,420 skipped rows and named phases worked. First increment was 0.46s. Then `phase=repairing` sat on Synology tag reads (279/8402 at 46s; 1871/3002 at 188s). The old 90s 0/0 hang became a long repair.

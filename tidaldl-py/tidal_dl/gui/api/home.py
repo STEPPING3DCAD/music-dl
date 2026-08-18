@@ -187,13 +187,9 @@ def recent_plays(limit: int = Query(50, ge=1, le=100)):
 
 @router.get("/home")
 def home_stats():
-    """Return aggregated stats for the Home view."""
+    """Return first-paint Home tiles. Skip NAS probes and unused extras."""
     db = _get_db()
-    stats = db.home_stats()
-
-    # Signal whether the music volume is currently reachable. Cached so a
-    # cold NAS stat() call doesn't stall every /home request.
-    stats["volume_available"] = _volume_available_cached()
+    stats = db.home_stats(extras=False)
 
     # Convert cover_path to cover_url for artist tiles.
     from tidal_dl.gui.api.library import _local_cover_url

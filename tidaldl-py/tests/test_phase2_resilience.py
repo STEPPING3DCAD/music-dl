@@ -441,6 +441,93 @@ def test_resolve_source_non_interactive_uses_quiet_restore_without_login():
     assert tidal.quiet_restore is True
 
 
+def test_source_resolve_timeout_is_capped_so_dead_network_cannot_eat_spinner():
+    """Hi-Fi / gist / quality-probe boot calls must be ~1–2s, not the 45s download timeout.
+
+    Tauri only polls health for 30s. A single 45s Tidal/gist hang used to pin the
+    spinner even after we deferred restore off the ready path.
+    """
+    from tidal_dl.constants import REQUESTS_TIMEOUT_SEC, SOURCE_RESOLVE_TIMEOUT_SEC
+
+    assert REQUESTS_TIMEOUT_SEC == 45
+    assert 1 <= SOURCE_RESOLVE_TIMEOUT_SEC <= 2
+
+
+def test_resolve_source_uses_capped_timeout_for_hifi_and_gist(monkeypatch):
+    from tidal_dl.constants import SOURCE_RESOLVE_TIMEOUT_SEC
+    from tidal_dl.hifi_api import HiFiApiClient
+
+    captured: dict[str, float] = {}
+
+    class FakeHiFi(HiFiApiClient):
+        def __init__(self, instances=None, timeout=45, dead_ttl_sec=300):
+            captured["hifi"] = timeout
+            super().__init__(instances=instances or ["https://hifi.invalid"], timeout=timeout, dead_ttl_sec=dead_ttl_sec)
+
+        def health_check(self):
+            return None
+
+    gist_timeouts: list[object] = []
+
+    def fake_refresh(timeout=None):
+        gist_timeouts.append(timeout)
+        return False
+
+    class TidalForTimeout:
+        def __init__(self):
+            self.settings = type(
+                "Settings",
+                (),
+                {
+                    "data": type(
+                        "Data",
+                        (),
+                        {
+                            "download_source": DownloadSource.HIFI_API,
+                            "download_source_fallback": True,
+                            "hifi_api_instances": "https://hifi.invalid",
+                        },
+                    )()
+                },
+            )()
+            self.hifi_client = None
+            self.active_source = None
+
+        def _configured_hifi_instances(self):
+            return ["https://hifi.invalid"]
+
+        def refresh_api_keys(self):
+            return fake_refresh(timeout=SOURCE_RESOLVE_TIMEOUT_SEC)
+
+        def _try_login_with_key_rotation(self, quiet: bool = False) -> bool:
+            self.refresh_api_keys()
+            return False
+
+        def login(self, fn_print):
+            raise AssertionError("non-interactive resolve must not start OAuth")
+
+    monkeypatch.setattr("tidal_dl.config.HiFiApiClient", FakeHiFi)
+    tidal = TidalForTimeout()
+
+    assert Tidal.resolve_source(tidal, lambda _message: None, allow_interactive_login=False) is False
+    assert captured["hifi"] == SOURCE_RESOLVE_TIMEOUT_SEC
+    assert gist_timeouts == [SOURCE_RESOLVE_TIMEOUT_SEC]
+
+
+def test_refresh_api_keys_honors_explicit_timeout(monkeypatch):
+    import tidal_dl.api as api
+
+    seen: dict[str, object] = {}
+
+    def fake_get(url, timeout=None, **_kwargs):
+        seen["timeout"] = timeout
+        raise requests.RequestException("offline")
+
+    monkeypatch.setattr(api.requests, "get", fake_get)
+    assert api.refresh_api_keys(timeout=1.5) is False
+    assert seen["timeout"] == 1.5
+
+
 def test_hifi_client_decodes_bts_manifest():
     manifest_json = {
         "mimeType": "audio/flac",

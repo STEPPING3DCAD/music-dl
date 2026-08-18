@@ -2693,8 +2693,14 @@ async function _initApp() {
   _restorePosition();
   initUpdater();
   _checkWebUpdate();
-  await _syncRecentFromServer();
+  const recentPromise = _syncRecentFromServer();
   navigate(normalizeView(location.hash.slice(1) || 'home'));
+  recentPromise.then(() => {
+    if (recentlyPlayed.length === 0) return;
+    const wrap = document.querySelector('.home-wrap');
+    if (!wrap || wrap.querySelector('.home-recent-section')) return;
+    if (typeof _renderRecentStrip === 'function') _renderRecentStrip(wrap);
+  }).catch(() => {});
 }
 
 // Setup check on load — wizard or normal app

@@ -276,6 +276,42 @@ function loadLoginSuccessHandler(deps = {}) {
   );
 }
 
+function loadInitApp(deps) {
+  const functionBody = playerSource
+    .split('async function _initApp() {')[1]
+    ?.split('\n// Setup check on load')[0];
+  if (!functionBody) throw new Error('_initApp not found');
+
+  return new Function(
+    'api',
+    'state',
+    'refreshStatusLights',
+    '_restorePlayerPrefs',
+    '_restoreQueue',
+    '_restorePosition',
+    'initUpdater',
+    '_checkWebUpdate',
+    '_syncRecentFromServer',
+    'navigate',
+    'normalizeView',
+    'location',
+    `async function _initApp() {${functionBody}\nreturn _initApp;`,
+  )(
+    deps.api || (async () => ({})),
+    deps.state || {},
+    deps.refreshStatusLights || (() => {}),
+    deps._restorePlayerPrefs || (() => {}),
+    deps._restoreQueue || (() => {}),
+    deps._restorePosition || (() => {}),
+    deps.initUpdater || (() => {}),
+    deps._checkWebUpdate || (() => {}),
+    deps._syncRecentFromServer,
+    deps.navigate,
+    deps.normalizeView || ((view) => view || 'home'),
+    deps.location || { hash: '' },
+  );
+}
+
 function loadRecentSync(recentlyPlayed, api) {
   const functionBody = playerSource
     .split('async function _syncRecentFromServer() {')[1]
@@ -630,6 +666,30 @@ describe('recent history sync decisions', () => {
     await syncRecentFromServer();
 
     expect(recentlyPlayed[0].played_at).toBe(10_000_000_000);
+  });
+
+  test('Home navigation is not gated on /home/recent', async () => {
+    let navigated = null;
+    let resolveRecent;
+    const recentHang = new Promise((resolve) => {
+      resolveRecent = resolve;
+    });
+
+    const initApp = loadInitApp({
+      _syncRecentFromServer: () => recentHang,
+      navigate: (view) => {
+        navigated = view;
+      },
+    });
+
+    const pending = initApp();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(navigated).toBe('home');
+
+    resolveRecent();
+    await pending;
   });
 
   test('keeps the actually newer duplicate after normalizing server timestamps', async () => {

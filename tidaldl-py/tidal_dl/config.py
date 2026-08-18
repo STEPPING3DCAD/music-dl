@@ -31,6 +31,7 @@ from tidal_dl.constants import (
     ATMOS_REQUEST_QUALITY,
     QUALITY_PROBE_TRACK_ID,
     QUALITY_RANK,
+    SOURCE_RESOLVE_TIMEOUT_SEC,
     DownloadSource,
     quality_name,
 )
@@ -306,7 +307,10 @@ class Tidal(BaseConfig[ModelToken]):
         allow_fallback = bool(self.settings.data.download_source_fallback)
 
         if preferred == DownloadSource.HIFI_API:
-            self.hifi_client = HiFiApiClient(instances=self._configured_hifi_instances() or None)
+            self.hifi_client = HiFiApiClient(
+                instances=self._configured_hifi_instances() or None,
+                timeout=SOURCE_RESOLVE_TIMEOUT_SEC,
+            )
             health = self.hifi_client.health_check()
 
             if health:
@@ -344,9 +348,11 @@ class Tidal(BaseConfig[ModelToken]):
     # API key management
     # ------------------------------------------------------------------
 
-    def refresh_api_keys(self) -> bool:
+    def refresh_api_keys(self, timeout: float | None = None) -> bool:
         """Refresh managed API keys and apply the first valid key."""
-        refreshed = _api.refresh_api_keys()
+        refreshed = _api.refresh_api_keys(
+            timeout=SOURCE_RESOLVE_TIMEOUT_SEC if timeout is None else timeout
+        )
         index = _api.first_valid_index()
         if index < 0:
             return False
@@ -644,8 +650,14 @@ class Tidal(BaseConfig[ModelToken]):
         configured_rank = QUALITY_RANK.get(quality_name(configured), 0)
 
         try:
-            track = self.session.track(QUALITY_PROBE_TRACK_ID)
-            stream = track.get_stream()
+            import concurrent.futures
+
+            def _run_probe():
+                track = self.session.track(QUALITY_PROBE_TRACK_ID)
+                return track.get_stream()
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                stream = pool.submit(_run_probe).result(timeout=SOURCE_RESOLVE_TIMEOUT_SEC)
             delivered = stream.audio_quality
             delivered_rank = QUALITY_RANK.get(quality_name(delivered), 0)
         except Exception:
