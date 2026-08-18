@@ -592,6 +592,7 @@ than activating stale hard-coded fallback hosts.
 | `POST` | `/upgrade/start` | Queue upgrade jobs through the persisted job service |
 | `GET` | `/lyrics/local` | Read sidecar or embedded lyrics for an allowed local file |
 | `GET` | `/lyrics` | Now-playing lyrics: local sidecar/tags first, then Tidal `track.lyrics()` |
+| `POST` | `/lyrics/save` | Write a sidecar `.lrc` next to a local file from the current panel payload |
 
 ### Bot
 

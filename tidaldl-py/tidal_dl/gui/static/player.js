@@ -105,6 +105,19 @@ function _lyricsTrackOpenable(track) {
   return !!_lyricsRequestKey(track);
 }
 
+function _lyricsCanSave(track, payload) {
+  if (!_currentTrackLocalPath(track) || !payload) return false;
+  return payload.source === 'tidal-synced' || payload.source === 'tidal-unsynced';
+}
+
+function _syncLyricsSaveButton() {
+  const btn = document.getElementById('lyrics-save');
+  if (!btn) return;
+  const can = _lyricsOpen() && _lyricsCanSave(_currentTrack(), lyricsState.lyricsData);
+  btn.hidden = !can;
+  btn.disabled = !can;
+}
+
 function _lyricsQuery(track) {
   const params = new URLSearchParams();
   const localPath = _currentTrackLocalPath(track);
@@ -280,6 +293,7 @@ function renderLyricsPanel() {
   }
   _setLyricsPanelOpen(true);
   applyLyricsArtworkBackground(_currentTrack());
+  _syncLyricsSaveButton();
   if (lyricsState.lyricsPanelState === 'loading') {
     _renderLyricsShell('lyrics-shell-loading', 'Loading lyrics…', '');
     return;
@@ -340,6 +354,36 @@ async function loadLyricsForCurrentTrack(trackOverride) {
   }
 }
 
+async function saveLyricsForCurrentTrack() {
+  const track = _currentTrack();
+  const localPath = _currentTrackLocalPath(track);
+  const payload = lyricsState.lyricsData;
+  if (!track || !localPath || !_lyricsCanSave(track, payload)) return;
+
+  const requestToken = ++lyricsState.lyricsRequestToken;
+  try {
+    const saved = validateLyricsPayload(await api('/lyrics/save', {
+      method: 'POST',
+      body: {
+        path: localPath,
+        lines: payload.lines || [],
+        text: payload.text || '',
+        tidal_track_id: track.tidal_track_id || track.id || null,
+        isrc: track.isrc || null,
+      },
+    }));
+    if (requestToken !== lyricsState.lyricsRequestToken || !_lyricsOpen()) return;
+    delete lyricsState.lyricsCache[localPath];
+    if (payload.track_path) delete lyricsState.lyricsCache[payload.track_path];
+    _applyLyricsPayload(saved, localPath);
+  } catch (err) {
+    if (requestToken !== lyricsState.lyricsRequestToken || !_lyricsOpen()) return;
+    lyricsState.lyricsError = err.message || String(err);
+    lyricsState.lyricsPanelState = 'error';
+    renderLyricsPanel();
+  }
+}
+
 function closeLyricsPanel(opts) {
   const options = opts || {};
   lyricsState.lyricsRequestToken++;
@@ -350,6 +394,7 @@ function closeLyricsPanel(opts) {
   lyricsState.lyricsListEl = null;
   if (_lyricsAnimId) { cancelAnimationFrame(_lyricsAnimId); _lyricsAnimId = null; }
   _setLyricsPanelOpen(false);
+  _syncLyricsSaveButton();
   if (options.restoreFocus && lyricsState.lyricsFocusReturnEl && lyricsState.lyricsFocusReturnEl.focus) {
     lyricsState.lyricsFocusReturnEl.focus();
   }
@@ -408,6 +453,13 @@ function handleLyricsTrackChange(track) {
 
 if (btnLyricsClose) {
   btnLyricsClose.addEventListener('click', () => closeLyricsPanel({ restoreFocus: true }));
+}
+const btnLyricsSave = document.getElementById('lyrics-save');
+if (btnLyricsSave) {
+  btnLyricsSave.addEventListener('click', () => {
+    if (btnLyricsSave.disabled || btnLyricsSave.hidden) return;
+    saveLyricsForCurrentTrack();
+  });
 }
 if (lyricsBody) {
   lyricsBody.addEventListener('wheel', (e) => {

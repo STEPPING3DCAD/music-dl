@@ -4482,8 +4482,8 @@ async function loadSettingsForm(container, accessContainer) {
       ]},
       { title: 'Metadata', fields: [
         { key: 'metadata_cover_embed', label: 'Embed Cover Art', type: 'toggle', helper: 'Saves album art inside the audio file' },
-        { key: 'lyrics_embed', label: 'Embed Lyrics', type: 'toggle', helper: 'On download, write synced lyrics into the audio file. The player still shows Tidal lyrics when files have none.' },
-        { key: 'lyrics_file', label: 'Save Lyrics File', type: 'toggle', helper: 'On download, write a sidecar .lrc. The player prefers that file, then embedded tags, then Tidal.' },
+        { key: 'lyrics_embed', label: 'Embed Lyrics', type: 'toggle', helper: 'On download, write synced lyrics into the audio file. The player can also Save lyrics on a local file without turning this on for every download.' },
+        { key: 'lyrics_file', label: 'Save Lyrics File', type: 'toggle', helper: 'On download, write a sidecar .lrc. The lyrics panel Save lyrics control writes that same sidecar for the current track without enabling this for every download.' },
         { key: 'cover_album_file', label: 'Save Album Cover', type: 'toggle', helper: 'Saves cover.jpg in the album folder' },
       ]},
       { title: 'Library', fields: [

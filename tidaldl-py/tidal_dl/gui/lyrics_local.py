@@ -14,6 +14,14 @@ _OFFSET_LINE_RE = re.compile(r"^\[offset:([+-]?\d+)\]$", re.IGNORECASE)
 MAX_LRC_BYTES = 1 * 1024 * 1024  # no legitimate LRC exceeds this; cap prevents local DoS
 
 
+class SidecarExistsError(Exception):
+    """A good sidecar `.lrc` is already next to the audio file."""
+
+    def __init__(self, payload: dict):
+        super().__init__("Sidecar already exists")
+        self.payload = payload
+
+
 def _payload(track_path: Path, mode: str, source: str, lines: list[dict] | None = None, text: str = "") -> dict:
     return {
         "mode": mode,
@@ -304,3 +312,71 @@ def read_local_lyrics(audio_path: Path) -> dict:
     if embedded_unsynced:
         return _payload(audio_path, "unsynced", "embedded-unsynced", text=embedded_unsynced)
     return _payload(audio_path, "none", "none")
+
+
+def _ms_to_lrc_stamp(start_ms: int) -> str:
+    minutes = max(0, int(start_ms)) // 60000
+    seconds = (max(0, int(start_ms)) % 60000) / 1000
+    return f"[{minutes:02d}:{seconds:05.2f}]"
+
+
+def payload_to_lrc_text(*, lines: list[dict] | None = None, text: str = "") -> str:
+    if lines:
+        out: list[str] = []
+        for line in lines:
+            raw_text = str(line.get("text", "")).replace("\r", "").strip()
+            if not raw_text:
+                continue
+            try:
+                start_ms = int(line.get("start_ms", 0))
+            except (TypeError, ValueError):
+                continue
+            for part in raw_text.split("\n"):
+                part = part.strip()
+                if part:
+                    out.append(_ms_to_lrc_stamp(start_ms) + part)
+        if out:
+            return "\n".join(out) + "\n"
+    cleaned = _cleanup_unsynced_text(text or "")
+    if cleaned:
+        return cleaned + "\n"
+    return ""
+
+
+def existing_good_sidecar(audio_path: Path) -> dict | None:
+    if discover_sidecar_lrc(Path(audio_path)) is None:
+        return None
+    local = read_local_lyrics(audio_path)
+    if local.get("source") in {"lrc-synced", "lrc-unsynced"}:
+        return local
+    return None
+
+
+def write_sidecar_lrc(
+    audio_path: Path,
+    *,
+    lines: list[dict] | None = None,
+    text: str = "",
+    replace: bool = False,
+) -> dict:
+    """Write `<stem>.lrc` next to a local audio file. Does not overwrite a good sidecar."""
+    audio_path = Path(audio_path)
+    existing = existing_good_sidecar(audio_path)
+    if existing and not replace:
+        raise SidecarExistsError(existing)
+
+    body = payload_to_lrc_text(lines=lines, text=text)
+    if not body:
+        raise ValueError("No lyrics to save")
+    raw = body.encode("utf-8")
+    if len(raw) > MAX_LRC_BYTES:
+        raise ValueError("Lyrics too large")
+
+    dest = audio_path.with_suffix(".lrc")
+    discovered = discover_sidecar_lrc(audio_path)
+    if replace and discovered is not None:
+        dest = discovered
+    if dest.exists() and dest.is_symlink():
+        raise ValueError("Refusing to write through a symlink")
+    dest.write_bytes(raw)
+    return read_local_lyrics(audio_path)

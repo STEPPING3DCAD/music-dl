@@ -277,3 +277,91 @@ def test_get_lyrics_tidal_failure_is_502_not_empty(client, monkeypatch):
 
     assert resp.status_code == 502
     clear_tidal_lyrics_cache()
+
+
+def test_post_lyrics_save_writes_sidecar_then_local_read_works_offline(client, monkeypatch, tmp_path):
+    path = tmp_path / "track.flac"
+    path.write_bytes(b"fake")
+
+    from tidal_dl.gui.security import LocalAudioPathResolution
+
+    monkeypatch.setattr(
+        "tidal_dl.gui.api.lyrics.resolve_local_audio_path",
+        lambda raw_path, allowed_dirs, **_kwargs: LocalAudioPathResolution("ok", path.resolve()),
+    )
+    monkeypatch.setattr(
+        "tidal_dl.gui.lyrics_local.MutagenFile",
+        lambda audio_path: type("Info", (), {"info": type("L", (), {"length": 10.0})(), "tags": {}})(),
+    )
+
+    def boom(*_args, **_kwargs):
+        raise AssertionError("offline reread must not call Tidal")
+
+    save = client.post(
+        "/api/lyrics/save",
+        headers=client._headers,
+        json={
+            "path": str(path),
+            "lines": [{"start_ms": 1000, "end_ms": 3000, "text": "Saved"}],
+            "text": "",
+        },
+    )
+    assert save.status_code == 200
+    assert save.json()["source"] == "lrc-synced"
+    assert (tmp_path / "track.lrc").read_text(encoding="utf-8")
+
+    monkeypatch.setattr("tidal_dl.gui.api.lyrics.lyrics_for_now_playing", boom)
+    monkeypatch.setattr("tidal_dl.gui.api.lyrics._tidal_session_state", lambda: (None, False))
+
+    local = client.get(f"/api/lyrics/local?path={quote(str(path))}", headers=client._host_header)
+    assert local.status_code == 200
+    assert local.json()["source"] == "lrc-synced"
+    assert local.json()["lines"][0]["text"] == "Saved"
+
+    player = client.get(f"/api/lyrics?path={quote(str(path))}", headers=client._host_header)
+    assert player.status_code == 200
+    assert player.json()["source"] == "lrc-synced"
+    assert player.json()["lines"][0]["text"] == "Saved"
+
+
+def test_post_lyrics_save_keeps_existing_sidecar(client, monkeypatch, tmp_path):
+    path = tmp_path / "track.flac"
+    path.write_bytes(b"fake")
+    path.with_suffix(".lrc").write_text("[00:01.00]Original\n", encoding="utf-8")
+
+    from tidal_dl.gui.security import LocalAudioPathResolution
+
+    monkeypatch.setattr(
+        "tidal_dl.gui.api.lyrics.resolve_local_audio_path",
+        lambda raw_path, allowed_dirs, **_kwargs: LocalAudioPathResolution("ok", path.resolve()),
+    )
+    monkeypatch.setattr(
+        "tidal_dl.gui.lyrics_local.MutagenFile",
+        lambda audio_path: type("Info", (), {"info": type("L", (), {"length": 8.0})(), "tags": {}})(),
+    )
+
+    resp = client.post(
+        "/api/lyrics/save",
+        headers=client._headers,
+        json={"path": str(path), "text": "Nope"},
+    )
+
+    assert resp.status_code == 409
+    assert path.with_suffix(".lrc").read_text(encoding="utf-8").startswith("[00:01.00]Original")
+
+
+def test_post_lyrics_save_rejects_forbidden_path(client, monkeypatch):
+    from tidal_dl.gui.security import LocalAudioPathResolution
+
+    monkeypatch.setattr(
+        "tidal_dl.gui.api.lyrics.resolve_local_audio_path",
+        lambda raw_path, allowed_dirs, **_kwargs: LocalAudioPathResolution("forbidden"),
+    )
+
+    resp = client.post(
+        "/api/lyrics/save",
+        headers=client._headers,
+        json={"path": "/etc/passwd", "text": "nope"},
+    )
+
+    assert resp.status_code == 403

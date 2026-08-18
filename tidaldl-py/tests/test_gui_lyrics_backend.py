@@ -496,3 +496,65 @@ def test_hifi_empty_lyrics_fall_back_to_oauth_session():
 
     assert lyrics_obj.text == "OAuth words"
     assert lyrics_obj.subtitles == "[00:01.00]Timed"
+
+
+def test_write_sidecar_lrc_is_read_back_as_local_synced(tmp_path, monkeypatch):
+    from tidal_dl.gui.lyrics_local import read_local_lyrics, write_sidecar_lrc
+
+    track = _audio_file(tmp_path, "track.flac")
+    monkeypatch.setattr("tidal_dl.gui.lyrics_local.MutagenFile", lambda path: DummyAudio(length=10.0))
+
+    saved = write_sidecar_lrc(
+        track,
+        lines=[{"start_ms": 1000, "end_ms": 2500, "text": "Hello"}, {"start_ms": 2500, "end_ms": 4000, "text": "World"}],
+    )
+
+    assert saved["source"] == "lrc-synced"
+    assert [line["text"] for line in saved["lines"]] == ["Hello", "World"]
+    assert (tmp_path / "track.lrc").is_file()
+    assert read_local_lyrics(track)["source"] == "lrc-synced"
+
+
+def test_write_sidecar_lrc_unsynced_text_is_read_offline(tmp_path, monkeypatch):
+    from tidal_dl.gui.lyrics_local import read_local_lyrics, write_sidecar_lrc
+
+    track = _audio_file(tmp_path, "track.flac")
+    monkeypatch.setattr("tidal_dl.gui.lyrics_local.MutagenFile", lambda path: DummyAudio(length=0.0))
+
+    saved = write_sidecar_lrc(track, text="Line one\nLine two")
+
+    assert saved["mode"] == "unsynced"
+    assert saved["source"] == "lrc-unsynced"
+    assert saved["text"] == "Line one\nLine two"
+    assert read_local_lyrics(track)["text"] == "Line one\nLine two"
+
+
+def test_write_sidecar_lrc_refuses_existing_good_sidecar(tmp_path, monkeypatch):
+    from tidal_dl.gui.lyrics_local import SidecarExistsError, write_sidecar_lrc
+
+    track = _audio_file(tmp_path, "track.flac")
+    track.with_suffix(".lrc").write_text("[00:01.00]Keep me\n", encoding="utf-8")
+    monkeypatch.setattr("tidal_dl.gui.lyrics_local.MutagenFile", lambda path: DummyAudio(length=8.0))
+
+    try:
+        write_sidecar_lrc(track, text="Overwrite")
+    except SidecarExistsError as exc:
+        assert exc.payload["source"] == "lrc-synced"
+        assert exc.payload["lines"][0]["text"] == "Keep me"
+    else:
+        raise AssertionError("expected SidecarExistsError")
+
+    assert track.with_suffix(".lrc").read_text(encoding="utf-8").startswith("[00:01.00]Keep me")
+
+
+def test_write_sidecar_lrc_replace_overwrites_existing(tmp_path, monkeypatch):
+    from tidal_dl.gui.lyrics_local import write_sidecar_lrc
+
+    track = _audio_file(tmp_path, "track.flac")
+    track.with_suffix(".lrc").write_text("[00:01.00]Old\n", encoding="utf-8")
+    monkeypatch.setattr("tidal_dl.gui.lyrics_local.MutagenFile", lambda path: DummyAudio(length=8.0))
+
+    saved = write_sidecar_lrc(track, text="New words", replace=True)
+
+    assert saved["source"] == "lrc-unsynced"
+    assert saved["text"] == "New words"

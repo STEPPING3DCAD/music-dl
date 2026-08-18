@@ -6,7 +6,7 @@
 
 **Root cause:** The player was local-only (`is_local` + a disk path) and never asked Tidal. Tidal already had the sanctioned lyrics object (`text` / `subtitles`) on the download path. The panel and the library stayed empty unless someone opted into download-time writes.
 
-**Prevention:** Keep `read_local_lyrics` first. If local is `none` and Tidal is signed in, fetch via `track.lyrics()` and cache. Enable `#btn-lyrics` for Tidal-only now-playing. Do not silently flip `lyrics_embed` / `lyrics_file`. No Genius/web scrape.
+**Prevention:** Keep `read_local_lyrics` first. If local is `none` and Tidal is signed in, fetch via `track.lyrics()` and cache. Enable `#btn-lyrics` for Tidal-only now-playing. Do not silently flip `lyrics_embed` / `lyrics_file`. Offer panel **Save lyrics** so a sidecar can be written for offline local playback. No Genius/web scrape.
 
 ## 2026-08-18 — Artist search tiles showed photos with no name
 

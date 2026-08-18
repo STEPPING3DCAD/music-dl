@@ -13,6 +13,8 @@ def test_index_contains_direct_body_child_lyrics_overlay_mount():
     assert 'id="lyrics-panel"' in html
     assert 'id="lyrics-close"' in html
     assert 'id="lyrics-body"' in html
+    assert 'id="lyrics-save"' in html
+    assert "Save lyrics" in html
     assert html.index('id="queue-panel"') < html.index('id="lyrics-panel"') < html.index('<footer class="player"')
 
 
@@ -31,6 +33,7 @@ def test_style_contains_lyrics_panel_shells_and_player_height_variable():
     assert '.lyrics-synced-line' in css
     assert '.lyrics-synced-line.active' in css
     assert '.lyrics-unsynced-copy' in css
+    assert '.lyrics-save' in css
 
 
 def test_style_contains_reduced_motion_and_open_state_action_hiding_rules():
@@ -109,3 +112,13 @@ def test_app_opens_lyrics_without_is_local_gate():
     assert "if (!track || !track.is_local || !localPath) return;" not in source
     assert "_lyricsTrackOpenable(track)" in source
     assert "tidal_track_id" in source
+
+
+def test_app_can_save_tidal_lyrics_to_local_sidecar():
+    source = read_gui_js()
+
+    assert "function _lyricsCanSave(" in source
+    assert "function saveLyricsForCurrentTrack(" in source
+    assert "/lyrics/save" in source
+    assert "tidal-synced" in source
+    assert "lrc-synced" in source

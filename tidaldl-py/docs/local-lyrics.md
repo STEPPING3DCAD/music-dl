@@ -39,6 +39,14 @@ the existing library gets words without a re-download. When those
 toggles are on, `metadata_write` uses `lyrics_obj_from_track` so a
 Hi-Fi stub with empty `lyrics()` retries via the OAuth session.
 
+The lyrics panel also has **Save lyrics**. When the now-playing track
+has a local path and the current payload is from Tidal, that control
+writes `<stem>.lrc` next to the audio file (the same sidecar
+`discover_sidecar_lrc` reads). It does not overwrite a good existing
+sidecar unless the caller sets `replace`. After a successful save,
+`GET /api/lyrics/local` and later offline plays use the sidecar — no
+Tidal, no network. This does **not** flip the global download toggles.
+
 ### Sidecar discovery
 
 `discover_sidecar_lrc(audio_path)` in
@@ -137,6 +145,11 @@ router unmodified under the top-level `/api` mount.
   signed in, fetch via `track.lyrics()` and cache.
 - Tidal-only now-playing tracks send `tidal_track_id` with no path.
 
+`POST /api/lyrics/save` (CSRF required) writes `<stem>.lrc` next to a
+resolved local audio path from the panel payload (`lines` for synced,
+`text` for unsynced). 409 if a good sidecar already exists and
+`replace` is false. Returns the local `read_local_lyrics` payload.
+
 Resolution branches:
 
 ```
@@ -158,8 +171,9 @@ the caller), and the audio-extension check is on the resolved path
 (so a symlink-safe, DB-trusted file must still have an audio suffix
 after resolution).
 
-The endpoint is **read-only** and carries the standard
-CSRF-not-required contract for `GET`. Cross-site reads are blocked by
+`GET /api/lyrics` and `GET /api/lyrics/local` are **read-only** and
+carry the standard CSRF-not-required contract for `GET`.
+`POST /api/lyrics/save` requires CSRF. Cross-site reads are blocked by
 the host/CORS middleware in `security.py`.
 
 ## Path safety
@@ -237,18 +251,25 @@ Behavior:
   line-scroll animation.
 - Closing the panel restores keyboard focus to the element that opened
   it (`focusReturnEl`).
+- **Save lyrics** (`#lyrics-save`) shows when the track has a local
+  path and the payload source is `tidal-synced` or `tidal-unsynced`.
+  A successful save cache-busts the panel and shows the local sidecar
+  source. Tidal-only streams with no file on disk have nothing to
+  write next to, so the control stays hidden.
 
 ## Testing
 
 - `tests/test_gui_lyrics_backend.py` — resolver + parser coverage
   (timestamps, offsets, BOM, encoding fallback, symlink rejection,
   embedded tag dispatch, mode selection, Tidal payload, local-first
-  order, in-process Tidal cache, Hi-Fi → OAuth lyrics retry).
+  order, in-process Tidal cache, Hi-Fi → OAuth lyrics retry, sidecar
+  save and no-overwrite).
 - `tests/test_gui_lyrics_api.py` — `/local` resolution branches plus
-  `/lyrics` local-first, Tidal fallback, Tidal-only now-playing, and
-  missing-identity 400.
-- `tests/test_gui_lyrics_frontend.py` — DOM-level rendering, race
-  guard, Tidal sources, and the now-playing Lyrics button gate.
+  `/lyrics` local-first, Tidal fallback, Tidal-only now-playing,
+  missing-identity 400, and `POST /save` (offline reread, keep
+  existing sidecar, forbidden path).
+- `tests/test_gui_lyrics_frontend.py` — panel chrome, Tidal sources,
+  now-playing Lyrics gate, and Save lyrics control.
 
 ## What is intentionally out of scope
 
@@ -258,6 +279,6 @@ Behavior:
   lyrics as returned.
 - **No live scroll when seeking.** Scroll follows playback position;
   scrubbing re-aligns on the next render tick.
-- **No write-back from the panel.** Opening Lyrics never writes tags
-  or sidecars. `lyrics_embed` / `lyrics_file` remain download-time
-  opt-in settings (default off).
+- **No silent global write.** `lyrics_embed` / `lyrics_file` remain
+  download-time opt-in (default off). Panel Save lyrics writes one
+  sidecar for the current local file when the user asks.

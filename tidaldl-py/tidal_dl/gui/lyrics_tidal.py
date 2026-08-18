@@ -20,6 +20,12 @@ def clear_tidal_lyrics_cache() -> None:
     _CACHE.clear()
 
 
+def invalidate_tidal_lyrics_cache(tidal_track_id: int | None = None, isrc: str | None = None) -> None:
+    for key in (_cache_key(tidal_track_id, None), _cache_key(None, isrc)):
+        if key:
+            _CACHE.invalidate(key)
+
+
 def _cache_key(tidal_track_id: int | None, isrc: str | None) -> str | None:
     if tidal_track_id:
         return f"tid:{int(tidal_track_id)}"

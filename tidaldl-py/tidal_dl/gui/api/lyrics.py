@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel, Field
 
 from tidal_dl.gui.api.library import _path_in_library, _trusted_library_path
 from tidal_dl.gui.api.playback import get_download_paths
-from tidal_dl.gui.lyrics_local import empty_lyrics_payload, read_local_lyrics
-from tidal_dl.gui.lyrics_tidal import TidalLyricsError, lyrics_for_now_playing
+from tidal_dl.gui.lyrics_local import SidecarExistsError, empty_lyrics_payload, read_local_lyrics, write_sidecar_lrc
+from tidal_dl.gui.lyrics_tidal import TidalLyricsError, invalidate_tidal_lyrics_cache, lyrics_for_now_playing
 from tidal_dl.gui.security import resolve_local_audio_path
 
 router = APIRouter(prefix="/lyrics")
@@ -134,3 +135,31 @@ def get_lyrics(
         )
     except TidalLyricsError as exc:
         raise HTTPException(status_code=502, detail=str(exc) or "Could not load lyrics from Tidal") from exc
+
+
+class SaveLyricsRequest(BaseModel):
+    path: str
+    replace: bool = False
+    lines: list[dict] = Field(default_factory=list)
+    text: str = ""
+    tidal_track_id: int | None = None
+    isrc: str | None = None
+
+
+@router.post("/save")
+def save_lyrics(req: SaveLyricsRequest):
+    resolution = _resolve_audio_path(req.path)
+    _raise_resolution(resolution)
+    try:
+        payload = write_sidecar_lrc(
+            resolution.path,
+            lines=req.lines or None,
+            text=req.text,
+            replace=req.replace,
+        )
+    except SidecarExistsError:
+        raise HTTPException(status_code=409, detail="Sidecar already exists")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    invalidate_tidal_lyrics_cache(req.tidal_track_id, req.isrc)
+    return payload
