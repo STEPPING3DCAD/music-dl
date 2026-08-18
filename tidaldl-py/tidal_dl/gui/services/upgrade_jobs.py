@@ -79,10 +79,13 @@ def cleanup_replaced_track_files(
             if same_album and same_dir:
                 queue(candidate)
 
+    stale_rows = [path for path in removed if db.get(path)]
     for stale_path in removed:
         trash_file(stale_path)
-        if db.get(stale_path):
-            db.remove(stale_path)
+    if stale_rows:
+        with db.write_transaction():
+            for path in stale_rows:
+                db.remove(path)
 
     return removed
 

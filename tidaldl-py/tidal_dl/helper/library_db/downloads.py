@@ -1,6 +1,7 @@
 """Download history and job queue."""
 
-from tidal_dl.helper.library_db._common import *  # noqa: F403
+from tidal_dl.helper.library_db._common import *
+
 
 class DownloadsMixin:
     def record_download(
@@ -37,12 +38,12 @@ class DownloadsMixin:
     def clear_download_history(self, status: str | None = None) -> int:
         """Delete download history entries. If status is given, only delete that status."""
         assert self._conn
-        if status:
-            cur = self._conn.execute("DELETE FROM download_history WHERE status = ?", (status,))
-        else:
-            cur = self._conn.execute("DELETE FROM download_history")
-        self._conn.commit()
-        return cur.rowcount
+        with self.write_transaction():
+            if status:
+                cur = self._conn.execute("DELETE FROM download_history WHERE status = ?", (status,))
+            else:
+                cur = self._conn.execute("DELETE FROM download_history")
+            return cur.rowcount
 
     def create_download_job_if_not_active(
         self,
@@ -60,8 +61,7 @@ class DownloadsMixin:
         """Create a queued job unless the track already has active work."""
         assert self._conn
         now = time.time()
-        self._conn.execute("BEGIN IMMEDIATE")
-        try:
+        with self.write_transaction(immediate=True):
             active = self._conn.execute(
                 """SELECT 1 FROM download_jobs
                    WHERE track_id = ?
@@ -70,7 +70,6 @@ class DownloadsMixin:
                 (track_id,),
             ).fetchone()
             if active:
-                self._conn.commit()
                 return None
 
             cur = self._conn.execute(
@@ -91,11 +90,7 @@ class DownloadsMixin:
                     now,
                 ),
             )
-            self._conn.commit()
             return int(cur.lastrowid)
-        except Exception:
-            self._conn.rollback()
-            raise
 
     def get_download_job(self, job_id: int | None) -> dict | None:
         """Return a download job by ID."""
@@ -117,11 +112,11 @@ class DownloadsMixin:
         if unknown:
             raise ValueError(f"Unknown download job fields: {sorted(unknown)}")
         assignments = ", ".join(f"{key} = ?" for key in fields)
-        self._conn.execute(
-            f"UPDATE download_jobs SET {assignments} WHERE id = ?",
-            (*fields.values(), job_id),
-        )
-        self._conn.commit()
+        with self.write_transaction():
+            self._conn.execute(
+                f"UPDATE download_jobs SET {assignments} WHERE id = ?",
+                (*fields.values(), job_id),
+            )
 
     def claim_next_download_job(self, *, kind: str | None = None) -> dict | None:
         """Atomically claim the oldest queued job."""
@@ -132,8 +127,7 @@ class DownloadsMixin:
         if kind is not None:
             where += " AND kind = ?"
             params.append(kind)
-        self._conn.execute("BEGIN IMMEDIATE")
-        try:
+        with self.write_transaction(immediate=True):
             row = self._conn.execute(
                 f"""SELECT id FROM download_jobs
                    WHERE {where}
@@ -142,7 +136,6 @@ class DownloadsMixin:
                 params,
             ).fetchone()
             if not row:
-                self._conn.commit()
                 return None
 
             job_id = row["id"]
@@ -160,24 +153,20 @@ class DownloadsMixin:
                 "SELECT * FROM download_jobs WHERE id = ?",
                 (job_id,),
             ).fetchone()
-            self._conn.commit()
             return dict(claimed) if claimed else None
-        except Exception:
-            self._conn.rollback()
-            raise
 
     def recover_download_jobs(self) -> int:
         """Mark jobs that were active during shutdown as interrupted."""
         assert self._conn
         now = time.time()
-        cur = self._conn.execute(
-            """UPDATE download_jobs
-               SET status = 'interrupted', finished_at = COALESCE(finished_at, ?)
-               WHERE status IN ('running', 'indexing', 'retrying', 'paused')""",
-            (now,),
-        )
-        self._conn.commit()
-        return int(cur.rowcount)
+        with self.write_transaction():
+            cur = self._conn.execute(
+                """UPDATE download_jobs
+                   SET status = 'interrupted', finished_at = COALESCE(finished_at, ?)
+                   WHERE status IN ('running', 'indexing', 'retrying', 'paused')""",
+                (now,),
+            )
+            return int(cur.rowcount)
 
     def has_active_download_job(self, track_id: int) -> bool:
         """Return True if a track has active queued/running work."""
@@ -206,36 +195,26 @@ class DownloadsMixin:
         if not track_ids:
             return 0
         placeholders = ",".join("?" for _ in track_ids)
-        self._conn.execute("BEGIN IMMEDIATE")
-        try:
+        with self.write_transaction(immediate=True):
             cur = self._conn.execute(
                 f"""UPDATE download_jobs
                     SET status = 'cancelled', finished_at = ?
                     WHERE status = 'queued' AND track_id IN ({placeholders})""",
                 (time.time(), *track_ids),
             )
-            self._conn.commit()
             return int(cur.rowcount)
-        except Exception:
-            self._conn.rollback()
-            raise
 
     def cancel_all_queued_download_jobs(self) -> int:
         """Cancel every unfinished job so the Active list can go empty."""
         assert self._conn
-        self._conn.execute("BEGIN IMMEDIATE")
-        try:
+        with self.write_transaction(immediate=True):
             cur = self._conn.execute(
                 """UPDATE download_jobs
                    SET status = 'cancelled', finished_at = ?
                    WHERE status IN ('queued', 'running', 'indexing', 'retrying', 'paused')""",
                 (time.time(),),
             )
-            self._conn.commit()
             return int(cur.rowcount)
-        except Exception:
-            self._conn.rollback()
-            raise
 
     def download_jobs_snapshot(self) -> dict:
         """Return current running jobs and queued count for API snapshots."""

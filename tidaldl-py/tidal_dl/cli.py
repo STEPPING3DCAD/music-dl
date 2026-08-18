@@ -1039,15 +1039,26 @@ def isrc_tag(
     db.open()
 
     # ── Phase 1: Scan ──────────────────────────────────────────────
-    dropped = drop_skipped_scan_paths(db)
-    if dropped:
-        db.commit()
+    drop_skipped_scan_paths(db)
     known_paths = set() if rescan else db.known_paths()
     console.print(f"[cyan]Scanning {dir_path} (skipping {len(known_paths)} known files)...[/cyan]")
 
     new_files = 0
     skipped_known = 0
-    batch_size = 0
+    pending: list[tuple[str, dict]] = []
+
+    def flush_pending() -> None:
+        if not pending:
+            return
+        with db.write_transaction():
+            for path_str, fields in pending:
+                db.record(path_str, **fields)
+        pending.clear()
+
+    def queue_record(path_str: str, **fields) -> None:
+        pending.append((path_str, fields))
+        if len(pending) >= 100:
+            flush_pending()
 
     for walk_root, dirs, walk_files in _os.walk(str(dir_path)):
         dirs[:] = [name for name in dirs if not is_skipped_scan_dir(name)]
@@ -1069,48 +1080,41 @@ def isrc_tag(
             # Check if file already has an ISRC tag
             isrc = _extract_isrc(file_path)
             if isrc:
-                db.record(path_str, status="has_isrc", isrc=isrc)
-                batch_size += 1
-                if batch_size >= 100:
-                    db.commit()
-                    batch_size = 0
+                queue_record(path_str, status="has_isrc", isrc=isrc)
                 continue
 
             # Read artist + title
             try:
                 audio = _mutagen.File(path_str, easy=True)
             except Exception:
-                db.record(path_str, status="error")
-                batch_size += 1
+                queue_record(path_str, status="error")
                 continue
 
             if audio is None or audio.tags is None:
-                db.record(path_str, status="no_tags")
-                batch_size += 1
+                queue_record(path_str, status="no_tags")
                 continue
 
             artist_list = audio.tags.get("artist") or audio.tags.get("albumartist")
             title_list = audio.tags.get("title")
 
             if not artist_list or not title_list:
-                db.record(path_str, status="no_tags")
-                batch_size += 1
+                queue_record(path_str, status="no_tags")
                 continue
 
             artist = str(artist_list[0]) if isinstance(artist_list, list) else str(artist_list)
             title = str(title_list[0]) if isinstance(title_list, list) else str(title_list)
 
             if artist.strip() and title.strip():
-                db.record(path_str, status="needs_isrc", artist=artist.strip(), title=title.strip())
+                queue_record(
+                    path_str,
+                    status="needs_isrc",
+                    artist=artist.strip(),
+                    title=title.strip(),
+                )
             else:
-                db.record(path_str, status="no_tags")
+                queue_record(path_str, status="no_tags")
 
-            batch_size += 1
-            if batch_size >= 100:
-                db.commit()
-                batch_size = 0
-
-    db.commit()
+    flush_pending()
 
     # Status summary
     counts = db.count_by_status()
@@ -1197,7 +1201,8 @@ def isrc_tag(
                 results = tidal.session.search(f"{artist} {title}", models=[Track], limit=5)
                 tracks = results.get("tracks", []) or results.get("top_hit", [])
                 if not tracks:
-                    db.record(path_str, status="not_found", artist=artist, title=title)
+                    with db.write_transaction():
+                        db.record(path_str, status="not_found", artist=artist, title=title)
                     not_found += 1
                     progress.advance(task_id)
                     continue
@@ -1216,7 +1221,8 @@ def isrc_tag(
                     matched_isrc = tracks[0].isrc
 
                 if not matched_isrc:
-                    db.record(path_str, status="not_found", artist=artist, title=title)
+                    with db.write_transaction():
+                        db.record(path_str, status="not_found", artist=artist, title=title)
                     not_found += 1
                     progress.advance(task_id)
                     continue
@@ -1228,21 +1234,23 @@ def isrc_tag(
                     tagged += 1
                 else:
                     if _write_isrc(file_path, matched_isrc):
-                        db.record(path_str, status="tagged", isrc=matched_isrc, artist=artist, title=title)
-                        db.register_isrc_path(matched_isrc, file_path)
+                        with db.write_transaction():
+                            db.record(path_str, status="tagged", isrc=matched_isrc, artist=artist, title=title)
+                            db.register_isrc_path(matched_isrc, file_path)
                         tagged += 1
                     else:
-                        db.record(path_str, status="error", artist=artist, title=title)
+                        with db.write_transaction():
+                            db.record(path_str, status="error", artist=artist, title=title)
                         errors += 1
 
             except Exception:
-                db.record(path_str, status="error", artist=artist, title=title)
+                with db.write_transaction():
+                    db.record(path_str, status="error", artist=artist, title=title)
                 errors += 1
 
             progress.advance(task_id)
             _time.sleep(0.2)
 
-    db.commit()
     db.close()
 
     # Summary

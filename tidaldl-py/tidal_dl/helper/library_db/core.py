@@ -1,6 +1,40 @@
 """Connection lifecycle and schema migrations."""
 
+from __future__ import annotations
+
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
+
 from tidal_dl.helper.library_db._common import *
+
+_WRITE_LOCKS: dict[str, threading.Lock] = {}
+_WRITE_LOCKS_GUARD = threading.Lock()
+_SQLITE_LOCK_MARKERS = (
+    "database is locked",
+    "database is busy",
+    "database table is locked",
+)
+_IMMEDIATE_ATTEMPTS = 4
+_IMMEDIATE_RETRY_BASE_SEC = 0.02
+_IMMEDIATE_RETRY_CAP_SEC = 0.25
+_ACQUIRE_BUSY_MS = 50
+_DEFAULT_BUSY_MS = 5000
+
+
+def is_sqlite_lock_error(exc: BaseException) -> bool:
+    """Return True for a transient SQLite writer-lock failure."""
+    if not isinstance(exc, sqlite3.OperationalError):
+        return False
+    message = str(exc).lower()
+    return any(marker in message for marker in _SQLITE_LOCK_MARKERS)
+
+
+def write_lock_for(db_path: pathlib.Path | str) -> threading.Lock:
+    """Return the process-wide writer lock for one library database file."""
+    key = str(pathlib.Path(db_path).resolve())
+    with _WRITE_LOCKS_GUARD:
+        return _WRITE_LOCKS.setdefault(key, threading.Lock())
 
 
 class LibraryDBCore:
@@ -342,6 +376,59 @@ class LibraryDBCore:
             """CREATE INDEX IF NOT EXISTS idx_album_grouping_signatures
                ON album_grouping_assessments(left_signature, right_signature)"""
         )
+
+    def begin_immediate(self) -> None:
+        """Take a reserved lock with a short acquire wait; caller retries."""
+        assert self._conn
+        self._conn.execute(f"PRAGMA busy_timeout={_ACQUIRE_BUSY_MS}")
+        try:
+            self._conn.execute("BEGIN IMMEDIATE")
+        finally:
+            self._conn.execute(f"PRAGMA busy_timeout={_DEFAULT_BUSY_MS}")
+
+    @contextmanager
+    def write_transaction(self, *, immediate: bool = False) -> Iterator[None]:
+        """Hold the per-db writer lock for one short SQL transaction.
+
+        Lock retries happen *outside* the process lock so a foreign SQLite
+        writer cannot pin every other writer behind a 5s busy timeout.
+        """
+        assert self._conn
+        lock = write_lock_for(self._path)
+        delay = _IMMEDIATE_RETRY_BASE_SEC
+        last_error: sqlite3.OperationalError | None = None
+        started = False
+        for attempt in range(_IMMEDIATE_ATTEMPTS):
+            lock.acquire()
+            try:
+                if self._conn.in_transaction:
+                    self._conn.rollback()
+                if immediate:
+                    self.begin_immediate()
+                started = True
+                break
+            except sqlite3.OperationalError as exc:
+                lock.release()
+                last_error = exc
+                if not is_sqlite_lock_error(exc) or attempt == _IMMEDIATE_ATTEMPTS - 1:
+                    raise
+                time.sleep(delay)
+                delay = min(delay * 2, _IMMEDIATE_RETRY_CAP_SEC)
+        if not started:
+            if last_error is not None:
+                raise last_error
+            raise sqlite3.OperationalError("database is locked")
+
+        try:
+            yield
+            if self._conn.in_transaction:
+                self._conn.commit()
+        except Exception:
+            if self._conn is not None and self._conn.in_transaction:
+                self._conn.rollback()
+            raise
+        finally:
+            lock.release()
 
     def close(self) -> None:
         if self._conn:

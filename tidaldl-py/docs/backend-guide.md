@@ -321,7 +321,7 @@ Index: `idx_play_events_at`
 
 Indexes: `idx_download_jobs_status_created`, `idx_download_jobs_track_id`
 
-Job creation uses an atomic `BEGIN IMMEDIATE` transaction so two requests cannot enqueue active duplicate work for the same `track_id`. Queue claiming also uses `BEGIN IMMEDIATE` and updates only a still-queued row before returning it to the worker.
+Job creation uses an atomic `BEGIN IMMEDIATE` transaction so two requests cannot enqueue active duplicate work for the same `track_id`. Queue claiming also uses `BEGIN IMMEDIATE` and updates only a still-queued row before returning it to the worker. Every `BEGIN IMMEDIATE` site goes through `LibraryDB.write_transaction(immediate=True)`, which holds a per-database process lock for that short SQL burst. A transient lock is retried *outside* that process lock with a 50ms acquire timeout so a foreign reserved writer cannot pin every other writer behind the 5s `busy_timeout`. The download worker treats a remaining lock error as a deferred claim and keeps running; it does not die.
 
 Startup recovery rule: queued jobs stay queued. `running`, `indexing`, `retrying`, and `paused` jobs become `interrupted`. Terminal jobs stay terminal.
 
@@ -388,7 +388,15 @@ db.open()                    # PRAGMA journal_mode=WAL, busy_timeout=5000
 db.upsert_track(...)         # INSERT OR REPLACE
 db.commit()
 db.close()
+
+# Writers: compute first, then one short transaction. Never hold the
+# reserved lock across grouping, filesystem/network I/O, or callbacks.
+with db.write_transaction(immediate=True):
+    db.save_grouping_assessment(...)
+    db.stamp_release_ids(cards)
 ```
+
+API routes, the background scanner, album enrichment, and `DownloadJobService` each open their own connection. WAL readers stay concurrent. Writers serialize at `write_transaction` / `begin_immediate`, not by sharing one connection across threads. Lock retries release the process lock before sleeping.
 
 **GUI singleton** (`gui/api/library.py`):
 ```python
@@ -631,7 +639,7 @@ class BaseConfig(Generic[ConfigModelT]):
 |----------|-------|---------|
 | JobEventHub client list | `threading.Lock` | Acquired on add/remove/iterate |
 | Rate limit counters | `threading.Lock` | Acquired on backoff decisions |
-| LibraryDB | SQLite WAL + `busy_timeout=5000` | Concurrent reads, serialized writes with 5s retry |
+| LibraryDB | WAL readers + `write_transaction` / `begin_immediate` | Concurrent reads; short reserved writes; per-db lock; bounded lock retry |
 | TTLCache | `threading.Lock` | Acquired on get/set/invalidate |
 | DownloadCheckpoint | `threading.Lock` | Acquired on status read/write |
 | Tidal stream ops | `Tidal.stream_lock` | Serializes Atmos session switching |
@@ -678,7 +686,7 @@ except (json.JSONDecodeError, KeyError):
 
 - DB reconnects every 5 minutes (`_DB_MAX_AGE = 300`)
 - Duplicates endpoints run in `asyncio.to_thread()` so `os.path.exists()` on NAS doesn't block the event loop
-- `busy_timeout=5000` handles NAS-induced SQLite lock contention
+- `busy_timeout=5000` is a last-resort wait, not a license to hold the writer lock. Grouping, scans, and post-download indexing compute first, then persist. The worker retries a transient lock instead of exiting.
 
 ---
 
@@ -693,6 +701,6 @@ except (json.JSONDecodeError, KeyError):
    accept localhost origins only; direct LAN use is unsupported.
 6. **Migrations are additive.** `ALTER TABLE ADD COLUMN`. Never drop, rename, or restructure. Schema grows forward.
 7. **Config corruption is recoverable.** `.bak` fallback, tolerant deserialization, defaults for missing fields.
-8. **NAS mounts are unreliable.** Reconnect on staleness, run I/O off the event loop, use WAL + busy timeout.
+8. **NAS mounts are unreliable.** Reconnect on staleness, run I/O off the event loop, use WAL + short write transactions. Do not hold the SQLite writer lock across grouping, scans, or downloads; `busy_timeout` is only a last-resort wait.
 9. **Audio path is sacred.** No Web Audio API, no signal processing. Files stream bit-perfect from disk to browser `<audio>` element.
 10. **Rate limits are respected.** Exponential backoff on 429, recovery on sustained success. Never retry immediately.
