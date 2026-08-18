@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -474,7 +475,14 @@ def test_bot_control_lifespan_starts_and_stops_configured_bot(
 
     app = create_app(port=8765)
     with TestClient(app) as client:
-        resp = client.get("/api/bot-control/status", headers=HOST_HEADER)
+        deadline = time.monotonic() + 2
+        resp = None
+        while time.monotonic() < deadline:
+            resp = client.get("/api/bot-control/status", headers=HOST_HEADER)
+            if resp.status_code == 200 and resp.json().get("running") is True:
+                break
+            time.sleep(0.02)
+        assert resp is not None
         assert resp.status_code == 200
         assert resp.json()["running"] is True
         assert pid_path.read_text(encoding="utf-8").strip() == "4321"

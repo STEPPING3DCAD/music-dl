@@ -73,20 +73,36 @@ def create_app(
                 app.state.source_restore_attempted = True
                 app.state.source_restore_error = str(exc)
 
-        threading.Thread(
-            target=_restore_tidal_source,
-            name="tidal-source-restore",
-            daemon=True,
-        ).start()
-        threading.Thread(
-            target=start_configured_bot,
-            args=(app,),
-            name="discord-bot-start",
-            daemon=True,
-        ).start()
+        after_ready: list[threading.Thread] = []
+        shutting_down = threading.Event()
+
+        def _start_bot_after_ready() -> None:
+            if shutting_down.is_set():
+                return
+            start_configured_bot(app)
+
+        after_ready.append(
+            threading.Thread(
+                target=_restore_tidal_source,
+                name="tidal-source-restore",
+                daemon=True,
+            )
+        )
+        after_ready.append(
+            threading.Thread(
+                target=_start_bot_after_ready,
+                name="discord-bot-start",
+                daemon=True,
+            )
+        )
+        for thread in after_ready:
+            thread.start()
         try:
             yield
         finally:
+            shutting_down.set()
+            for thread in after_ready:
+                thread.join(timeout=2)
             stop_running_bot(app)
             service.stop_worker()
 
