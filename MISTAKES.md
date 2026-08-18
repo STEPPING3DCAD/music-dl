@@ -8,6 +8,14 @@
 
 **Prevention:** Keep `read_local_lyrics` first. If local is `none` and Tidal is signed in, fetch via `track.lyrics()` and cache. Enable `#btn-lyrics` for Tidal-only now-playing. Do not silently flip `lyrics_embed` / `lyrics_file`. Offer panel **Save lyrics** so a sidecar can be written for offline local playback. No Genius/web scrape.
 
+## 2026-08-18 — Home showed two identical Continue Listening tiles
+
+**What happened:** After v1.7.6 the Tetrarch saw two resume tiles on Home for the same track (Huelepega / Sandy, PAPO — Otra Vez) with Resume 1:58 and Resume 1:59. Footer `#now-playing` was not the extra copy.
+
+**Root cause:** `renderHome` appends a `.home-wrap` before `await /home`. A second paint on the same view container (reload, overlapping navigate, or `/home` resolving twice about a second apart) appended another wrap instead of replacing. `_renderContinueListening` and `_renderRecentStrip` were also append-only. `_initApp` can paint `.home-recent-section` when `/home/recent` wins the race, then `renderHome` paints it again on the same wrap.
+
+**Prevention:** At most one `.home-wrap` in the view container, one `.continue-card`, and one `.home-recent-section`. A later paint removes the previous node and appends the new one. Keep the live eyebrow **Continue Listening**. Do not add a second Now Playing section. Decision-test a second Home paint so two resume tiles or two recent strips fail.
+
 ## 2026-08-18 — Artist search tiles showed photos with no name
 
 **What happened:** Searching Tetrarch (David Diaz) by Artist showed a grid of square photos and no readable name under or on the tiles.

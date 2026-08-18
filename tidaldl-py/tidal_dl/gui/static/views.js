@@ -127,6 +127,7 @@ async function renderHome(container) {
   wrap.appendChild(header);
   const loadingHint = textEl('p', 'Loading your library…', 'home-loading-hint');
   wrap.appendChild(loadingHint);
+  container.querySelectorAll('.home-wrap').forEach(old => old.remove());
   container.appendChild(wrap);
 
   let data;
@@ -252,6 +253,7 @@ function _renderContinueListening(container) {
   card.appendChild(meta);
   card.addEventListener('click', () => _resumeContinueListening(track, resume.time));
   a11yClick(card);
+  container.querySelectorAll('.continue-card').forEach(old => old.remove());
   container.appendChild(card);
 }
 
@@ -649,6 +651,7 @@ function _renderRecentStrip(container) {
     strip.appendChild(card);
   }
   section.appendChild(strip);
+  container.querySelectorAll('.home-recent-section').forEach(old => old.remove());
   container.appendChild(section);
 }
 

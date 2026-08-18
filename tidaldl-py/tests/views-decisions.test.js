@@ -7,47 +7,179 @@ const viewsSource = readFileSync(
   'utf8',
 );
 
-function loadHomeRenderer(api) {
+function classListFor(node) {
+  return {
+    add(...names) {
+      const set = new Set(String(node.className || '').split(/\s+/).filter(Boolean));
+      names.forEach(name => set.add(name));
+      node.className = [...set].join(' ');
+    },
+    remove(...names) {
+      const set = new Set(String(node.className || '').split(/\s+/).filter(Boolean));
+      names.forEach(name => set.delete(name));
+      node.className = [...set].join(' ');
+    },
+  };
+}
+
+function createNode(tag) {
+  const node = {
+    tag,
+    className: '',
+    children: [],
+    parentNode: null,
+    isConnected: false,
+    style: {},
+    classList: null,
+    appendChild(child) {
+      if (child.parentNode) child.parentNode.removeChild(child);
+      child.parentNode = node;
+      child.isConnected = node.isConnected;
+      node.children.push(child);
+      return child;
+    },
+    removeChild(child) {
+      node.children = node.children.filter(existing => existing !== child);
+      child.parentNode = null;
+      child.isConnected = false;
+      return child;
+    },
+    replaceWith(next) {
+      const parent = node.parentNode;
+      if (!parent) return;
+      const index = parent.children.indexOf(node);
+      next.parentNode = parent;
+      next.isConnected = parent.isConnected;
+      parent.children[index] = next;
+      node.parentNode = null;
+      node.isConnected = false;
+    },
+    remove() {
+      if (node.parentNode) node.parentNode.removeChild(node);
+    },
+    querySelector(selector) {
+      return node.querySelectorAll(selector)[0] || null;
+    },
+    querySelectorAll(selector) {
+      const wanted = selector.startsWith('.') ? selector.slice(1) : selector;
+      const matches = [];
+      const visit = (child) => {
+        const classes = String(child.className || '').split(/\s+/);
+        if (classes.includes(wanted)) matches.push(child);
+        (child.children || []).forEach(visit);
+      };
+      node.children.forEach(visit);
+      return matches;
+    },
+    addEventListener() {},
+    setAttribute() {},
+    set textContent(value) { this._text = String(value); this.children = []; },
+    get textContent() { return (this._text || '') + this.children.map(child => child.textContent).join(''); },
+  };
+  node.classList = classListFor(node);
+  return node;
+}
+
+function createConnectedContainer() {
+  const container = createNode('div');
+  container.isConnected = true;
+  return container;
+}
+
+function createH() {
+  const h = (tag, props = {}, ...children) => {
+    const node = createNode(tag);
+    Object.assign(node, props);
+    if (!node.classList || typeof node.classList.add !== 'function') {
+      node.classList = classListFor(node);
+    }
+    children.forEach(child => node.appendChild(child));
+    return node;
+  };
+  const textEl = (tag, value, className) => h(tag, { textContent: value, className });
+  return { h, textEl };
+}
+
+function loadHomeRenderer(api, extras = {}) {
   const functionBody = viewsSource
     .split('async function renderHome(container) {')[1]
     ?.split('\nfunction _getContinueListeningState')[0];
   if (!functionBody) throw new Error('Home renderer not found');
 
-  function element(tag) {
-    return {
-      tag,
-      children: [],
-      isConnected: true,
-      classList: { add() {}, remove() {} },
-      appendChild(child) { this.children.push(child); return child; },
-      remove() {},
-      set textContent(value) { this._text = String(value); this.children = []; },
-      get textContent() { return (this._text || '') + this.children.map(child => child.textContent).join(''); },
-    };
-  }
-  const h = (tag, props = {}, ...children) => {
-    const node = element(tag);
-    Object.assign(node, props);
-    children.forEach(child => node.appendChild(child));
-    return node;
-  };
-  const textEl = (tag, value, className) => h(tag, { textContent: value, className });
-
+  const { h, textEl } = createH();
   return new Function(
     'api', 'h', 'textEl', 'document', '_greeting', '_renderContinueListening',
     '_renderHomeCold', '_renderHomeGrid', '_renderRecentStrip', 'recentlyPlayed',
     `async function renderHome(container) {${functionBody}\nreturn renderHome;`,
   )(
     api, h, textEl, { createTextNode: value => h('span', { textContent: value }) },
-    () => 'Good afternoon,', () => {},
-    () => {}, () => {}, () => {}, [],
+    extras._greeting || (() => 'Good afternoon,'),
+    extras._renderContinueListening || (() => {}),
+    extras._renderHomeCold || (() => {}),
+    extras._renderHomeGrid || (() => {}),
+    extras._renderRecentStrip || (() => {}),
+    extras.recentlyPlayed || [],
   );
+}
+
+function loadContinueListeningRenderer(state, store) {
+  const start = viewsSource.indexOf('function _getContinueListeningState() {');
+  const end = viewsSource.indexOf('function _renderHomeCold(');
+  const block = start >= 0 && end > start ? viewsSource.slice(start, end) : '';
+  if (!block.includes('function _renderContinueListening')) {
+    throw new Error('continue listening helpers not found');
+  }
+
+  const { h, textEl } = createH();
+  const localStorage = {
+    getItem: (key) => (Object.prototype.hasOwnProperty.call(store, key) ? store[key] : null),
+    setItem: (key, value) => { store[key] = value; },
+    removeItem: (key) => { delete store[key]; },
+  };
+
+  return new Function(
+    'state', 'localStorage', '_trackKey', 'formatTime', 'h', 'textEl',
+    'artGradient', 'a11yClick', 'audio', '_findTrackIndex', 'playTrack',
+    `${block}\nreturn { _renderContinueListening, _getContinueListeningState };`,
+  )(
+    state,
+    localStorage,
+    (track) => String(track.id),
+    (seconds) => {
+      const m = Math.floor(seconds / 60);
+      const s = Math.floor(seconds % 60);
+      return `${m}:${String(s).padStart(2, '0')}`;
+    },
+    h,
+    textEl,
+    () => 'gradient',
+    () => {},
+    { addEventListener() {} },
+    () => 0,
+    () => {},
+  );
+}
+
+function loadRecentStripRenderer(recentlyPlayed) {
+  const start = viewsSource.indexOf('function _renderRecentStrip(container) {');
+  const end = viewsSource.indexOf('// ---- SEARCH VIEW ----');
+  const block = start >= 0 && end > start ? viewsSource.slice(start, end) : '';
+  if (!block.includes('function _renderRecentStrip')) {
+    throw new Error('recent strip renderer not found');
+  }
+
+  const { h, textEl } = createH();
+  return new Function(
+    'h', 'textEl', 'recentlyPlayed', 'feelingLucky', 'artGradient',
+    'a11yClick', 'navigate', 'startPlaybackFromList',
+    `${block}\nreturn _renderRecentStrip;`,
+  )(h, textEl, recentlyPlayed, () => {}, () => 'gradient', () => {}, () => {}, () => {});
 }
 
 describe('Home view decisions', () => {
   test('shows an honest error instead of an empty-library state when Home fails', async () => {
     const renderHome = loadHomeRenderer(async () => { throw new Error('HTTP 500'); });
-    const container = { children: [], appendChild(child) { this.children.push(child); } };
+    const container = createConnectedContainer();
 
     await renderHome(container);
 
@@ -55,6 +187,53 @@ describe('Home view decisions', () => {
     expect(text).toContain('Could not load Home');
     expect(text).toContain('could not load your library summary');
     expect(text).not.toContain("I'm feeling lucky");
+  });
+
+  test('a second Home paint cannot leave two resume tiles or two recent strips', async () => {
+    const track = {
+      id: 'huelepega',
+      name: 'Huelepega / Sandy',
+      artist: 'PAPO — Otra Vez',
+      duration: 0,
+    };
+    const store = {
+      playerPosition: JSON.stringify({ key: 'huelepega', time: 118 }),
+    };
+    const continueListening = loadContinueListeningRenderer(
+      { queue: [track], queueIndex: 0 },
+      store,
+    );
+    const recentlyPlayed = [track];
+    const renderRecentStrip = loadRecentStripRenderer(recentlyPlayed);
+    const homeData = {
+      total_plays: 0,
+      track_count: 0,
+      album_count: 0,
+    };
+    const renderHome = loadHomeRenderer(async () => homeData, {
+      _renderContinueListening: continueListening._renderContinueListening,
+      _renderRecentStrip: renderRecentStrip,
+      recentlyPlayed,
+    });
+    const container = createConnectedContainer();
+
+    await renderHome(container);
+    store.playerPosition = JSON.stringify({ key: 'huelepega', time: 119 });
+    await renderHome(container);
+
+    expect(container.querySelectorAll('.home-wrap')).toHaveLength(1);
+    expect(container.querySelectorAll('.continue-card')).toHaveLength(1);
+    expect(container.querySelectorAll('.home-recent-section')).toHaveLength(1);
+    expect(container.textContent).toContain('Continue Listening');
+    expect(container.textContent).toContain('Resume at 1:59');
+    expect(container.textContent).not.toContain('Resume at 1:58');
+    expect(container.textContent).not.toContain('Now Playing');
+
+    const wrap = container.querySelector('.home-wrap');
+    continueListening._renderContinueListening(wrap);
+    renderRecentStrip(wrap);
+    expect(wrap.querySelectorAll('.continue-card')).toHaveLength(1);
+    expect(wrap.querySelectorAll('.home-recent-section')).toHaveLength(1);
   });
 });
 
