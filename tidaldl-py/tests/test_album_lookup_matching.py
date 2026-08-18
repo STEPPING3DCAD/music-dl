@@ -9,7 +9,12 @@ class _FakeAlbumDB:
         self._tracks = tracks
 
     def album_tracks(self, artist, album):
-        return list(self._tracks)
+        if artist == "Various Artists":
+            return [row for row in self._tracks if row.get("album") == album]
+        return [
+            row for row in self._tracks
+            if row.get("artist") == artist and row.get("album") == album
+        ]
 
     def close(self):
         return None
@@ -95,6 +100,8 @@ def test_album_lookup_prefers_candidate_with_local_track_overlap(monkeypatch, cl
     assert result["album"]["artist"] == "Don Moen"
     assert [t["name"] for t in result["tracks"]] == ["Mas De Ti", "Celebrad Al Dios De Amor"]
     assert [t["is_local"] for t in result["tracks"]] == [True, True]
+    assert [t.get("path") for t in result["tracks"]] == ["/music/1.flac", "/music/2.flac"]
+    assert [t.get("local_path") for t in result["tracks"]] == ["/music/1.flac", "/music/2.flac"]
     assert result["missing_count"] == 0
 
 
@@ -164,3 +171,90 @@ def test_album_lookup_ignores_empty_normalized_local_titles(monkeypatch, clear_s
 
     assert result["album"]["id"] == 2
     assert result["missing_count"] == 1
+
+
+def test_album_lookup_marks_local_when_tidal_album_string_differs(monkeypatch, clear_singletons):
+    from tidal_dl.gui.api import albums as albums_api
+
+    local_tracks = [
+        {
+            "title": "Huelepega",
+            "artist": "Sandy, PAPO",
+            "album": "Otra Vez",
+            "path": "/music/Sandy, PAPO/Otra Vez/Huelepega.flac",
+        },
+    ]
+    tidal = _album(
+        9,
+        "Otra Vez (Explicit)",
+        "Sandy",
+        [_track("Huelepega", "Sandy, PAPO", "Otra Vez (Explicit)", 91)],
+    )
+    fake_session = SimpleNamespace(
+        check_login=lambda: True,
+        search=lambda query, models=None, limit=20: {"albums": [tidal]},
+    )
+
+    monkeypatch.setattr(albums_api, "Tidal", lambda: SimpleNamespace(session=fake_session))
+    monkeypatch.setattr(albums_api, "_get_library_db", lambda: _FakeAlbumDB(local_tracks))
+    monkeypatch.setattr(albums_api, "_serialize_track", _serialize_stub)
+
+    result = albums_api.album_lookup("Sandy, PAPO", "Otra Vez")
+
+    assert result["tracks"][0]["is_local"] is True
+    assert result["tracks"][0]["path"] == "/music/Sandy, PAPO/Otra Vez/Huelepega.flac"
+    assert result["tracks"][0]["local_path"] == "/music/Sandy, PAPO/Otra Vez/Huelepega.flac"
+    assert result["missing_count"] == 0
+
+
+def test_album_lookup_does_not_mark_same_title_from_a_different_album(monkeypatch, clear_singletons):
+    from tidal_dl.gui.api import albums as albums_api
+
+    local_tracks = [
+        {
+            "title": "Huelepega",
+            "artist": "Sandy, PAPO",
+            "album": "Otra Vez",
+            "path": "/music/Sandy, PAPO/Otra Vez/Huelepega.flac",
+        },
+        {
+            "title": "Other Song",
+            "artist": "Other Artist",
+            "album": "Hits",
+            "path": "/music/Other Artist/Hits/Other Song.flac",
+        },
+    ]
+    compilation = _album(
+        3,
+        "Hits",
+        "Other Artist",
+        [
+            _track("Huelepega", "Sandy, PAPO", "Hits", 31),
+            _track("Other Song", "Other Artist", "Hits", 32),
+        ],
+    )
+    fake_session = SimpleNamespace(
+        check_login=lambda: True,
+        search=lambda query, models=None, limit=20: {"albums": [compilation]},
+    )
+
+    def _serialize_isrc_hit(track, _library_db=None):
+        data = _serialize_stub(track, _library_db)
+        if track.id == 31:
+            data["is_local"] = True
+            data["local_path"] = "/music/Sandy, PAPO/Otra Vez/Huelepega.flac"
+            data["path"] = "/music/Sandy, PAPO/Otra Vez/Huelepega.flac"
+        return data
+
+    monkeypatch.setattr(albums_api, "Tidal", lambda: SimpleNamespace(session=fake_session))
+    monkeypatch.setattr(albums_api, "_get_library_db", lambda: _FakeAlbumDB(local_tracks))
+    monkeypatch.setattr(albums_api, "_serialize_track", _serialize_isrc_hit)
+
+    result = albums_api.album_lookup("Other Artist", "Hits")
+
+    by_name = {track["name"]: track for track in result["tracks"]}
+    assert by_name["Huelepega"]["is_local"] is False
+    assert by_name["Huelepega"].get("path") in (None, "")
+    assert by_name["Huelepega"].get("local_path") in (None, "")
+    assert by_name["Other Song"]["is_local"] is True
+    assert by_name["Other Song"]["path"] == "/music/Other Artist/Hits/Other Song.flac"

@@ -91,6 +91,11 @@ function _currentTrackLocalPath(track) {
   return track.local_path || track.path || null;
 }
 
+function _nowPlayingDownloadHidden(track, audioSrc) {
+  if (track && (track.is_local || track.local_path || track.path)) return true;
+  return String(audioSrc || '').includes('/playback/local');
+}
+
 function _lyricsOpen() {
   return lyricsState.lyricsPanelState !== 'closed';
 }
@@ -642,7 +647,8 @@ function updatePlayerHeart() {
     dlEl.addEventListener('click', async () => {
       const trk = state.queue[state.queueIndex] || (recentlyPlayed && recentlyPlayed[0]);
       if (!trk || !trk.id) { toast('No track to download', 'error'); return; }
-      if (trk.is_local) { toast('Already in your library', 'success'); return; }
+      const audioSrc = (document.getElementById('audio') || {}).src || '';
+      if (_nowPlayingDownloadHidden(trk, audioSrc)) { toast('Already in your library', 'success'); return; }
       dlEl.classList.add('downloading');
       try {
         await apiTidal('/download', { method: 'POST', body: { track_ids: [trk.id] } });
@@ -663,18 +669,14 @@ function updatePlayerHeart() {
   }
 
   heartEl.style.display = '';
+  const recent = recentlyPlayed && recentlyPlayed[0];
+  const audioSrc = (document.getElementById('audio') || {}).src || '';
   if (current) {
     const key = current.path || (current.id ? 'tidal:' + current.id : null);
     heartEl.classList.toggle('hearted', !!(key && _favCache[key]));
-    dlEl.style.display = current.is_local ? 'none' : '';
-  } else {
-    // No queue context — check recent + audio src for download eligibility
-    const recent = recentlyPlayed && recentlyPlayed[0];
-    const audioSrc = document.getElementById('audio').src || '';
-    const isStream = audioSrc.includes('/playback/stream/');
-    const isLocal = recent ? recent.is_local : !isStream;
-    dlEl.style.display = isLocal ? 'none' : '';
   }
+  const downloadTrack = current || recent || null;
+  dlEl.style.display = _nowPlayingDownloadHidden(downloadTrack, audioSrc) ? 'none' : '';
 }
 
 // ---- PLAY COUNT (30-second actual-playback threshold) ----
@@ -751,7 +753,7 @@ function playTrack(track) {
   audio.pause();
   audio.muted = true;
 
-  if (track.is_local) {
+  if (localPath) {
     audio.src = '/api/playback/local?path=' + encodeURIComponent(localPath);
   } else {
     audio.src = '/api/playback/stream/' + track.id;

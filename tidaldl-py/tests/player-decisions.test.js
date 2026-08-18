@@ -17,6 +17,16 @@ function loadDecisionHelpers() {
   return new Function(`${helperSource[0]}\nreturn { _setupMustBlock, _authStateNeedsExpiredBanner };`)();
 }
 
+function loadNowPlayingDownloadHidden() {
+  const helperSource = playerSource.match(
+    /function _nowPlayingDownloadHidden\(track, audioSrc\) \{[\s\S]*?\n\}/,
+  );
+
+  if (!helperSource) throw new Error('now-playing download helper not found');
+
+  return new Function(`${helperSource[0]}\nreturn _nowPlayingDownloadHidden;`)();
+}
+
 function loadSearchRefreshHelper(state, document, doSearch) {
   const helperSource = playerSource.match(
     /async function _refreshSearchAfterLogin\(\) \{[\s\S]*?\n\}/,
@@ -414,6 +424,48 @@ describe('web update decisions', () => {
   });
 });
 
+describe('now-playing download visibility', () => {
+  test('hides Download for a local library track', () => {
+    const hidden = loadNowPlayingDownloadHidden();
+
+    expect(hidden({ is_local: true, name: 'Huelepega' }, '')).toBe(true);
+  });
+
+  test('shows Download for a Tidal-only queue item', () => {
+    const hidden = loadNowPlayingDownloadHidden();
+
+    expect(hidden({ id: 42, name: 'Huelepega', artist: 'Sandy, PAPO', is_local: false }, '/api/playback/stream/42')).toBe(false);
+  });
+
+  test('hides Download when a Tidal item is already stamped local', () => {
+    const hidden = loadNowPlayingDownloadHidden();
+
+    expect(hidden({
+      id: 42,
+      is_local: true,
+      local_path: '/music/Sandy, PAPO/Otra Vez/Huelepega.flac',
+    }, '/api/playback/stream/42')).toBe(true);
+    expect(hidden({
+      id: 42,
+      is_local: false,
+      local_path: '/music/Sandy, PAPO/Otra Vez/Huelepega.flac',
+    }, '/api/playback/stream/42')).toBe(true);
+    expect(hidden({
+      id: 42,
+      path: '/music/Sandy, PAPO/Otra Vez/Huelepega.flac',
+    }, '/api/playback/stream/42')).toBe(true);
+  });
+
+  test('hides Download when audio is already a local playback URL', () => {
+    const hidden = loadNowPlayingDownloadHidden();
+
+    expect(hidden(
+      { id: 42, is_local: false },
+      '/api/playback/local?path=%2Fmusic%2FHuelepega.flac',
+    )).toBe(true);
+  });
+});
+
 describe('local playback decisions', () => {
   test('uses either local path key and streams only remote tracks', () => {
     const makeAudio = () => ({
@@ -447,6 +499,24 @@ describe('local playback decisions', () => {
     expect(pathAudio.src).not.toContain('null');
     expect(pathAudio.src).not.toContain('undefined');
     expect(invalidLocalAudio.src).toBe('');
+  });
+
+  test('plays a Tidal item from disk when a local path is stamped', () => {
+    const audio = {
+      src: '',
+      muted: false,
+      pause: () => {},
+      addEventListener: () => {},
+      load: () => {},
+    };
+
+    loadPlayTrack(audio, { playing: false })({
+      id: 42,
+      is_local: false,
+      local_path: '/music/Huelepega.flac',
+    });
+
+    expect(audio.src).toBe('/api/playback/local?path=%2Fmusic%2FHuelepega.flac');
   });
 
   test('loads a selected local source after installing the readiness listener', () => {

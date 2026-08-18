@@ -8,6 +8,14 @@
 
 **Prevention:** Keep square art with `aspect-ratio: 1`. Scope `height: 100%; object-fit: cover` to `.album-card-art-wrap .album-card-art`. Set `align-items: start` on `.album-grid` / `.album-gallery` so cards grow for the caption. Artist `img` alt is the name; the legend is visible title text, not overlay-only.
 
+## 2026-08-18 — Now-playing Download shown for a file already in the library
+
+**What happened:** Playing a downloaded track (Huelepega / Sandy, PAPO / Otra Vez) still showed `#now-download` on the now-playing bar. Repeat-one and mid-play did not matter. The footer treated the queue item as a Tidal download target.
+
+**Root cause:** `updateNowPlayingButtons` hid Download only when `current.is_local` was truthy. Tidal-shaped queue items (search, album tracks, Show on Tidal) often have an `id` and omit `is_local` even when the same recording is on disk. `album_lookup` then forced `is_local = False` and only restored it on a `(title, artist, album)` triple against Tidal's album string, without stamping `path` / `local_path`. A leftover ISRC `path` from `_serialize_track` was ignored by the player, which also streams unless `is_local` is set.
+
+**Prevention:** Hide `#now-download` when `is_local`, `path` / `local_path`, or the audio src is `/api/playback/local`. Stamp `is_local` plus `path` / `local_path` from album-scoped title+artist (the queried release's files), never ISRC. Clicking Download on a local track toasts "Already in your library" and must not enqueue again.
+
 ## 2026-08-18 — Cold boot waited on Tidal before the sidecar was ready
 
 **What happened:** Tauri stayed on the spinner until lifespan finished a serial Tidal `resolve_source` (Hi-Fi health, gist key refresh, OAuth restore, quality probe). Each of those calls could use the 45s download timeout against a 30s health poll. Home then awaited `/home/recent` before `navigate('home')`, and first `/api/home` paid a NAS `Path.is_dir()`/`stat` plus unused extras (completionist join, peak hours, format breakdown, best-streak, week-vs-last).
