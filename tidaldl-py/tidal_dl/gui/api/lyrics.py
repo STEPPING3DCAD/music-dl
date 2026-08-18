@@ -6,8 +6,8 @@ from fastapi import APIRouter, HTTPException, Query
 
 from tidal_dl.gui.api.library import _path_in_library, _trusted_library_path
 from tidal_dl.gui.api.playback import get_download_paths
-from tidal_dl.gui.lyrics_local import read_local_lyrics
-from tidal_dl.gui.lyrics_tidal import lyrics_for_now_playing
+from tidal_dl.gui.lyrics_local import empty_lyrics_payload, read_local_lyrics
+from tidal_dl.gui.lyrics_tidal import TidalLyricsError, lyrics_for_now_playing
 from tidal_dl.gui.security import resolve_local_audio_path
 
 router = APIRouter(prefix="/lyrics")
@@ -33,26 +33,31 @@ def _raise_resolution(resolution) -> None:
         raise HTTPException(status_code=500, detail="Unexpected local lyrics resolution failure")
 
 
-def _library_ids(path: str | None, isrc: str | None) -> tuple[int | None, str | None]:
+def _library_identity(
+    path: str | None, isrc: str | None
+) -> tuple[int | None, str | None, str, str]:
     resolved_isrc = (isrc or "").strip().upper() or None
+    title = ""
+    artist = ""
     try:
         from tidal_dl.gui.services.db import get_library_db
 
         db = get_library_db()
     except Exception:
-        return None, resolved_isrc
+        return None, resolved_isrc, title, artist
     try:
-        if path and not resolved_isrc:
-            row = db.get(path)
-            if row:
-                resolved_isrc = (row.get("isrc") or "").strip().upper() or None
+        row = db.get(path) if path else None
+        if row:
+            resolved_isrc = resolved_isrc or (row.get("isrc") or "").strip().upper() or None
+            title = (row.get("title") or "").strip()
+            artist = (row.get("artist") or "").strip()
         if resolved_isrc:
             probe = db.get_probe(resolved_isrc)
             if probe and probe.get("tidal_track_id"):
-                return int(probe["tidal_track_id"]), resolved_isrc
+                return int(probe["tidal_track_id"]), resolved_isrc, title, artist
     except Exception:
-        return None, resolved_isrc
-    return None, resolved_isrc
+        return None, resolved_isrc, title, artist
+    return None, resolved_isrc, title, artist
 
 
 def _tidal_session_state() -> tuple[object | None, bool]:
@@ -77,9 +82,7 @@ def _duration_ms(duration: float | None) -> int | None:
         return None
     if value <= 0:
         return None
-    if value < 1000:
-        return int(value * 1000)
-    return int(value)
+    return int(value * 1000)
 
 
 @router.get("/local")
@@ -94,13 +97,16 @@ def get_lyrics(
     path: str | None = Query(None, description="Absolute path to local audio file"),
     tidal_track_id: int | None = Query(None, description="Tidal track id"),
     isrc: str | None = Query(None, description="ISRC for probe / Tidal resolve"),
-    duration: float | None = Query(None, description="Track duration in seconds or milliseconds"),
+    title: str | None = Query(None, description="Track title for ISRC search"),
+    artist: str | None = Query(None, description="Artist name for ISRC search"),
+    duration: float | None = Query(None, description="Track duration in seconds"),
 ):
     raw_path = (path or "").strip() or None
     if not raw_path and tidal_track_id is None and not (isrc or "").strip():
         raise HTTPException(status_code=400, detail="Missing track identity")
 
     local_path = None
+    local_none = None
     if raw_path:
         resolution = _resolve_audio_path(raw_path)
         _raise_resolution(resolution)
@@ -108,14 +114,23 @@ def get_lyrics(
         local = read_local_lyrics(local_path)
         if local.get("mode") != "none":
             return local
+        local_none = empty_lyrics_payload(str(local.get("track_path") or local_path.resolve()))
 
-    probe_id, resolved_isrc = _library_ids(str(local_path) if local_path else raw_path, isrc)
-    session, logged_in = _tidal_session_state()
-    return lyrics_for_now_playing(
-        path=local_path,
-        tidal_track_id=tidal_track_id or probe_id,
-        isrc=resolved_isrc or isrc,
-        session=session,
-        logged_in=logged_in,
-        duration_ms=_duration_ms(duration),
+    probe_id, resolved_isrc, lib_title, lib_artist = _library_identity(
+        str(local_path) if local_path else raw_path, isrc
     )
+    session, logged_in = _tidal_session_state()
+    try:
+        return lyrics_for_now_playing(
+            path=local_path,
+            tidal_track_id=tidal_track_id or probe_id,
+            isrc=resolved_isrc or isrc,
+            title=(title or "").strip() or lib_title,
+            artist=(artist or "").strip() or lib_artist,
+            session=session,
+            logged_in=logged_in,
+            duration_ms=_duration_ms(duration),
+            read_local=(lambda _audio_path: local_none) if local_none is not None else None,
+        )
+    except TidalLyricsError as exc:
+        raise HTTPException(status_code=502, detail=str(exc) or "Could not load lyrics from Tidal") from exc

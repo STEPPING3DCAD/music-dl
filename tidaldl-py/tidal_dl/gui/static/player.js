@@ -112,6 +112,8 @@ function _lyricsQuery(track) {
   const tid = track.tidal_track_id || track.id;
   if (tid) params.set('tidal_track_id', String(tid));
   if (track.isrc) params.set('isrc', String(track.isrc));
+  if (track.name || track.title) params.set('title', String(track.name || track.title));
+  if (track.artist) params.set('artist', String(track.artist));
   if (track.duration) params.set('duration', String(track.duration));
   return params.toString();
 }
@@ -306,8 +308,10 @@ function _applyLyricsPayload(payload, requestPath) {
   lyricsState.lyricsData = payload;
   lyricsState.lyricsRequestPath = requestPath;
   lyricsState.lyricsCanonicalTrackPath = payload.track_path;
-  if (requestPath) lyricsState.lyricsCache[requestPath] = payload;
-  if (payload.track_path) lyricsState.lyricsCache[payload.track_path] = payload;
+  if (payload.mode !== 'none') {
+    if (requestPath) lyricsState.lyricsCache[requestPath] = payload;
+    if (payload.track_path) lyricsState.lyricsCache[payload.track_path] = payload;
+  }
   if (payload.mode === 'synced') lyricsState.lyricsPanelState = 'synced';
   else if (payload.mode === 'unsynced') lyricsState.lyricsPanelState = 'unsynced';
   else lyricsState.lyricsPanelState = 'empty';

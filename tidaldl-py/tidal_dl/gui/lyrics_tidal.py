@@ -12,6 +12,10 @@ _CACHE = TTLCache(ttl_sec=3600)
 ReadLocal = Callable[[Path], dict]
 
 
+class TidalLyricsError(Exception):
+    """Tidal session failed while resolving or fetching lyrics."""
+
+
 def clear_tidal_lyrics_cache() -> None:
     _CACHE.clear()
 
@@ -30,6 +34,12 @@ def _tidal_track_key(tidal_track_id: int | None, isrc: str | None) -> str:
     if isrc:
         return f"isrc:{isrc.strip().upper()}"
     return "tidal:unknown"
+
+
+def _remember(payload: dict, tidal_track_id: int | None, isrc: str | None) -> None:
+    for key in (_cache_key(tidal_track_id, None), _cache_key(None, isrc)):
+        if key:
+            _CACHE.set(key, payload)
 
 
 def _lyrics_empty(obj: Any) -> bool:
@@ -56,14 +66,20 @@ def lyrics_obj_from_track(track: Any, session: Any = None) -> Any:
     return oauth_obj if not _lyrics_empty(oauth_obj) else obj
 
 
-def _search_track_id_by_isrc(session: Any, isrc: str) -> int | None:
+def _search_track_id_by_isrc(
+    session: Any,
+    isrc: str,
+    title: str = "",
+    artist: str = "",
+) -> int | None:
     target = isrc.strip().upper()
     if not target:
         return None
+    query = f"{title} {artist}".strip() or target
     try:
         from tidalapi.media import Track
 
-        results = session.search(target, models=[Track], limit=10)
+        results = session.search(query, models=[Track], limit=20)
         tracks = results.get("tracks", []) if isinstance(results, dict) else []
         if not tracks:
             tracks = getattr(results, "tracks", []) or []
@@ -71,8 +87,10 @@ def _search_track_id_by_isrc(session: Any, isrc: str) -> int | None:
             track_isrc = str(getattr(track, "isrc", "") or "").strip().upper()
             if track_isrc == target and getattr(track, "id", None) is not None:
                 return int(track.id)
-    except Exception:
-        return None
+    except TidalLyricsError:
+        raise
+    except Exception as exc:
+        raise TidalLyricsError("Could not resolve Tidal track") from exc
     return None
 
 
@@ -81,6 +99,8 @@ def fetch_tidal_lyrics(
     session: Any,
     tidal_track_id: int | None = None,
     isrc: str | None = None,
+    title: str = "",
+    artist: str = "",
     track_path: str = "",
     duration_ms: int | None = None,
 ) -> dict:
@@ -94,28 +114,32 @@ def fetch_tidal_lyrics(
     identity = track_path or _tidal_track_key(tidal_track_id, isrc)
     track_id = int(tidal_track_id) if tidal_track_id else None
     if track_id is None and isrc:
-        track_id = _search_track_id_by_isrc(session, isrc)
+        track_id = _search_track_id_by_isrc(session, isrc, title=title, artist=artist)
 
-    payload = empty_lyrics_payload(identity)
-    if track_id is not None:
-        try:
-            track = session.track(track_id)
-            lyrics_obj = lyrics_obj_from_track(track, session=session)
-            if duration_ms is None:
-                seconds = getattr(track, "duration", 0) or 0
-                if seconds:
-                    duration_ms = int(float(seconds) * 1000)
-            payload = lyrics_payload_from_tidal(
-                track_path=identity,
-                text=getattr(lyrics_obj, "text", "") or "",
-                subtitles=getattr(lyrics_obj, "subtitles", "") or "",
-                duration_ms=duration_ms,
-            )
-        except Exception:
-            payload = empty_lyrics_payload(identity)
+    if track_id is None:
+        payload = empty_lyrics_payload(identity)
+        _remember(payload, None, isrc)
+        return payload
 
-    if cache_key:
-        _CACHE.set(cache_key, payload)
+    try:
+        track = session.track(track_id)
+        lyrics_obj = lyrics_obj_from_track(track, session=session)
+        if duration_ms is None:
+            seconds = getattr(track, "duration", 0) or 0
+            if seconds:
+                duration_ms = int(float(seconds) * 1000)
+        payload = lyrics_payload_from_tidal(
+            track_path=identity,
+            text=getattr(lyrics_obj, "text", "") or "",
+            subtitles=getattr(lyrics_obj, "subtitles", "") or "",
+            duration_ms=duration_ms,
+        )
+    except TidalLyricsError:
+        raise
+    except Exception as exc:
+        raise TidalLyricsError("Could not load lyrics from Tidal") from exc
+
+    _remember(payload, track_id, isrc)
     return payload
 
 
@@ -124,6 +148,8 @@ def lyrics_for_now_playing(
     path: str | Path | None = None,
     tidal_track_id: int | None = None,
     isrc: str | None = None,
+    title: str = "",
+    artist: str = "",
     session: Any = None,
     logged_in: bool = False,
     read_local: ReadLocal | None = None,
@@ -146,6 +172,8 @@ def lyrics_for_now_playing(
         session=session,
         tidal_track_id=tidal_track_id,
         isrc=isrc,
+        title=title,
+        artist=artist,
         track_path=identity,
         duration_ms=duration_ms,
     )

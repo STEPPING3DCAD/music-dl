@@ -26,10 +26,12 @@ synced embedded → unsynced sidecar → unsynced embedded → `none`.
 If that result is `none` and Tidal is signed in, `lyrics_for_now_playing`
 in [`tidal_dl/gui/lyrics_tidal.py`](../tidal_dl/gui/lyrics_tidal.py)
 resolves a Tidal track from `tidal_track_id` (now-playing / probe) or
-ISRC (query or library row → `quality_probes`) and calls
-`track.lyrics()`. Synced subtitles become `tidal-synced`; plain text
-becomes `tidal-unsynced`. Results are cached in-process (`TTLCache`,
-1 hour) so opening the panel twice does not re-hit Tidal.
+ISRC (query or library row → `quality_probes`, else title+artist
+search with an ISRC match — the same resolve upgrade already uses)
+and calls `track.lyrics()`. Synced subtitles become `tidal-synced`;
+plain text becomes `tidal-unsynced`. Successful results, including
+honest empty, are cached in-process (`TTLCache`, 1 hour). Transient
+Tidal failures return 502 and are not cached.
 
 `lyrics_embed` and `lyrics_file` stay **opt-in / default off**. They
 only write tags or a sidecar at download time. Playback fetch is how

@@ -209,3 +209,71 @@ def test_get_lyrics_without_identity_is_400(client):
     resp = client.get("/api/lyrics", headers=client._host_header)
 
     assert resp.status_code == 400
+
+
+def test_get_lyrics_tidal_fallback_uses_real_session_track(client, monkeypatch, tmp_path):
+    path = tmp_path / "track.flac"
+    path.write_bytes(b"fake")
+
+    from tidal_dl.gui.lyrics_tidal import clear_tidal_lyrics_cache
+    from tidal_dl.gui.security import LocalAudioPathResolution
+
+    class Lyrics:
+        text = "Session words"
+        subtitles = ""
+
+    class Track:
+        duration = 20
+
+        def lyrics(self):
+            calls.append("lyrics")
+            return Lyrics()
+
+    class Session:
+        def track(self, track_id, with_album=False):
+            calls.append(("track", int(track_id)))
+            return Track()
+
+    clear_tidal_lyrics_cache()
+    calls: list = []
+
+    monkeypatch.setattr(
+        "tidal_dl.gui.api.lyrics.resolve_local_audio_path",
+        lambda raw_path, allowed_dirs, **_kwargs: LocalAudioPathResolution("ok", path.resolve()),
+    )
+    monkeypatch.setattr(
+        "tidal_dl.gui.api.lyrics.read_local_lyrics",
+        lambda audio_path: {
+            "mode": "none",
+            "track_path": str(path.resolve()),
+            "lines": [],
+            "text": "",
+            "source": "none",
+        },
+    )
+    monkeypatch.setattr("tidal_dl.gui.api.lyrics._library_identity", lambda *_args: (77, "USABC", "Huelepega", "Sandy"))
+    monkeypatch.setattr("tidal_dl.gui.api.lyrics._tidal_session_state", lambda: (Session(), True))
+
+    resp = client.get(f"/api/lyrics?path={quote(str(path))}", headers=client._host_header)
+
+    assert resp.status_code == 200
+    assert resp.json()["source"] == "tidal-unsynced"
+    assert resp.json()["text"] == "Session words"
+    assert calls == [("track", 77), "lyrics"]
+    clear_tidal_lyrics_cache()
+
+
+def test_get_lyrics_tidal_failure_is_502_not_empty(client, monkeypatch):
+    from tidal_dl.gui.lyrics_tidal import clear_tidal_lyrics_cache
+
+    class Session:
+        def track(self, track_id, with_album=False):
+            raise RuntimeError("tidal down")
+
+    clear_tidal_lyrics_cache()
+    monkeypatch.setattr("tidal_dl.gui.api.lyrics._tidal_session_state", lambda: (Session(), True))
+
+    resp = client.get("/api/lyrics?tidal_track_id=9", headers=client._host_header)
+
+    assert resp.status_code == 502
+    clear_tidal_lyrics_cache()

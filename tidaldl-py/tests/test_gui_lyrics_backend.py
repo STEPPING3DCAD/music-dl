@@ -398,6 +398,74 @@ def test_tidal_lyrics_cache_skips_second_session_hit():
     clear_tidal_lyrics_cache()
 
 
+def test_isrc_resolve_uses_title_artist_search_not_raw_isrc():
+    from tidal_dl.gui.lyrics_tidal import clear_tidal_lyrics_cache, fetch_tidal_lyrics
+
+    class Lyrics:
+        text = "Resolved"
+        subtitles = ""
+
+    class Track:
+        id = 81
+        isrc = "USXYZ0000001"
+        duration = 12
+
+        def lyrics(self):
+            return Lyrics()
+
+    class Session:
+        def search(self, query, models=None, limit=10):
+            queries.append(query)
+            return {"tracks": [Track()]}
+
+        def track(self, track_id, with_album=False):
+            assert int(track_id) == 81
+            return Track()
+
+    clear_tidal_lyrics_cache()
+    queries: list[str] = []
+
+    payload = fetch_tidal_lyrics(
+        session=Session(),
+        isrc="USXYZ0000001",
+        title="Huelepega",
+        artist="Sandy",
+        track_path="/music/Huelepega.flac",
+    )
+
+    assert payload["text"] == "Resolved"
+    assert queries == ["Huelepega Sandy"]
+    clear_tidal_lyrics_cache()
+
+
+def test_tidal_lyrics_errors_are_not_cached():
+    from tidal_dl.gui.lyrics_tidal import TidalLyricsError, clear_tidal_lyrics_cache, fetch_tidal_lyrics
+
+    class Session:
+        def track(self, track_id, with_album=False):
+            calls.append(int(track_id))
+            raise RuntimeError("tidal down")
+
+    clear_tidal_lyrics_cache()
+    calls: list[int] = []
+
+    first_error = None
+    second_error = None
+    try:
+        fetch_tidal_lyrics(session=Session(), tidal_track_id=42, track_path="tidal:42")
+    except TidalLyricsError as exc:
+        first_error = exc
+    try:
+        fetch_tidal_lyrics(session=Session(), tidal_track_id=42, track_path="tidal:42")
+    except TidalLyricsError as exc:
+        second_error = exc
+
+    assert first_error is not None
+    assert second_error is not None
+    assert calls == [42, 42]
+    clear_tidal_lyrics_cache()
+
+
 def test_hifi_empty_lyrics_fall_back_to_oauth_session():
     from tidal_dl.gui.lyrics_tidal import lyrics_obj_from_track
 

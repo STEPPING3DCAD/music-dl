@@ -90,6 +90,8 @@ def test_app_enables_lyrics_for_tidal_only_now_playing():
     assert "btnLyrics.disabled = !_lyricsTrackOpenable(track)" in source
     assert "btnLyrics.disabled = !(track.is_local && (track.local_path || track.path))" not in source
     assert "/lyrics?" in source
+    assert "params.set('title'" in source
+    assert "params.set('artist'" in source
 
 
 def test_app_accepts_tidal_lyrics_sources_and_honest_empty_copy():
