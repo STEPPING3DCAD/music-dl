@@ -1323,15 +1323,17 @@ def library_recent_albums(
     db = _get_db()
     page, total = db.recent_albums_page(limit=limit, offset=offset)
     titles = [row["album"] for row in page if row.get("album")]
-    artists = [
-        row["artist"] for row in page
-        if row.get("artist") and row["artist"] != "Various Artists"
-    ]
     rows_by_path: dict[str, dict] = {}
+    seen_releases: set[str] = set()
     for row in db.tracks_for_albums(titles):
-        rows_by_path[row["path"]] = row
-    for artist in dict.fromkeys(artists):
-        for row in db.tracks_for_artist(artist):
+        release_id = row.get("release_id")
+        if release_id:
+            if release_id in seen_releases:
+                continue
+            seen_releases.add(release_id)
+            for member in db.tracks_for_release(release_id):
+                rows_by_path[member["path"]] = member
+        else:
             rows_by_path[row["path"]] = row
     cards = _album_cards(db, list(rows_by_path.values())) if rows_by_path else []
     by_title = {card["name"]: card for card in cards}

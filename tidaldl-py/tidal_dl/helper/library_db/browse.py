@@ -76,15 +76,13 @@ class BrowseMixin:
         """
         assert self._conn
 
-        # Downloads: group by album name only — collapse multi-artist compilations
+        # Cover art is resolved later from the page's tracks. A correlated
+        # cover-art subquery here scanned the path PK once per album
+        # (~500ms local / ~3s on the NAS-backed Mac library).
         downloaded: dict[str, dict] = {}
         for row in self._conn.execute(
             """SELECT dh.album,
                       COUNT(DISTINCT s.path) AS track_count,
-                      MIN(s.path) AS cover_path,
-                      (SELECT s2.art_available FROM scanned s2
-                       WHERE s2.album = dh.album AND s2.status != 'unreadable'
-                       ORDER BY s2.path ASC LIMIT 1) AS cover_art_available,
                       MAX(dh.finished_at) AS recent_at,
                       COUNT(DISTINCT dh.artist) AS artist_count,
                       MIN(dh.artist) AS first_artist
@@ -102,21 +100,14 @@ class BrowseMixin:
                 "album": row["album"],
                 "artist": artist,
                 "track_count": row["track_count"],
-                "cover_path": row["cover_path"],
-                "cover_art_available": row["cover_art_available"],
                 "recent_at": int(row["recent_at"]),
                 "recent_source": "download",
             }
 
-        # Scanned: group by album name only
         scanned: dict[str, dict] = {}
         for row in self._conn.execute(
             """SELECT album,
                       COUNT(*) AS track_count,
-                      MIN(s.path) AS cover_path,
-                      (SELECT s2.art_available FROM scanned s2
-                       WHERE s2.album = s.album AND s2.status != 'unreadable'
-                       ORDER BY s2.path ASC LIMIT 1) AS cover_art_available,
                       MAX(scanned_at) AS recent_at,
                       COUNT(DISTINCT artist) AS artist_count,
                       MIN(artist) AS first_artist
@@ -130,8 +121,6 @@ class BrowseMixin:
                 "album": row["album"],
                 "artist": artist,
                 "track_count": row["track_count"],
-                "cover_path": row["cover_path"],
-                "cover_art_available": row["cover_art_available"],
                 "recent_at": int(row["recent_at"]),
                 "recent_source": "scan",
             }

@@ -2572,6 +2572,13 @@ function renderRecentAlbumRow(album) {
 }
 
 async function loadLibraryRecentAlbumsExpanded(resultsArea, append) {
+  if (!append) {
+    while (resultsArea.firstChild) resultsArea.removeChild(resultsArea.firstChild);
+    resultsArea.appendChild(h('div', { className: 'results-header' },
+      textEl('div', 'Recently Added', 'results-title'),
+    ));
+    resultsArea.appendChild(textEl('p', 'Loading albums…', 'home-loading-hint'));
+  }
   try {
     const data = await loadLibraryRecentAlbumsPage(LIBRARY_PAGE_SIZE, libraryOffset);
     const albums = data.albums || [];
