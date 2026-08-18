@@ -1165,10 +1165,10 @@ def _background_scan(rescan: bool) -> None:
                             "mtimes": [os.stat(str(d)).st_mtime for d in sorted(scan_dirs)],
                             "known_count": len(db.known_paths()),
                         }, sort_keys=True)
-                        db.set_meta("scan_fingerprint", finger)
+                        with db.write_transaction():
+                            db.set_meta("scan_fingerprint", finger)
                     except OSError:
                         pass
-                    db.commit()
                 _update_scan_progress(phase="done", scanned=0, total=0, done=True, error=None)
                 _finish_album_scan(db)
                 db = None
