@@ -1,6 +1,7 @@
 """music-dl GUI — FastAPI application factory."""
 from contextlib import asynccontextmanager
 from pathlib import Path
+import threading
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -34,7 +35,11 @@ def create_app(
 ) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        """Restore Tidal OAuth session and capture event loop on server start."""
+        """Open the job DB, recover the queue, then mark ready.
+
+        Tidal restore and Discord bot start run after ready so a dead
+        network or first-run bun install cannot pin the Tauri spinner.
+        """
         import asyncio
 
         loop = asyncio.get_running_loop()
@@ -50,21 +55,54 @@ def create_app(
         app.state.source_restore_attempted = False
         app.state.source_restored = False
         app.state.source_restore_error = None
-        try:
-            from tidal_dl.config import Settings, Tidal
-
-            tidal = Tidal(Settings())
-            app.state.source_restore_attempted = True
-            app.state.source_restored = tidal.resolve_source(lambda _message: None, allow_interactive_login=False)
-        except Exception as exc:
-            app.state.source_restore_error = str(exc)
         app.state.daemon_meta = app.state.daemon_meta.with_status("ready")
         if app.state.write_daemon_metadata:
             write_metadata(app.state.daemon_meta)
-        start_configured_bot(app)
+
+        def _restore_tidal_source() -> None:
+            try:
+                from tidal_dl.config import Settings, Tidal
+
+                tidal = Tidal(Settings())
+                app.state.source_restore_attempted = True
+                app.state.source_restored = tidal.resolve_source(
+                    lambda _message: None,
+                    allow_interactive_login=False,
+                )
+            except Exception as exc:
+                app.state.source_restore_attempted = True
+                app.state.source_restore_error = str(exc)
+
+        after_ready: list[threading.Thread] = []
+        shutting_down = threading.Event()
+
+        def _start_bot_after_ready() -> None:
+            if shutting_down.is_set():
+                return
+            start_configured_bot(app)
+
+        after_ready.append(
+            threading.Thread(
+                target=_restore_tidal_source,
+                name="tidal-source-restore",
+                daemon=True,
+            )
+        )
+        after_ready.append(
+            threading.Thread(
+                target=_start_bot_after_ready,
+                name="discord-bot-start",
+                daemon=True,
+            )
+        )
+        for thread in after_ready:
+            thread.start()
         try:
             yield
         finally:
+            shutting_down.set()
+            for thread in after_ready:
+                thread.join(timeout=2)
             stop_running_bot(app)
             service.stop_worker()
 

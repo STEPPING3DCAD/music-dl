@@ -106,7 +106,7 @@ t.stream_lock          # Lock — serializes stream ops during Atmos switching
 - `_ensure_token_fresh(refresh_window_sec=300)` — auto-refresh if expiring within 5 min
 - `_try_login_with_key_rotation()` — keeps authenticated tidalapi login resilient across bundled client credentials
 - Token expiry handles both `float` (timestamp) and `datetime` from tidalapi
-- GUI startup passes its current `Settings` to `Tidal` and resolves the configured source non-interactively. It only performs quiet token restoration, so a first-run GUI becomes ready for the user-initiated Connect Tidal flow instead of opening OAuth during lifespan startup.
+- GUI startup marks the sidecar ready after `LibraryDB.open` + migrate and `recover_download_jobs`. It then restores Tidal in the background with `resolve_source(..., allow_interactive_login=False)` and starts a configured Discord bot after ready. First-run GUI still becomes ready for the user-initiated Connect Tidal flow instead of opening OAuth during lifespan startup. Hi-Fi, gist, and quality-probe calls used by restore are capped at `SOURCE_RESOLVE_TIMEOUT_SEC` (2s) so a dead network cannot eat the 30s Tauri spinner.
 - `_probe_subscription_quality()` reports observed provider capability only. Lower or unknown delivery warns; it never mutates or persists configured/session quality.
 
 ### HandlingApp()
@@ -327,9 +327,11 @@ Startup recovery rule: queued jobs stay queued. `running`, `indexing`, `retrying
 
 Pause rule: global queue pause does not rewrite queued backlog rows to `paused`; queued jobs remain `queued` so they can resume after restart.
 
-FastAPI lifespan creates `DownloadJobService`, stores it on `app.state.download_jobs`, registers the service event hub with the running event loop, starts the persisted-job worker, and stops that worker during lifespan shutdown. Tests pass `job_db_path` to `create_app()` so API smoke tests use an isolated temporary job database instead of the user's real `library.db`.
+FastAPI lifespan creates `DownloadJobService`, stores it on `app.state.download_jobs`, registers the service event hub with the running event loop, starts the persisted-job worker after recovery commits, and stops that worker during lifespan shutdown. Tests pass `job_db_path` to `create_app()` so API smoke tests use an isolated temporary job database instead of the user's real `library.db`.
 
-Lifespan also constructs `Tidal(Settings())` and uses `resolve_source(..., allow_interactive_login=False)`. This preserves the existing Hi-Fi selection and fallback policy while preventing a browser OAuth flow from blocking server readiness.
+**Boot-path rule:** mark `ready` / health 200 after migrate + `recover_download_jobs`. Restore Tidal and start the Discord bot after ready. Never group albums, walk `scan_new_downloads`, or start a library scan during lifespan. The worker must not claim a job before recovery commits.
+
+Lifespan constructs `Tidal(Settings())` after ready and uses `resolve_source(..., allow_interactive_login=False)` on a background thread. This preserves the existing Hi-Fi selection and fallback policy while preventing a browser OAuth flow or a hung Hi-Fi/gist/quality probe from blocking server readiness. Failed restore surfaces the existing auth status; it does not fake a signed-in session.
 
 Normal downloads, playlist sync, bot download requests, and upgrade requests all enqueue through `DownloadJobService`, so active duplicate suppression is shared across job kinds and enforced by the `download_jobs` table instead of route-local in-memory state. The worker claims both normal download jobs and upgrade jobs. Upgrade cleanup, quality ranking, album resolution, and trash helpers live in `tidal_dl.gui.services.upgrade_jobs`; route modules do not own download or upgrade execution.
 
