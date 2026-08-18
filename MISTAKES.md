@@ -1,5 +1,29 @@
 # Mistakes
 
+## 2026-08-18 — Sync Library spent minutes mutagen-reading already-tagged rows
+
+**What happened:** After mark-and-sweep, isolated Mac Sync preserved 11,974 / 8,554 good / 3,420 skipped rows and named phases worked. First increment was 0.46s. Then `phase=repairing` sat on Synology tag reads (279/8402 at 46s; 1871/3002 at 188s). The old 90s 0/0 hang became a long repair.
+
+**Root cause:** `_background_scan` called `_reconcile_library_rows` before the walk. `metadata_repair_worklist` selected `metadata_complete != 1 OR codec IS NULL`. Schema v7 sets `metadata_complete=0` on every non-unreadable row when release columns are added, so thousands of already-tagged tracks were mutagen-read on the NAS.
+
+**Prevention:** Worklist is placeholder/missing identity only. Stamp complete identity in a cheap DB update. Do not open `#recycle` or already-tagged files. Discover/walk first; leftover repair is after first progress. No start-of-scan deletes.
+
+## 2026-08-18 — Fingerprint sweep write skipped `write_transaction` after rebase onto 135
+
+**What happened:** Rebasing scan-safety onto `717ec5a` applied the fingerprint fast-path sweep as `set_meta` + `commit`. That commit predates PR 135’s writer helper.
+
+**Root cause:** The follow-up commit only added the DB-only recycle drop. It did not go through the new `write_transaction` contract that 135 added for every short library persist.
+
+**Prevention:** After rebasing scanner work onto the lock-contention helper, wrap remaining `set_meta` / `record` / `remove` persists in `write_transaction`. Keep mark-and-sweep (no start-of-scan deletes) and 135’s short writer bursts together.
+
+## 2026-08-17 — Sync Library deleted cache rows before the walk finished
+
+**What happened:** On a clean copy of the real Mac library DB (schema v9, 11,974 rows), Sync Library stayed on `Scanning...` for 90s with `/api/library/scan/status` stuck at `{"scanning":true,"scanned":0,"total":0,"done":false}`. The isolated cache shrank to 8,554 rows before the process exited. Stale `#recycle` tracks stayed visible because the walk never completed.
+
+**Root cause:** `_background_scan` backed up the DB, then called `drop_skipped_scan_paths()` and committed deletes before reconcile/walk finished. Status was only reset after that pre-walk work, so a Synology-backed reconcile or a locked backup looked like a 0/0 black hole. Writer transactions also stayed open across mutagen/ffmpeg reads (commit every 50 records), and full-library `_album_cards(include_artwork=True)` ran on the scan thread. A matching scan fingerprint also skipped the walk entirely, so stale `#recycle` rows could survive a later Sync.
+
+**Prevention:** Never delete or age `scanned` rows at scan start. Mark-and-sweep skipped/stale paths only after a successful traversal, including the unchanged-fingerprint fast path (DB-only drop, no walk). An interrupted or failed scan must preserve the previous good cache. Do not read or repair rows under skipped directories. Expose a named `phase` immediately and increment `scanned` during discovery even when `total` is unknown. Stage metadata outside a writer transaction; commit short batches only. Keep the skipped-directory list centralized in `library_scanner.py`. Do not hold the scan busy state on full-library album grouping.
+
 ## 2026-08-17 — Recently Added stayed blank while a cover-art subquery scanned the library
 
 **What happened:** Recently Added showed only the search shell and filter pills for ~3s. Warmed `/library/recent-albums` was 2.998s / 3.007s on the 11,974-row Mac library after PR 133 cut grouping from 25–53s to ~2.5–3s.

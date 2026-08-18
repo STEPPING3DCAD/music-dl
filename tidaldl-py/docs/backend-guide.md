@@ -377,6 +377,8 @@ Pattern: check `PRAGMA table_info()`, `ALTER TABLE ADD COLUMN` if missing. Never
 
 The scanner is the authority for local display metadata and quality. Codec, not container extension or decoded bit depth, decides whether a local file is lossy or lossless. `M4A` may contain AAC or ALAC, so an uninspected M4A remains Unknown.
 
+Library cache rows are not deleted until a scan traversal succeeds. Do not clear, age, or prune `scanned` rows at scan start. Mark-and-sweep skipped trash paths (`#recycle`, `.Trash`, and the shared skip list in `library_scanner.py`) and missing files only after a complete walk. An interrupted or failed scan must leave the previous good cache intact. Stage metadata outside a writer transaction and commit short batches; never hold a writer lock across filesystem walks or tag reads. Scan status must expose a named `phase` and increment `scanned` during discovery so the UI cannot sit on `scanned:0,total:0` with no explanation. Do not mutagen already-tagged rows that already have a real artist/title/album — a leftover `metadata_complete=0` from a schema migration is not a reason to re-read thousands of NAS files. Discover/walk first; leftover repair is a cheap DB filter plus placeholder rows only. Never open skipped-directory paths for repair.
+
 Metadata resolution order is meaningful embedded tag, then a conservative path fallback relative to a configured root, then Unknown. Path fallback requires `artist/album/file`; it may strip an `<artist> - ` album-folder prefix and replace generic titles such as `Track 05` with a meaningful filename. The same pass reads release identity from Vorbis comments, ID3 frames, and MP4 atoms. Missing release fields stay null. Resolution updates only `library.db` and never writes audio files.
 
 ### Connection Patterns
@@ -527,7 +529,7 @@ use FastAPI's `/api/docs` or `gui/api/__init__.py` for the complete current set.
 | `GET` | `/library` | Paginated local tracks, grouped by artist |
 | `GET` | `/library/recent-albums` | First page of recently added releases |
 | `POST` | `/library/scan` | Trigger background library scan |
-| `GET` | `/library/scan-status` | Poll scan progress |
+| `GET` | `/library/scan/status` | Poll scan progress: `{scanning, scanned, total, done, phase, error}`. `phase` is `idle`, `preparing`, `repairing`, `discovering`, `indexing`, `sweeping`, `finalizing`, `done`, or `error`. During discovery `total` may be 0 while `scanned` increments. |
 
 Home statistics use the aggregate database queries behind `GET /home`; grouped
 album cards are built only by album-library routes, not during Home loading.
@@ -704,3 +706,4 @@ except (json.JSONDecodeError, KeyError):
 8. **NAS mounts are unreliable.** Reconnect on staleness, run I/O off the event loop, use WAL + short write transactions. Do not hold the SQLite writer lock across grouping, scans, or downloads; `busy_timeout` is only a last-resort wait.
 9. **Audio path is sacred.** No Web Audio API, no signal processing. Files stream bit-perfect from disk to browser `<audio>` element.
 10. **Rate limits are respected.** Exponential backoff on 429, recovery on sustained success. Never retry immediately.
+11. **Library cache rows survive until a scan traversal succeeds.** Do not clear, age, or prune `scanned` rows at scan start. Sweep skipped or stale paths only after a complete walk. Interrupted or failed scans leave the previous good cache intact. Do not hold a writer transaction across filesystem walks or tag reads. Scan status must expose a named phase and increment `scanned` during discovery. Do not re-read tags for already-tagged rows with real identity; walk before leftover placeholder repair.

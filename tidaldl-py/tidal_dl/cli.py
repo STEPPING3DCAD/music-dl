@@ -1039,7 +1039,6 @@ def isrc_tag(
     db.open()
 
     # ── Phase 1: Scan ──────────────────────────────────────────────
-    drop_skipped_scan_paths(db)
     known_paths = set() if rescan else db.known_paths()
     console.print(f"[cyan]Scanning {dir_path} (skipping {len(known_paths)} known files)...[/cyan]")
 
@@ -1115,6 +1114,9 @@ def isrc_tag(
                 queue_record(path_str, status="no_tags")
 
     flush_pending()
+    dropped = drop_skipped_scan_paths(db)
+    if dropped:
+        console.print(f"[dim]Dropped {dropped} rows under skipped directories[/dim]")
 
     # Status summary
     counts = db.count_by_status()

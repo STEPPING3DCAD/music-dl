@@ -194,8 +194,9 @@ def scan_directory(
     """Walk *root* recursively, extract ISRCs, and populate *library_db*.
 
     Writes are flushed in short ``write_transaction`` batches so ISRC
-    extraction never holds the reserved lock. A trailing caller ``commit()``
-    is harmless. ``dry_run`` performs no writes.
+    extraction never holds the reserved lock. Skipped-directory rows are
+    removed only after the walk finishes successfully. A trailing caller
+    ``commit()`` is harmless. ``dry_run`` performs no writes.
 
     Args:
         root (pathlib.Path): Directory to scan recursively.
@@ -218,9 +219,6 @@ def scan_directory(
             for isrc, file_path in pending:
                 library_db.register_isrc_path(isrc, file_path)
         pending.clear()
-
-    if not dry_run:
-        drop_skipped_scan_paths(library_db)
 
     for walk_root, dirs, files in os.walk(root):
         dirs[:] = [name for name in dirs if not is_skipped_scan_dir(name)]
@@ -262,5 +260,7 @@ def scan_directory(
             result.isrcs_found += 1
 
     flush_pending()
+    if not dry_run:
+        drop_skipped_scan_paths(library_db)
     result.elapsed_sec = time.monotonic() - start
     return result

@@ -413,3 +413,13 @@ class TestAppJsFeatureMarkers:
         assert "status: us.status || us.phase || 'idle'" in js
         assert "available_version: us.available_version || us.version || ''" in js
         assert "error_message: us.error_message || us.error || ''" in js
+
+
+class TestLibraryScanStatusLabel:
+    def test_sync_button_uses_named_scan_phase(self):
+        js = read_gui_js()
+        assert "function _scanStatusLabel(status)" in js
+        assert "textNode.textContent = _scanStatusLabel(status);" in js
+        assert "phase === 'discovering'" in js
+        assert "phase === 'error'" in js
+        assert "previous library kept" in js

@@ -2854,6 +2854,23 @@ function _navText(el) {
   return t;
 }
 
+function _scanStatusLabel(status) {
+  const phase = status && status.phase;
+  if (phase === 'error' || (status && status.error)) return ' Sync failed';
+  if (phase === 'discovering' && status.scanned > 0) {
+    return ' Found ' + Number(status.scanned).toLocaleString();
+  }
+  if (status && status.total > 0 && status.scanned > 0) {
+    return ' ' + status.scanned + '/' + status.total;
+  }
+  if (phase && phase !== 'done' && phase !== 'idle') {
+    return ' ' + phase.charAt(0).toUpperCase() + phase.slice(1) + '...';
+  }
+  if (status && status.scanned > 0) return ' New: ' + status.scanned;
+  if (status && status.total > 0) return ' Checking... ' + Number(status.total).toLocaleString();
+  return ' Scanning...';
+}
+
 async function triggerScan(btn, resultsArea, rescan) {
   if (!btn) return;
   const textNode = _navText(btn);
@@ -2871,13 +2888,7 @@ async function triggerScan(btn, resultsArea, rescan) {
   libraryScanPoll = setInterval(async () => {
     try {
       const status = await api('/library/scan/status');
-      if (status.scanned > 0) {
-        textNode.textContent = ' New: ' + status.scanned;
-      } else if (status.total > 0) {
-        textNode.textContent = ' Checking... ' + status.total.toLocaleString();
-      } else {
-        textNode.textContent = ' Scanning...';
-      }
+      textNode.textContent = _scanStatusLabel(status);
       if (status.done || !status.scanning) {
         clearInterval(libraryScanPoll);
         libraryScanPoll = null;
@@ -2888,7 +2899,11 @@ async function triggerScan(btn, resultsArea, rescan) {
         _libraryAlbumCache.clear();
         _failedAlbumArtUrls.clear();
         await loadLibrary(resultsArea, false);
-        toast('Library synced — ' + status.scanned + ' files indexed', 'success');
+        if (status.phase === 'error' || status.error) {
+          toast('Library sync failed — previous library kept', 'error');
+        } else {
+          toast('Library synced — ' + status.scanned + ' files indexed', 'success');
+        }
       }
     } catch (_) {
       clearInterval(libraryScanPoll);
