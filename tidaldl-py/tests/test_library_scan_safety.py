@@ -21,6 +21,9 @@ from tidal_dl.helper.library_scanner import (
 
 PRIOR_CACHE_ROWS = 11_974
 LARGE_RECYCLE_ROWS = 3_000
+MAC_GOOD_COMPLETE_ROWS = 8_554
+MAC_SKIPPED_ROWS = 3_420
+INCOMPLETE_REPAIR_ROWS = 3
 SCAN_TIME_BUDGET_SEC = 30.0
 
 
@@ -38,18 +41,28 @@ def _hardlink_wav(sample: Path, dest: Path) -> None:
     os.link(sample, dest)
 
 
-def _seed_row(db: LibraryDB, path: Path | str, *, artist: str = "Artist", title: str = "Title") -> None:
+def _seed_row(
+    db: LibraryDB,
+    path: Path | str,
+    *,
+    artist: str = "Artist",
+    title: str = "Title",
+    album: str = "Album",
+    status: str = "tagged",
+    codec: str | None = "pcm",
+    metadata_complete: bool = True,
+) -> None:
     db.record(
         str(path),
-        status="tagged",
+        status=status,
         artist=artist,
         title=title,
-        album="Album",
+        album=album,
         duration=1,
         quality="WAV",
         fmt="WAV",
-        codec="pcm",
-        metadata_complete=True,
+        codec=codec,
+        metadata_complete=metadata_complete,
     )
 
 
@@ -586,6 +599,114 @@ class TestTwelveThousandRowFixture:
         assert status["done"] is True
         assert status["phase"] == "done"
         assert status["scanning"] is False
+
+    def test_complete_and_recycle_rows_are_not_opened_for_tag_repair(
+        self, library_scan, monkeypatch,
+    ) -> None:
+        library_api, library_dir, tmp_path = library_scan
+        sample = tmp_path / "sample.wav"
+        _write_wav(sample)
+
+        complete_paths: list[str] = []
+        recycle_paths: list[str] = []
+        incomplete_paths: list[str] = []
+
+        db = LibraryDB(tmp_path / "library.db")
+        db.open()
+        for index in range(MAC_GOOD_COMPLETE_ROWS):
+            artist = f"a{index // 120:03d}"
+            album = f"album{index // 12:04d}"
+            dest = library_dir / artist / album / f"song{index:05d}.wav"
+            _hardlink_wav(sample, dest)
+            # Mac v7 reset: tagged identity is already present, flag is 0.
+            _seed_row(
+                db,
+                dest,
+                artist=artist,
+                title=f"Song {index}",
+                album=album,
+                codec=None,
+                metadata_complete=False,
+            )
+            complete_paths.append(str(dest))
+        for index in range(MAC_SKIPPED_ROWS):
+            dest = library_dir / "#recycle" / f"bucket{index // 100}" / f"gone{index:05d}.wav"
+            _hardlink_wav(sample, dest)
+            _seed_row(
+                db,
+                dest,
+                artist="#recycle",
+                title="Track 01",
+                album="Unknown Album",
+                codec=None,
+                metadata_complete=False,
+            )
+            recycle_paths.append(str(dest))
+        for index in range(INCOMPLETE_REPAIR_ROWS):
+            dest = library_dir / "Needs Repair" / "Unknown Album" / f"track{index:02d}.wav"
+            _hardlink_wav(sample, dest)
+            _seed_row(
+                db,
+                dest,
+                artist="Unknown Artist",
+                title=f"Track {index:02d}",
+                album="Unknown Album",
+                status="needs_isrc",
+                codec=None,
+                metadata_complete=False,
+            )
+            incomplete_paths.append(str(dest))
+        db.commit()
+        worklist = db.metadata_repair_worklist()
+        db.close()
+
+        opened: list[str] = []
+        original_read = library_api._read_metadata
+        phases_at_open: list[str] = []
+
+        def tracking_read(path, scan_dirs=None):
+            opened.append(str(path))
+            phases_at_open.append(library_api.scan_status().get("phase"))
+            return original_read(path, scan_dirs)
+
+        mutagen_opened: list[str] = []
+        original_mutagen = library_api.MutagenFile
+
+        def tracking_mutagen(path, *args, **kwargs):
+            mutagen_opened.append(str(path))
+            return original_mutagen(path, *args, **kwargs)
+
+        phase_order: list[str] = []
+        original_update = library_api._update_scan_progress
+
+        def tracking_progress(**overrides):
+            phase = overrides.get("phase")
+            if phase and (not phase_order or phase_order[-1] != phase):
+                phase_order.append(phase)
+            return original_update(**overrides)
+
+        monkeypatch.setattr(library_api, "_read_metadata", tracking_read)
+        monkeypatch.setattr(library_api, "MutagenFile", tracking_mutagen)
+        monkeypatch.setattr(library_api, "_update_scan_progress", tracking_progress)
+
+        _run_background_scan(library_api)
+
+        complete = set(complete_paths)
+        recycle = set(recycle_paths)
+        incomplete = set(incomplete_paths)
+        opened_set = set(opened)
+        mutagen_set = set(mutagen_opened)
+
+        assert not complete.intersection(opened_set)
+        assert not complete.intersection(mutagen_set)
+        assert not recycle.intersection(opened_set)
+        assert not recycle.intersection(mutagen_set)
+        assert opened_set == incomplete
+        assert {row["path"] for row in worklist} == incomplete
+        assert "discovering" in phase_order
+        if "repairing" in phase_order:
+            assert phase_order.index("discovering") < phase_order.index("repairing")
+        assert not any(phase == "repairing" and path in complete for path, phase in zip(opened, phases_at_open))
 
 
 def test_drop_skipped_scan_paths_still_centralized() -> None:

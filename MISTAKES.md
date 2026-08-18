@@ -1,5 +1,13 @@
 # Mistakes
 
+## 2026-08-18 — Sync Library spent minutes mutagen-reading already-tagged rows
+
+**What happened:** After mark-and-sweep, isolated Mac Sync preserved 11,974 / 8,554 good / 3,420 skipped rows and named phases worked. First increment was 0.46s. Then `phase=repairing` sat on Synology tag reads (279/8402 at 46s; 1871/3002 at 188s). The old 90s 0/0 hang became a long repair.
+
+**Root cause:** `_background_scan` called `_reconcile_library_rows` before the walk. `metadata_repair_worklist` selected `metadata_complete != 1 OR codec IS NULL`. Schema v7 sets `metadata_complete=0` on every non-unreadable row when release columns are added, so thousands of already-tagged tracks were mutagen-read on the NAS.
+
+**Prevention:** Worklist is placeholder/missing identity only. Stamp complete identity in a cheap DB update. Do not open `#recycle` or already-tagged files. Discover/walk first; leftover repair is after first progress. No start-of-scan deletes.
+
 ## 2026-08-18 — Fingerprint sweep write skipped `write_transaction` after rebase onto 135
 
 **What happened:** Rebasing scan-safety onto `717ec5a` applied the fingerprint fast-path sweep as `set_meta` + `commit`. That commit predates PR 135’s writer helper.

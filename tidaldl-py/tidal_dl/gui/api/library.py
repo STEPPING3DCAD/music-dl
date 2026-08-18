@@ -1034,7 +1034,8 @@ def _flush_record_batch(db: LibraryDB, batch: list[dict]) -> None:
 
 
 def _reconcile_library_rows(db: LibraryDB, *, scan_dirs: list[Path]) -> int:
-    """Resolve legacy metadata facts once without repeating waveform work."""
+    """Resolve leftover placeholder rows. Complete tagged rows stay untouched."""
+    db.stamp_complete_identity_rows()
     worklist = db.metadata_repair_worklist()
     db.commit()
     pending: list[dict] = []
@@ -1131,11 +1132,6 @@ def _background_scan(rescan: bool) -> None:
             _update_scan_progress(phase="done", scanned=0, total=0, done=True, error=None)
             return
 
-        if not rescan:
-            repaired = _reconcile_library_rows(db, scan_dirs=scan_dirs)
-            if repaired:
-                print(f"[library] Repaired metadata for {repaired} cached rows")
-
         known = set() if rescan else db.known_paths()
         db.commit()
 
@@ -1156,6 +1152,7 @@ def _background_scan(rescan: bool) -> None:
             db.commit()
             if stored == finger:
                 print("[library] Scan directories unchanged — skipping walk")
+                db.stamp_complete_identity_rows()
                 dropped = drop_skipped_scan_paths(db)
                 if dropped:
                     print(f"[library] Dropped {dropped} rows under skipped directories")
@@ -1267,6 +1264,13 @@ def _background_scan(rescan: bool) -> None:
             )
         _flush_scan_records(db, pending)
 
+        # Cheap leftover repair after discovery so first progress is the walk,
+        # not a multi-minute NAS mutagen pass over already-tagged rows.
+        if not rescan:
+            repaired = _reconcile_library_rows(db, scan_dirs=scan_dirs)
+            if repaired:
+                print(f"[library] Repaired metadata for {repaired} cached rows")
+
         # Sweep only after a successful traversal. Skipped trash rows and
         # deleted files stay until this point so an interrupted scan cannot
         # leave a partially emptied cache.
@@ -1303,17 +1307,18 @@ def _background_scan(rescan: bool) -> None:
             except OSError:
                 pass
 
-        # Backfill genres for tracks scanned before genre support was added.
-        # Read tags first, then write a short batch so NAS I/O is not inside
-        # a writer transaction.
-        missing = db._conn.execute(
-            "SELECT path FROM scanned WHERE (genre IS NULL OR genre = '') AND status != 'unreadable' LIMIT 200"
-        ).fetchall()
+        # Genre backfill is only for leftover incomplete rows. Do not open
+        # already-tagged or skipped-directory files for a tag re-read.
+        missing = [
+            row for row in db.metadata_repair_worklist()
+            if not row.get("genre")
+        ][:200]
         db.commit()
         genre_updates: list[tuple[str, str]] = []
         if missing:
             for row in missing:
-                p = Path(row[0])
+                path_str = row["path"]
+                p = Path(path_str)
                 try:
                     if not p.exists():
                         continue
@@ -1327,7 +1332,7 @@ def _background_scan(rescan: bool) -> None:
                         else:
                             genre = None
                         if genre:
-                            genre_updates.append((genre, row[0]))
+                            genre_updates.append((genre, path_str))
                 except Exception:  # noqa: BLE001, S110
                     pass
             if genre_updates:
