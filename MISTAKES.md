@@ -1,5 +1,13 @@
 # Mistakes
 
+## 2026-08-18 — Lyrics panel stayed empty for years
+
+**What happened:** Opening Lyrics on now-playing (including library files with no `.lrc` / tags, and Tidal-only streams) showed nothing. Live 1.7.6 `GET /api/lyrics/local` returned `{mode: none}` because download settings `lyrics_embed` and `lyrics_file` default off, so `metadata_write` never called `track.lyrics()`.
+
+**Root cause:** The player was local-only (`is_local` + a disk path) and never asked Tidal. Tidal already had the sanctioned lyrics object (`text` / `subtitles`) on the download path. The panel and the library stayed empty unless someone opted into download-time writes.
+
+**Prevention:** Keep `read_local_lyrics` first. If local is `none` and Tidal is signed in, fetch via `track.lyrics()` and cache. Enable `#btn-lyrics` for Tidal-only now-playing. Do not silently flip `lyrics_embed` / `lyrics_file`. No Genius/web scrape.
+
 ## 2026-08-18 — Artist search tiles showed photos with no name
 
 **What happened:** Searching Tetrarch (David Diaz) by Artist showed a grid of square photos and no readable name under or on the tiles.

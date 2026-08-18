@@ -228,15 +228,17 @@ class FileMixin:
         cover_bytes = b""
 
         if self.settings.data.lyrics_embed or self.settings.data.lyrics_file:
+            from tidal_dl.gui.lyrics_tidal import lyrics_obj_from_track
+
             # Try to retrieve lyrics with up to 3 retries.
             for attempt in range(3):
                 try:
-                    lyrics_obj = track.lyrics()
+                    lyrics_obj = lyrics_obj_from_track(track, session=getattr(self, "session", None))
 
-                    if lyrics_obj.text:
+                    if lyrics_obj and lyrics_obj.text:
                         lyrics_unsynced = lyrics_obj.text
                         lyrics = lyrics_unsynced
-                    if lyrics_obj.subtitles:
+                    if lyrics_obj and lyrics_obj.subtitles:
                         lyrics_synced = lyrics_obj.subtitles
                         lyrics = lyrics_synced
                     break

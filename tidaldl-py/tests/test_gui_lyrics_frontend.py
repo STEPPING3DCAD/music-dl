@@ -80,3 +80,30 @@ def test_app_has_synced_rendering_and_artwork_motion_hooks():
     assert 'requestAnimationFrame(syncActiveLyricLine)' in source
     assert "window.matchMedia('(prefers-reduced-motion: reduce)')" in source
     assert "lyricsBody.addEventListener('wheel'" in source
+
+
+def test_app_enables_lyrics_for_tidal_only_now_playing():
+    source = read_gui_js()
+
+    assert "function _lyricsRequestKey(track)" in source
+    assert "function _lyricsTrackOpenable(track)" in source
+    assert "btnLyrics.disabled = !_lyricsTrackOpenable(track)" in source
+    assert "btnLyrics.disabled = !(track.is_local && (track.local_path || track.path))" not in source
+    assert "/lyrics?" in source
+
+
+def test_app_accepts_tidal_lyrics_sources_and_honest_empty_copy():
+    source = read_gui_js()
+
+    assert "'tidal-synced'" in source
+    assert "'tidal-unsynced'" in source
+    assert "No lyrics available for this track." in source
+    assert "This local track does not have synced, embedded, or sidecar lyrics yet." not in source
+
+
+def test_app_opens_lyrics_without_is_local_gate():
+    source = read_gui_js()
+
+    assert "if (!track || !track.is_local || !localPath) return;" not in source
+    assert "_lyricsTrackOpenable(track)" in source
+    assert "tidal_track_id" in source

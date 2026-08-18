@@ -591,6 +591,7 @@ than activating stale hard-coded fallback hosts.
 | `GET` | `/upgrade/scan` | Find tracks upgradable to higher quality |
 | `POST` | `/upgrade/start` | Queue upgrade jobs through the persisted job service |
 | `GET` | `/lyrics/local` | Read sidecar or embedded lyrics for an allowed local file |
+| `GET` | `/lyrics` | Now-playing lyrics: local sidecar/tags first, then Tidal `track.lyrics()` |
 
 ### Bot
 

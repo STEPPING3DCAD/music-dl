@@ -91,6 +91,31 @@ function _currentTrackLocalPath(track) {
   return track.local_path || track.path || null;
 }
 
+function _lyricsRequestKey(track) {
+  if (!track) return null;
+  const localPath = _currentTrackLocalPath(track);
+  if (localPath) return localPath;
+  const tid = track.tidal_track_id || track.id;
+  if (tid) return 'tidal:' + tid;
+  if (track.isrc) return 'isrc:' + String(track.isrc).toUpperCase();
+  return null;
+}
+
+function _lyricsTrackOpenable(track) {
+  return !!_lyricsRequestKey(track);
+}
+
+function _lyricsQuery(track) {
+  const params = new URLSearchParams();
+  const localPath = _currentTrackLocalPath(track);
+  if (localPath) params.set('path', localPath);
+  const tid = track.tidal_track_id || track.id;
+  if (tid) params.set('tidal_track_id', String(tid));
+  if (track.isrc) params.set('isrc', String(track.isrc));
+  if (track.duration) params.set('duration', String(track.duration));
+  return params.toString();
+}
+
 function _nowPlayingDownloadHidden(track, audioSrc) {
   if (track && (track.is_local || track.local_path || track.path)) return true;
   return String(audioSrc || '').includes('/playback/local');
@@ -222,8 +247,8 @@ function validateLyricsPayload(payload) {
   if (!Object.prototype.hasOwnProperty.call(payload, 'source')) throw new Error('Missing lyrics source');
   if (!Array.isArray(payload.lines) || typeof payload.text !== 'string') throw new Error('Invalid lyrics shape');
   const sourceByMode = {
-    synced: ['lrc-synced', 'embedded-synced'],
-    unsynced: ['lrc-unsynced', 'embedded-unsynced'],
+    synced: ['lrc-synced', 'embedded-synced', 'tidal-synced'],
+    unsynced: ['lrc-unsynced', 'embedded-unsynced', 'tidal-unsynced'],
     none: ['none'],
   };
   if (!sourceByMode[payload.mode].includes(payload.source)) throw new Error('Incompatible lyrics source');
@@ -262,7 +287,7 @@ function renderLyricsPanel() {
     return;
   }
   if (lyricsState.lyricsPanelState === 'empty') {
-    _renderLyricsShell('lyrics-shell-empty', 'Lyrics not available', 'This local track does not have synced, embedded, or sidecar lyrics yet.');
+    _renderLyricsShell('lyrics-shell-empty', 'Lyrics not available', 'No lyrics available for this track.');
     return;
   }
   if (lyricsState.lyricsPanelState === 'unsynced' && lyricsState.lyricsData) {
@@ -281,7 +306,8 @@ function _applyLyricsPayload(payload, requestPath) {
   lyricsState.lyricsData = payload;
   lyricsState.lyricsRequestPath = requestPath;
   lyricsState.lyricsCanonicalTrackPath = payload.track_path;
-  lyricsState.lyricsCache[payload.track_path] = payload;
+  if (requestPath) lyricsState.lyricsCache[requestPath] = payload;
+  if (payload.track_path) lyricsState.lyricsCache[payload.track_path] = payload;
   if (payload.mode === 'synced') lyricsState.lyricsPanelState = 'synced';
   else if (payload.mode === 'unsynced') lyricsState.lyricsPanelState = 'unsynced';
   else lyricsState.lyricsPanelState = 'empty';
@@ -290,16 +316,17 @@ function _applyLyricsPayload(payload, requestPath) {
 
 async function loadLyricsForCurrentTrack(trackOverride) {
   const track = trackOverride || _currentTrack();
-  const localPath = _currentTrackLocalPath(track);
-  if (!track || !track.is_local || !localPath) return;
+  const requestKey = _lyricsRequestKey(track);
+  if (!track || !_lyricsTrackOpenable(track) || !requestKey) return;
 
   const requestToken = ++lyricsState.lyricsRequestToken;
-  lyricsState.lyricsRequestPath = localPath;
+  lyricsState.lyricsRequestPath = requestKey;
 
   try {
-    const payload = validateLyricsPayload(await api('/lyrics/local?path=' + encodeURIComponent(localPath)));
+    const cached = lyricsState.lyricsCache[requestKey];
+    const payload = cached || validateLyricsPayload(await api('/lyrics?' + _lyricsQuery(track)));
     if (requestToken !== lyricsState.lyricsRequestToken || !_lyricsOpen()) return;
-    _applyLyricsPayload(payload, localPath);
+    _applyLyricsPayload(payload, requestKey);
   } catch (err) {
     if (requestToken !== lyricsState.lyricsRequestToken || !_lyricsOpen()) return;
     lyricsState.lyricsData = null;
@@ -327,23 +354,15 @@ function closeLyricsPanel(opts) {
 function openLyricsPanel(opts) {
   const options = opts || {};
   const track = options.track || _currentTrack();
-  const localPath = _currentTrackLocalPath(track);
-  if (!track || !track.is_local || !localPath) return;
+  const requestKey = _lyricsRequestKey(track);
+  if (!track || !_lyricsTrackOpenable(track) || !requestKey) return;
 
   if (queuePanel.classList.contains('open')) toggleQueue();
   lyricsState.lyricsFocusReturnEl = options.focusReturnEl || document.activeElement || nowArt;
   _setLyricsPanelOpen(true);
 
-  if (
-    lyricsState.lyricsCanonicalTrackPath &&
-    lyricsState.lyricsRequestPath === localPath &&
-    lyricsState.lyricsCache[lyricsState.lyricsCanonicalTrackPath]
-  ) {
-    lyricsState.lyricsData = lyricsState.lyricsCache[lyricsState.lyricsCanonicalTrackPath];
-    lyricsState.lyricsPanelState = lyricsState.lyricsData.mode === 'synced'
-      ? 'synced'
-      : (lyricsState.lyricsData.mode === 'unsynced' ? 'unsynced' : 'empty');
-    renderLyricsPanel();
+  if (lyricsState.lyricsCache[requestKey]) {
+    _applyLyricsPayload(lyricsState.lyricsCache[requestKey], requestKey);
     return;
   }
 
@@ -364,8 +383,7 @@ function toggleLyricsPanel() {
 }
 
 function handleLyricsTrackChange(track) {
-  const localPath = _currentTrackLocalPath(track);
-  if (!track || !track.is_local || !localPath) {
+  if (!track || !_lyricsTrackOpenable(track)) {
     lyricsState.lyricsRequestToken++;
     lyricsState.lyricsCanonicalTrackPath = null;
     lyricsState.lyricsRequestPath = null;
@@ -883,7 +901,7 @@ function updateNowPlaying(track) {
     };
     const btnLyrics = document.getElementById('btn-lyrics');
     if (btnLyrics) {
-      btnLyrics.disabled = !(track.is_local && (track.local_path || track.path));
+      btnLyrics.disabled = !_lyricsTrackOpenable(track);
     }
     while (nowArt.firstChild) nowArt.removeChild(nowArt.firstChild);
     if (track.cover_url) {

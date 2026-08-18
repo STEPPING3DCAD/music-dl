@@ -69,9 +69,9 @@ class _JsonDataclassMixin:
 
 SETTINGS_HELP: dict[str, str] = {
     "skip_existing": "Skip download if file already exists.",
-    "lyrics_embed": "Embed lyrics in audio file, if lyrics are available.",
+    "lyrics_embed": "On download, embed lyrics in the audio file when Tidal has them. The player still fetches Tidal lyrics at playback if files have none.",
     "use_primary_album_artist": "Use only the primary album artist for folder paths instead of track artists.",
-    "lyrics_file": "Save lyrics to separate *.lrc file, if lyrics are available.",
+    "lyrics_file": "On download, write a sidecar *.lrc when Tidal has lyrics. Playback prefers the sidecar, then embedded tags, then a Tidal fetch.",
     "video_download": "Allow download of videos.",
     "download_delay": "Activate randomized download delay to mimic human behaviour.",
     "download_base_path": "Where to store the downloaded media.",

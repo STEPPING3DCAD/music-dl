@@ -1,23 +1,41 @@
 # Local Lyrics
 
-A lyrics panel for the now-playing track, sourced entirely from files
-already on disk. No cloud service, no scraping, no third-party API.
+A lyrics panel for the now-playing track. Local files win. Tidal is
+the only network fallback, and only after local is `none`.
 
-Synced `.lrc` files get a highlighted-line scroll view. Unsynced
-embedded tags or non-timestamped text render as plain copy. If there's
-nothing to show, the panel says so — it never waits on a network
-round-trip to "maybe" find lyrics later.
+No Genius, no Google, no Musixmatch, no `lrclib.net`. The sanctioned
+cloud source is the signed-in Tidal session's `track.lyrics()` — the
+same object the download pipeline already uses (`text` unsynced,
+`subtitles` LRC).
+
+Synced LRC (sidecar, embedded timestamps, or Tidal subtitles) gets a
+highlighted-line scroll view. Unsynced text renders as plain copy. If
+nothing is available, the panel says so. It does not hang.
 
 ## What it reads
 
-The resolver looks at two places, in priority order:
+`read_local_lyrics` looks at two places, in priority order:
 
 1. **Sidecar `.lrc`** in the same directory as the audio file.
 2. **Embedded tags** inside the audio file itself.
 
 Each source independently contributes "synced" and "unsynced" content;
-the final payload mode is picked by preference: synced sidecar → synced
-embedded → unsynced sidecar → unsynced embedded → `none`.
+the final local payload mode is picked by preference: synced sidecar →
+synced embedded → unsynced sidecar → unsynced embedded → `none`.
+
+If that result is `none` and Tidal is signed in, `lyrics_for_now_playing`
+in [`tidal_dl/gui/lyrics_tidal.py`](../tidal_dl/gui/lyrics_tidal.py)
+resolves a Tidal track from `tidal_track_id` (now-playing / probe) or
+ISRC (query or library row → `quality_probes`) and calls
+`track.lyrics()`. Synced subtitles become `tidal-synced`; plain text
+becomes `tidal-unsynced`. Results are cached in-process (`TTLCache`,
+1 hour) so opening the panel twice does not re-hit Tidal.
+
+`lyrics_embed` and `lyrics_file` stay **opt-in / default off**. They
+only write tags or a sidecar at download time. Playback fetch is how
+the existing library gets words without a re-download. When those
+toggles are on, `metadata_write` uses `lyrics_obj_from_track` so a
+Hi-Fi stub with empty `lyrics()` retries via the OAuth session.
 
 ### Sidecar discovery
 
@@ -74,7 +92,8 @@ available, otherwise the fallback 4-second tail kicks in.
 
 ## Payload shape
 
-Returned by `read_local_lyrics(audio_path)`:
+Returned by `read_local_lyrics(audio_path)` and by the player endpoint
+after a Tidal fallback (`lyrics_payload_from_tidal`):
 
 ```json
 {
@@ -84,7 +103,7 @@ Returned by `read_local_lyrics(audio_path)`:
     { "start_ms": 10000, "end_ms": 13500, "text": "..." }
   ],
   "text": "plain unsynced body, newline-joined",
-  "source": "lrc-synced | embedded-synced | lrc-unsynced | embedded-unsynced | none"
+  "source": "lrc-synced | embedded-synced | lrc-unsynced | embedded-unsynced | tidal-synced | tidal-unsynced | none"
 }
 ```
 
@@ -92,17 +111,29 @@ Returned by `read_local_lyrics(audio_path)`:
 - `source` is informational — lets the panel or a log show *where* the
   lyrics came from without leaking paths.
 - `lines` is populated only in `synced` mode; `text` only in `unsynced`.
-- `track_path` is the fully resolved absolute path (what
-  `Path.resolve()` returned for the audio input), used by the frontend
-  to correlate the response against the currently-open track.
+- `track_path` is the fully resolved absolute path for local audio, or
+  `tidal:<id>` / `isrc:<ISRC>` for a Tidal-only now-playing track.
 
 ## API
 
-Single route at `GET /api/lyrics/local?path=<absolute-path>`. The
-`/lyrics` segment is set on the router in
+Player route: `GET /api/lyrics?path=&tidal_track_id=&isrc=&duration=`.
+Local-only debug route remains `GET /api/lyrics/local?path=`.
+
+The `/lyrics` segment is set on the router in
 [`tidal_dl/gui/api/lyrics.py`](../tidal_dl/gui/api/lyrics.py)
 (`APIRouter(prefix="/lyrics")`); `api/__init__.py` just includes that
 router unmodified under the top-level `/api` mount.
+
+`GET /api/lyrics` identity rules:
+
+- At least one of `path`, `tidal_track_id`, or `isrc` is required
+  (else 400).
+- A valid `path` is resolved the same way as `/local`. If
+  `read_local_lyrics` is not `none`, that payload is returned and
+  Tidal is not contacted.
+- If local is `none` (or there is no path) and the Tidal session is
+  signed in, fetch via `track.lyrics()` and cache.
+- Tidal-only now-playing tracks send `tidal_track_id` with no path.
 
 Resolution branches:
 
@@ -189,8 +220,10 @@ The lyrics panel lives in
 
 Behavior:
 
-- Panel only opens for tracks where `is_local` is true and a local
-  path is resolvable.
+- Panel opens for any now-playing track with a local path, a Tidal
+  id, or an ISRC. `#btn-lyrics` is no longer `is_local`-only.
+- Fetch goes to `GET /api/lyrics` (local first, then Tidal). Client
+  and server both cache the payload for the current request key.
 - Every fetch increments `lyricsRequestToken`. Late responses from a
   previous track are dropped when the token no longer matches — a
   classic "last write wins" race guard so switching tracks quickly
@@ -207,20 +240,22 @@ Behavior:
 
 - `tests/test_gui_lyrics_backend.py` — resolver + parser coverage
   (timestamps, offsets, BOM, encoding fallback, symlink rejection,
-  embedded tag dispatch, mode selection).
-- `tests/test_gui_lyrics_api.py` — endpoint behavior across every
-  resolution branch (ok, bad_request, forbidden, not_found, not_audio).
-- `tests/test_gui_lyrics_frontend.py` — DOM-level rendering and
-  race-guard behavior.
+  embedded tag dispatch, mode selection, Tidal payload, local-first
+  order, in-process Tidal cache, Hi-Fi → OAuth lyrics retry).
+- `tests/test_gui_lyrics_api.py` — `/local` resolution branches plus
+  `/lyrics` local-first, Tidal fallback, Tidal-only now-playing, and
+  missing-identity 400.
+- `tests/test_gui_lyrics_frontend.py` — DOM-level rendering, race
+  guard, Tidal sources, and the now-playing Lyrics button gate.
 
 ## What is intentionally out of scope
 
-- **No network lookups.** No `lrclib.net`, no Musixmatch, no Genius.
-  Lyrics you don't have locally stay unavailable — the panel says
-  "No lyrics found" rather than silently fetching from anywhere.
-- **No translation / transliteration.** Render what's on disk.
+- **No third-party lyrics APIs.** No `lrclib.net`, no Musixmatch, no
+  Genius. The only network source is the signed-in Tidal session.
+- **No translation / transliteration.** Render local files or Tidal
+  lyrics as returned.
 - **No live scroll when seeking.** Scroll follows playback position;
   scrubbing re-aligns on the next render tick.
-- **No write-back.** The panel never modifies tags or writes sidecars.
-  Lyrics arrive through the download pipeline (settings:
-  `lyrics_embed`, `lyrics_file`), not the player.
+- **No write-back from the panel.** Opening Lyrics never writes tags
+  or sidecars. `lyrics_embed` / `lyrics_file` remain download-time
+  opt-in settings (default off).

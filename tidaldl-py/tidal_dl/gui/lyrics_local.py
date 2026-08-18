@@ -24,6 +24,49 @@ def _payload(track_path: Path, mode: str, source: str, lines: list[dict] | None 
     }
 
 
+def empty_lyrics_payload(track_path: str) -> dict:
+    return {
+        "mode": "none",
+        "track_path": track_path,
+        "lines": [],
+        "text": "",
+        "source": "none",
+    }
+
+
+def lyrics_payload_from_tidal(
+    *,
+    track_path: str,
+    text: str = "",
+    subtitles: str = "",
+    duration_ms: int | None = None,
+) -> dict:
+    """Normalize Tidal `lyrics().text` / `.subtitles` into the player payload."""
+    subtitles = subtitles or ""
+    text = text or ""
+    if subtitles and _TIMESTAMP_RE.search(subtitles):
+        raw_lines, _plain = parse_lrc_text(subtitles)
+        lines = normalize_synced_lines(raw_lines, duration_ms)
+        if lines:
+            return {
+                "mode": "synced",
+                "track_path": track_path,
+                "lines": lines,
+                "text": "",
+                "source": "tidal-synced",
+            }
+    unsynced = _cleanup_unsynced_text(text or subtitles)
+    if unsynced:
+        return {
+            "mode": "unsynced",
+            "track_path": track_path,
+            "lines": [],
+            "text": unsynced,
+            "source": "tidal-unsynced",
+        }
+    return empty_lyrics_payload(track_path)
+
+
 def discover_sidecar_lrc(audio_path: Path) -> Path | None:
     target_name = f"{audio_path.stem}.lrc"
     siblings = [

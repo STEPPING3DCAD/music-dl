@@ -254,3 +254,177 @@ def test_sidecar_symlink_ignored(tmp_path, monkeypatch):
     payload = read_local_lyrics(track)
 
     assert payload["mode"] == "none"
+
+
+def test_tidal_subtitles_become_synced_payload():
+    from tidal_dl.gui.lyrics_local import lyrics_payload_from_tidal
+
+    payload = lyrics_payload_from_tidal(
+        track_path="tidal:99",
+        text="plain fallback",
+        subtitles="[00:01.00]Hello\n[00:02.00]World\n",
+        duration_ms=10000,
+    )
+
+    assert payload["mode"] == "synced"
+    assert payload["source"] == "tidal-synced"
+    assert payload["track_path"] == "tidal:99"
+    assert payload["text"] == ""
+    assert [line["text"] for line in payload["lines"]] == ["Hello", "World"]
+    assert payload["lines"][0]["end_ms"] == 2000
+    assert payload["lines"][1]["end_ms"] == 10000
+
+
+def test_tidal_text_becomes_unsynced_when_subtitles_missing():
+    from tidal_dl.gui.lyrics_local import lyrics_payload_from_tidal
+
+    payload = lyrics_payload_from_tidal(
+        track_path="tidal:7",
+        text="Line one\nLine two\n",
+        subtitles="",
+    )
+
+    assert payload["mode"] == "unsynced"
+    assert payload["source"] == "tidal-unsynced"
+    assert payload["lines"] == []
+    assert payload["text"] == "Line one\nLine two"
+
+
+def test_tidal_empty_lyrics_are_honest_none():
+    from tidal_dl.gui.lyrics_local import lyrics_payload_from_tidal
+
+    payload = lyrics_payload_from_tidal(track_path="tidal:1", text="", subtitles="")
+
+    assert payload["mode"] == "none"
+    assert payload["source"] == "none"
+    assert payload["lines"] == []
+    assert payload["text"] == ""
+
+
+def test_local_lyrics_win_over_tidal_fetch(tmp_path, monkeypatch):
+    from tidal_dl.gui.lyrics_local import read_local_lyrics
+    from tidal_dl.gui.lyrics_tidal import lyrics_for_now_playing
+
+    track = _audio_file(tmp_path, "track.flac")
+    track.with_suffix(".lrc").write_text("[00:01.00]Local only\n", encoding="utf-8")
+    monkeypatch.setattr("tidal_dl.gui.lyrics_local.MutagenFile", lambda path: DummyAudio(length=8.0))
+
+    calls = {"tidal": 0}
+
+    def boom(*_args, **_kwargs):
+        calls["tidal"] += 1
+        raise AssertionError("Tidal must not run when local lyrics exist")
+
+    monkeypatch.setattr("tidal_dl.gui.lyrics_tidal.fetch_tidal_lyrics", boom)
+
+    payload = lyrics_for_now_playing(
+        path=track,
+        tidal_track_id=123,
+        isrc="USABC1234567",
+        session=object(),
+        logged_in=True,
+        read_local=read_local_lyrics,
+    )
+
+    assert payload["mode"] == "synced"
+    assert payload["source"] == "lrc-synced"
+    assert payload["lines"][0]["text"] == "Local only"
+    assert calls["tidal"] == 0
+
+
+def test_local_none_falls_back_to_tidal(tmp_path, monkeypatch):
+    from tidal_dl.gui.lyrics_local import read_local_lyrics
+    from tidal_dl.gui.lyrics_tidal import lyrics_for_now_playing
+
+    track = _audio_file(tmp_path, "track.flac")
+    monkeypatch.setattr("tidal_dl.gui.lyrics_local.MutagenFile", lambda path: DummyAudio(length=0.0))
+
+    def fake_fetch(**kwargs):
+        assert kwargs["tidal_track_id"] == 55
+        assert kwargs["isrc"] == "USXYZ0000001"
+        return {
+            "mode": "unsynced",
+            "track_path": str(track.resolve()),
+            "lines": [],
+            "text": "From Tidal",
+            "source": "tidal-unsynced",
+        }
+
+    monkeypatch.setattr("tidal_dl.gui.lyrics_tidal.fetch_tidal_lyrics", fake_fetch)
+
+    payload = lyrics_for_now_playing(
+        path=track,
+        tidal_track_id=55,
+        isrc="USXYZ0000001",
+        session=object(),
+        logged_in=True,
+        read_local=read_local_lyrics,
+    )
+
+    assert payload["mode"] == "unsynced"
+    assert payload["source"] == "tidal-unsynced"
+    assert payload["text"] == "From Tidal"
+
+
+def test_tidal_lyrics_cache_skips_second_session_hit():
+    from tidal_dl.gui.lyrics_tidal import clear_tidal_lyrics_cache, fetch_tidal_lyrics
+
+    class Lyrics:
+        text = "Once"
+        subtitles = ""
+
+    class Track:
+        duration = 180
+
+        def lyrics(self):
+            calls.append("lyrics")
+            return Lyrics()
+
+    class Session:
+        def track(self, track_id, with_album=False):
+            calls.append(("track", int(track_id)))
+            return Track()
+
+    clear_tidal_lyrics_cache()
+    calls: list = []
+    session = Session()
+
+    first = fetch_tidal_lyrics(session=session, tidal_track_id=42, track_path="tidal:42")
+    second = fetch_tidal_lyrics(session=session, tidal_track_id=42, track_path="tidal:42")
+
+    assert first["text"] == "Once"
+    assert second == first
+    assert calls == [("track", 42), "lyrics"]
+    clear_tidal_lyrics_cache()
+
+
+def test_hifi_empty_lyrics_fall_back_to_oauth_session():
+    from tidal_dl.gui.lyrics_tidal import lyrics_obj_from_track
+
+    class Empty:
+        text = ""
+        subtitles = ""
+
+    class OAuthLyrics:
+        text = "OAuth words"
+        subtitles = "[00:01.00]Timed"
+
+    class HifiTrack:
+        id = 88
+
+        def lyrics(self):
+            return Empty()
+
+    class OAuthTrack:
+        def lyrics(self):
+            return OAuthLyrics()
+
+    class Session:
+        def track(self, track_id, with_album=False):
+            assert int(track_id) == 88
+            return OAuthTrack()
+
+    lyrics_obj = lyrics_obj_from_track(HifiTrack(), session=Session())
+
+    assert lyrics_obj.text == "OAuth words"
+    assert lyrics_obj.subtitles == "[00:01.00]Timed"
