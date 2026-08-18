@@ -506,19 +506,19 @@ def test_recent_albums_first_page_is_cheap_on_a_12k_row_library(tmp_path, monkey
     monkeypatch.setattr(library_api, "_get_db", lambda: db)
     db.all_tracks = _raise_if_whole_library
 
-    library_api.library_recent_albums(limit=12, offset=0)
+    library_api.library_recent_albums(limit=50, offset=0)
     started = time.perf_counter()
-    payload = library_api.library_recent_albums(limit=12, offset=0)
+    payload = library_api.library_recent_albums(limit=50, offset=0)
     warmed_ms = (time.perf_counter() - started) * 1000
 
-    assert payload["limit"] == 12
-    assert len(payload["albums"]) == 12
+    assert payload["limit"] == 50
+    assert len(payload["albums"]) == 50
     assert payload["total"] >= 1_565
     assert all(album["id"].startswith("release:") for album in payload["albums"])
     assert all("cover_url" in album for album in payload["albums"])
-    # Measured: current page SQL is 500–800ms because of a correlated art
-    # subquery; slim page+cards is ~15ms. 250ms matches artist/release and
-    # stays comfortably under the 1s release-gate ceiling.
+    # Was 500–800ms on this fixture (correlated cover-art subquery) and ~3s
+    # on the NAS-backed Mac library. After the slim page query: ~16ms for
+    # limit=12 and ~36ms for the UI's limit=50. 250ms matches artist/release.
     assert warmed_ms < 250
     db.close()
 
