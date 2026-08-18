@@ -1413,3 +1413,333 @@ describe('navigation stack', () => {
     expect(mount).toContain('loadLibraryArtistGrouped(resultsArea, libraryQuery)');
   });
 });
+
+function clickableNode(tag) {
+  const listeners = {};
+  const node = {
+    tag,
+    className: '',
+    children: [],
+    parentNode: null,
+    style: {},
+    dataset: {},
+    attributes: {},
+    _homeData: null,
+    listeners,
+    classList: null,
+    appendChild(child) {
+      child.parentNode = node;
+      node.children.push(child);
+      return child;
+    },
+    removeChild(child) {
+      node.children = node.children.filter(existing => existing !== child);
+      child.parentNode = null;
+      return child;
+    },
+    remove() {
+      if (node.parentNode) node.parentNode.removeChild(node);
+    },
+    querySelector(selector) {
+      return node.querySelectorAll(selector)[0] || null;
+    },
+    querySelectorAll(selector) {
+      const wanted = selector.startsWith('.') ? selector.slice(1) : selector;
+      const matches = [];
+      const visit = (child) => {
+        const classes = String(child.className || '').split(/\s+/);
+        if (classes.includes(wanted) || child.id === wanted || child.tag === wanted) {
+          matches.push(child);
+        }
+        (child.children || []).forEach(visit);
+      };
+      node.children.forEach(visit);
+      return matches;
+    },
+    addEventListener(type, listener) {
+      listeners[type] = listeners[type] || [];
+      listeners[type].push(listener);
+    },
+    removeEventListener(type, listener) {
+      listeners[type] = (listeners[type] || []).filter(fn => fn !== listener);
+    },
+    dispatchEvent(event) {
+      (listeners[event.type] || []).forEach(fn => fn(event));
+    },
+    click() {
+      node.dispatchEvent({
+        type: 'click',
+        target: node,
+        currentTarget: node,
+        stopPropagation() {},
+        preventDefault() {},
+      });
+    },
+    setAttribute(name, value) { node.attributes[name] = value; },
+    getAttribute(name) { return node.attributes[name]; },
+    closest(selector) {
+      const wanted = selector.startsWith('.') ? selector.slice(1) : selector;
+      let current = node;
+      while (current) {
+        const classes = String(current.className || '').split(/\s+/);
+        if (classes.includes(wanted) || current.tag === wanted) return current;
+        current = current.parentNode;
+      }
+      return null;
+    },
+    set textContent(value) { this._text = String(value); this.children = []; },
+    get textContent() {
+      return (this._text || '') + node.children.map(child => child.textContent).join('');
+    },
+    get firstChild() { return node.children[0] || null; },
+    focus() {},
+  };
+  node.classList = classListFor(node);
+  return node;
+}
+
+function clickableH(tag, props = {}, ...children) {
+  const node = clickableNode(tag);
+  Object.assign(node, props);
+  if (!node.classList || typeof node.classList.add !== 'function') {
+    node.classList = classListFor(node);
+  }
+  children.forEach(child => child && node.appendChild(child));
+  return node;
+}
+
+function clickableTextEl(tag, value, className) {
+  return clickableH(tag, { textContent: value, className });
+}
+
+function loadHomeInsightCards() {
+  const helperSource = viewsSource.match(
+    /function _homeInsightCards\(data\) \{[\s\S]*?\n\}/,
+  );
+  if (!helperSource) throw new Error('home insight cards helper not found');
+  return new Function(`${helperSource[0]}\nreturn _homeInsightCards;`)();
+}
+
+function loadHomeInsightFan(options = {}) {
+  const start = viewsSource.indexOf('// ---- HOME INSIGHT FAN ----');
+  const end = viewsSource.indexOf('// ---- HOME INSIGHT FAN END ----');
+  if (start < 0 || end < start) throw new Error('home insight fan block not found');
+  const block = viewsSource.slice(start, end);
+  const host = options.host || clickableNode('main');
+  host.className = 'main';
+  const docListeners = {};
+  const documentMock = {
+    body: host,
+    querySelector(selector) {
+      if (selector === '.main') return host;
+      if (selector === '.home-fan-overlay') return host.querySelector(selector);
+      return host.querySelector(selector);
+    },
+    querySelectorAll(selector) {
+      return host.querySelectorAll(selector);
+    },
+    addEventListener(type, listener) {
+      docListeners[type] = docListeners[type] || [];
+      docListeners[type].push(listener);
+    },
+    removeEventListener(type, listener) {
+      docListeners[type] = (docListeners[type] || []).filter(fn => fn !== listener);
+    },
+    dispatchKey(key) {
+      (docListeners.keydown || []).forEach(fn => fn({ key, preventDefault() {} }));
+    },
+  };
+  const matchMedia = (query) => ({
+    matches: Boolean(options.reducedMotion && String(query).includes('prefers-reduced-motion')),
+  });
+  const loaded = new Function(
+    'h',
+    'textEl',
+    'document',
+    'window',
+    'a11yClick',
+    'svgIcon',
+    'ICONS',
+    '_barChart',
+    '_weeklyChart',
+    `${block}\nreturn { _homeInsightCards, _homeFanLayout, _homePrefersReducedMotion, _bindHomeDataFan, _openHomeInsightFan, _closeHomeInsightFan, _cycleHomeInsightFan };`,
+  )(
+    clickableH,
+    clickableTextEl,
+    documentMock,
+    { matchMedia, requestAnimationFrame: (fn) => fn(0) },
+    (el) => { el.setAttribute('tabindex', '0'); el.setAttribute('role', 'button'); },
+    () => clickableH('svg'),
+    { chevronLeft: '', chevronRight: '' },
+    (items) => clickableH('div', { className: 'mini-bar-chart', textContent: (items || []).map(i => i.label).join(' ') }),
+    () => clickableH('div', { className: 'mini-weekly-chart' }),
+  );
+  loaded.dispatchKey = (key) => documentMock.dispatchKey(key);
+  return loaded;
+}
+
+function richHomePayload() {
+  return {
+    total_plays: 847,
+    listening_time_hours: 11.4,
+    top_artist: { name: 'Tetrarch', play_count: 40 },
+    top_artists: [
+      { name: 'Tetrarch', play_count: 40 },
+      { name: 'Deftones', play_count: 12 },
+    ],
+    most_replayed: { name: 'Unstable', play_count: 18 },
+    track_count: 11974,
+    album_count: 1565,
+    genre_breakdown: [
+      { genre: 'Metal', count: 40 },
+      { genre: 'Alt Rock', count: 12 },
+    ],
+    weekly_activity: [0, 1.2, 0, 0, 2.4, 0, 0],
+    this_week: { total_plays: 8, top_artist: { name: 'Deftones', play_count: 8 } },
+    recent_albums: [{ album: 'Unstable' }, { album: 'Otra Vez' }],
+  };
+}
+
+describe('Home insight fan decisions', () => {
+  test('skips empty insights and does not invent stats', () => {
+    const cards = loadHomeInsightCards()({
+      total_plays: 0,
+      listening_time_hours: 0,
+      top_artist: null,
+      top_artists: [],
+      most_replayed: null,
+      track_count: 0,
+      album_count: 0,
+      genre_breakdown: [],
+      weekly_activity: [0, 0, 0, 0, 0, 0, 0],
+      this_week: { total_plays: 0 },
+    });
+
+    expect(cards).toEqual([]);
+    expect(cards.some(card => card.id === 'recent_albums')).toBe(false);
+  });
+
+  test('builds local cards only from already-loaded /home fields', () => {
+    const cards = loadHomeInsightCards()(richHomePayload());
+    const ids = cards.map(card => card.id);
+
+    expect(ids).toContain('total_plays');
+    expect(ids).toContain('listening_time_hours');
+    expect(ids).toContain('top_artist');
+    expect(ids).toContain('top_artists:Deftones');
+    expect(ids).toContain('most_replayed');
+    expect(ids).toContain('track_count');
+    expect(ids).toContain('album_count');
+    expect(ids).toContain('genre_breakdown');
+    expect(ids).toContain('weekly_activity');
+    expect(ids).toContain('this_week');
+    expect(ids).toContain('recent_albums');
+    expect(ids.filter(id => id === 'top_artist' || id === 'top_artists:Tetrarch')).toHaveLength(1);
+    expect(cards.find(card => card.id === 'recent_albums').names).toEqual(['Unstable', 'Otra Vez']);
+    expect(viewsSource).not.toMatch(/api\('\/home\/insights/);
+    expect(viewsSource).not.toContain('unsplash');
+  });
+
+  test('data tiles open the overlay and artist tiles still navigate to artist:', () => {
+    const host = clickableNode('main');
+    host.className = 'main';
+    const fan = loadHomeInsightFan({ host, reducedMotion: true });
+    const navigated = [];
+    const artistTile = loadArtistTileWithClicks((view) => { navigated.push(view); });
+    const dataTile = clickableH('div', { className: 'bento-tile bento-stat-tile' });
+
+    fan._bindHomeDataFan(dataTile, richHomePayload());
+    dataTile.click();
+
+    expect(host.querySelectorAll('.home-fan-overlay')).toHaveLength(1);
+    expect(host.textContent).toContain('Total plays');
+    expect(navigated).toEqual([]);
+
+    artistTile.click();
+    expect(navigated).toEqual(['artist:' + encodeURIComponent('Tetrarch')]);
+    expect(host.querySelectorAll('.home-fan-overlay')).toHaveLength(1);
+    expect(viewsSource).toContain("navigate('artist:' + encodeURIComponent(artist.name))");
+    expect(viewsSource).toContain('_closeHomeInsightFan()');
+    expect(viewsSource).toContain('function navigate(view, opts)');
+    expect(viewsSource).toContain('const _navStack = []');
+    expect(viewsSource.split('function navigate(view, opts) {')[1].split('\nfunction ')[0]).toContain('_closeHomeInsightFan()');
+    expect(viewsSource.split('function navigate(view, opts) {')[1].split('\nfunction ')[0]).not.toContain('function navigate(view) {');
+    expect(viewsSource).toContain('_bindHomeDataFan(genreTile');
+    expect(viewsSource).toContain('_bindHomeDataFan(ltTile');
+    expect(viewsSource).toContain('_bindHomeDataFan(tTile');
+    expect(viewsSource).toContain('_bindHomeDataFan(aTile');
+  });
+
+  test('reduced motion skips the elastic fan and overlay dismisses', () => {
+    const host = clickableNode('main');
+    host.className = 'main';
+    const fan = loadHomeInsightFan({ host, reducedMotion: true });
+
+    fan._openHomeInsightFan(richHomePayload());
+    const overlay = host.querySelector('.home-fan-overlay');
+    expect(overlay.className.split(/\s+/)).toContain('home-fan-reduced');
+    expect(overlay.className.split(/\s+/)).not.toContain('home-fan-spring');
+    expect(overlay.querySelectorAll('.home-fan-card')).toHaveLength(1);
+    const css = readFileSync(join(import.meta.dir, '../tidal_dl/gui/static/style.css'), 'utf8');
+    expect(css).toContain('.home-fan-overlay');
+    expect(css).toContain('.home-fan-reduced');
+    expect(css).toContain('home-fan-spring-in');
+
+    overlay.click();
+    expect(host.querySelectorAll('.home-fan-overlay')).toHaveLength(0);
+
+    fan._openHomeInsightFan(richHomePayload());
+    host.querySelector('.home-fan-back').click();
+    expect(host.querySelectorAll('.home-fan-overlay')).toHaveLength(0);
+  });
+
+  test('chevrons rotate the centered insight', () => {
+    const host = clickableNode('main');
+    const fan = loadHomeInsightFan({ host, reducedMotion: true });
+    fan._openHomeInsightFan(richHomePayload());
+    const before = host.querySelector('.is-center').textContent;
+    fan._cycleHomeInsightFan(1);
+    expect(host.querySelector('.is-center').textContent).not.toBe(before);
+  });
+
+  test('spring mode fans visible cards instead of a single static center', () => {
+    const host = clickableNode('main');
+    const fan = loadHomeInsightFan({ host, reducedMotion: false });
+    fan._openHomeInsightFan(richHomePayload());
+    const overlay = host.querySelector('.home-fan-overlay');
+    expect(overlay.className.split(/\s+/)).toContain('home-fan-spring');
+    expect(overlay.querySelectorAll('.home-fan-card').length).toBeGreaterThan(1);
+    expect(overlay.querySelectorAll('.home-fan-card').length).toBeLessThanOrEqual(7);
+  });
+
+  test('Escape dismisses the open fan', () => {
+    const host = clickableNode('main');
+    const fan = loadHomeInsightFan({ host, reducedMotion: true });
+    fan._openHomeInsightFan(richHomePayload());
+    expect(host.querySelectorAll('.home-fan-overlay')).toHaveLength(1);
+
+    fan.dispatchKey('Escape');
+    expect(host.querySelectorAll('.home-fan-overlay')).toHaveLength(0);
+  });
+});
+
+function loadArtistTileWithClicks(navigate) {
+  const helperSource = viewsSource.match(
+    /function _artistTile\(artist, hero\) \{[\s\S]*?\n\}/,
+  );
+  if (!helperSource) throw new Error('artist tile helper not found');
+  return new Function(
+    'h',
+    'textEl',
+    'navigate',
+    'a11yClick',
+    'fetch',
+    `${helperSource[0]}\nreturn _artistTile;`,
+  )(
+    clickableH,
+    clickableTextEl,
+    navigate,
+    (el) => { el.setAttribute('tabindex', '0'); el.setAttribute('role', 'button'); },
+    () => Promise.resolve({ json: async () => ({}) }),
+  )({ name: 'Tetrarch', play_count: 40, album_count: 2, track_count: 9 }, true);
+}

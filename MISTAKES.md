@@ -1,5 +1,13 @@
 # Mistakes
 
+## 2026-08-18 — Home insight fan would outlive a sidebar navigate
+
+**What happened:** The fan overlay mounts on `.main` so it can cover the Home pane without a hash view. `navigate()` only tears down `#view`. Leaving the overlay on `.main` would keep the fan up after Home was gone.
+
+**Root cause:** Overlay host ≠ view container. `#view` is replaced; `.main` is not.
+
+**Prevention:** Call `_closeHomeInsightFan()` at the start of `navigate(view, opts)`. Sidebar `{ jump: true }` then closes the overlay. Keep `_navStack` / `.nav-back`. Do not restore the old `function navigate(view)`. Do not add a hash route for the fan.
+
 ## 2026-08-18 — Library sort pills sat low in the gold capsule
 
 **What happened:** Library Artist / Album / Title / Plays chips used `.filter-pills` / `.pill`. Active Plays sat low in the gold capsule (more space above the letters than below). Search type chips had the same chrome: the active chip also sat flush against the search field’s gold curve.
@@ -22,7 +30,6 @@
 **Root cause:** `all_albums` always called `_album_cards(db)` with no row subset. That is `db.all_tracks()` plus `find_candidates` = `combinations(N albums, 2)` (~1.2M pairs) and `assess_pair` for every pair. Scan/enrichment had already stamped `release_id` and stored assessments; the gallery ignored both. The same full-library grouping cost was already forbidden on artist click (PR 133) and Home/recent-albums (PR 137).
 
 **Prevention:** When `release_stamps_complete()`, build gallery cards from stamped `release_id` groups. Do not call `all_tracks()` or `find_candidates` on the whole library. Attach stored `album_grouping_assessments` by reconstructing `release:` ids from left/right signatures so possible_duplicate / review / members / Various Artists / cover_url stay correct. Avoid correlated cover-art subqueries. Cold after v9 migrate (stamps incomplete): one full `_album_cards(db)` that writes every stamp, then later paints use the stamp path. A grouping decision restamps only the pair. Lock the warmed 12k gallery to the same <250ms budget as artist/release/recent-albums.
-
 
 ## 2026-08-18 — Lyrics panel stayed empty for years
 

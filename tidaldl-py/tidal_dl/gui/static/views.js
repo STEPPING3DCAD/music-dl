@@ -74,6 +74,7 @@ function _navBackControl() {
 }
 
 function navigate(view, opts) {
+  _closeHomeInsightFan();
   const mode = _navMode(opts);
   let restore = null;
   if (mode === 'back') {
@@ -413,7 +414,7 @@ function _renderHomeGrid(container, data, totalPlays) {
     ? tw.most_replayed : null;
   if (genreSource.length > 0) {
     const genreTile = _genreTile(genreLabel, genreSource, fromLibrary, onRepeatTrack);
-    genreTile._homeData = data;
+    _bindHomeDataFan(genreTile, data);
     // For split tiles, also set on the genre half
     if (onRepeatTrack) {
       const genreHalf = genreTile.querySelector('.bento-half:not(.bento-on-repeat)');
@@ -423,7 +424,7 @@ function _renderHomeGrid(container, data, totalPlays) {
   }
   if (data.weekly_activity && data.weekly_activity.some(v => v > 0)) {
     const ltTile = _listeningTimeTile(data.listening_time_hours, data.weekly_activity, data);
-    ltTile._homeData = data;
+    _bindHomeDataFan(ltTile, data);
     grid.appendChild(ltTile);
   }
 
@@ -440,12 +441,12 @@ function _renderHomeGrid(container, data, totalPlays) {
   // === Library tiles (tier 2 — hidden on compact) ===
   if (established || data.track_count > 0) {
     const tTile = _tracksTile(data.track_count, data.track_genres || [], data);
-    tTile._homeData = data;
+    _bindHomeDataFan(tTile, data);
     grid.appendChild(_t(tTile, 2));
   }
   if (established || data.album_count > 0) {
     const aTile = _albumsTile(data.album_count, data.album_artists, data);
-    aTile._homeData = data;
+    _bindHomeDataFan(aTile, data);
     grid.appendChild(_t(aTile, 2));
   }
 
@@ -750,6 +751,368 @@ function _renderRecentStrip(container) {
   container.querySelectorAll('.home-recent-section').forEach(old => old.remove());
   container.appendChild(section);
 }
+
+// ---- HOME INSIGHT FAN ----
+const HOME_FAN_MAX_VISIBLE = 7;
+const HOME_FAN_POSITIONS = [
+  { rot: -21, scale: 0.7756, x: -30, y: 7.3, z: 1 },
+  { rot: -14, scale: 0.8498, x: -22, y: 4.0, z: 2 },
+  { rot: -7, scale: 0.9346, x: -11, y: 1.3, z: 3 },
+  { rot: 0, scale: 1.0, x: 0, y: 0, z: 10 },
+  { rot: 7, scale: 0.9346, x: 11, y: 1.3, z: 3 },
+  { rot: 14, scale: 0.8498, x: 22, y: 4.0, z: 2 },
+  { rot: 21, scale: 0.7756, x: 30, y: 7.3, z: 1 },
+];
+
+let _homeFan = null;
+
+function _homeInsightCards(data) {
+  const cards = [];
+  if (!data) return cards;
+
+  if (data.total_plays) {
+    cards.push({
+      id: 'total_plays',
+      value: data.total_plays,
+      display: Number(data.total_plays).toLocaleString(),
+      label: 'Total plays',
+    });
+  }
+  if (data.listening_time_hours) {
+    cards.push({
+      id: 'listening_time_hours',
+      value: data.listening_time_hours,
+      display: String(Math.round(data.listening_time_hours)),
+      label: 'Listening time',
+      unit: 'h',
+      weekly: Array.isArray(data.weekly_activity) ? data.weekly_activity : null,
+    });
+  }
+
+  const top = data.top_artist;
+  if (top && top.name) {
+    cards.push({
+      id: 'top_artist',
+      value: top.play_count || 0,
+      display: top.name,
+      label: 'Top artist',
+      detail: top.play_count ? top.play_count + ' plays' : null,
+    });
+  }
+  for (const artist of data.top_artists || []) {
+    if (!artist || !artist.name || !artist.play_count) continue;
+    if (top && artist.name === top.name) continue;
+    cards.push({
+      id: 'top_artists:' + artist.name,
+      value: artist.play_count,
+      display: artist.name,
+      label: 'Also playing',
+      detail: artist.play_count + ' plays',
+    });
+  }
+
+  const replayed = data.most_replayed;
+  if (replayed && (replayed.name || replayed.play_count)) {
+    cards.push({
+      id: 'most_replayed',
+      value: replayed.play_count || 0,
+      display: replayed.name || 'Unknown',
+      label: 'Most replayed',
+      detail: replayed.play_count ? replayed.play_count + ' plays' : null,
+    });
+  }
+  if (data.track_count) {
+    cards.push({
+      id: 'track_count',
+      value: data.track_count,
+      display: Number(data.track_count).toLocaleString(),
+      label: 'Tracks',
+      bars: (data.track_genres || []).slice(0, 4).map(g => ({ label: g.genre, value: g.count })),
+    });
+  }
+  if (data.album_count) {
+    cards.push({
+      id: 'album_count',
+      value: data.album_count,
+      display: Number(data.album_count).toLocaleString(),
+      label: 'Albums',
+    });
+  }
+  if (data.genre_breakdown && data.genre_breakdown.length) {
+    const lead = data.genre_breakdown[0];
+    cards.push({
+      id: 'genre_breakdown',
+      value: lead.count,
+      display: lead.genre,
+      label: 'Top genre',
+      bars: data.genre_breakdown.slice(0, 4).map(g => ({ label: g.genre, value: g.count })),
+    });
+  }
+  if (data.weekly_activity && data.weekly_activity.some(v => v > 0)) {
+    const total = data.weekly_activity.reduce((sum, hours) => sum + hours, 0);
+    cards.push({
+      id: 'weekly_activity',
+      value: total,
+      display: total.toFixed(1),
+      label: 'Weekly activity',
+      unit: 'h',
+      weekly: data.weekly_activity,
+    });
+  }
+  const week = data.this_week;
+  if (week && week.total_plays) {
+    cards.push({
+      id: 'this_week',
+      value: week.total_plays,
+      display: String(week.total_plays),
+      label: 'This week',
+      detail: week.top_artist && week.top_artist.name ? week.top_artist.name : null,
+    });
+  }
+  if (data.recent_albums && data.recent_albums.length) {
+    const names = data.recent_albums.map(album => album.album || album.name).filter(Boolean);
+    if (names.length) {
+      cards.push({
+        id: 'recent_albums',
+        value: names.length,
+        display: String(names.length),
+        label: 'Recent albums',
+        names,
+      });
+    }
+  }
+  return cards;
+}
+
+function _homeFanLayout(count, centerIndex) {
+  if (count <= 0) return [];
+  const visible = Math.min(HOME_FAN_MAX_VISIBLE, count);
+  const half = Math.floor((visible - 1) / 2);
+  const startSlot = visible === HOME_FAN_MAX_VISIBLE ? 0 : 3 - half;
+  const items = [];
+  for (let i = 0; i < visible; i++) {
+    const cardIndex = ((centerIndex - half + i) % count + count) % count;
+    items.push({ cardIndex, slot: startSlot + i });
+  }
+  return items;
+}
+
+function _homeFanWidthScale(widthPx) {
+  if (!(widthPx > 0)) return 1;
+  return Math.max(0.28, Math.min(1, widthPx / 960));
+}
+
+function _homePrefersReducedMotion() {
+  try {
+    return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  } catch (_) {
+    return false;
+  }
+}
+
+function _homeFanNumeric(card) {
+  return card.id === 'total_plays' || card.id === 'listening_time_hours'
+    || card.id === 'track_count' || card.id === 'album_count'
+    || card.id === 'weekly_activity' || card.id === 'this_week';
+}
+
+function _animateHomeFanNumber(el, card, reduced) {
+  if (!el) return;
+  const formatted = card.display + (card.unit ? card.unit : '');
+  const canTime = window.performance && typeof performance.now === 'function';
+  if (reduced || !_homeFanNumeric(card) || !Number.isFinite(Number(card.value))
+      || !window.requestAnimationFrame || !canTime) {
+    el.textContent = formatted;
+    return;
+  }
+  const target = Number(card.value);
+  const started = performance.now();
+  const duration = 700;
+  const tick = (now) => {
+    const t = Math.min(1, Math.max(0, (now - started) / duration));
+    const eased = 1 - Math.pow(1 - t, 3);
+    const current = target * eased;
+    if (card.id === 'weekly_activity' || (target < 10 && !Number.isInteger(target))) {
+      el.textContent = current.toFixed(1) + (card.unit || '');
+    } else {
+      el.textContent = Math.round(current).toLocaleString() + (card.unit || '');
+    }
+    if (t < 1) window.requestAnimationFrame(tick);
+    else el.textContent = formatted;
+  };
+  window.requestAnimationFrame(tick);
+}
+
+function _renderHomeFanCard(card, slot, state, motion) {
+  const pos = HOME_FAN_POSITIONS[slot] || HOME_FAN_POSITIONS[3];
+  const el = h('article', {
+    className: 'home-fan-card' + (slot === 3 ? ' is-center' : ''),
+    style: {
+      transform: 'translateX(' + (pos.x * state.widthScale) + 'rem) translateY(' + pos.y + 'rem) rotate(' + pos.rot + 'deg) scale(' + pos.scale + ')',
+      zIndex: String(pos.z),
+      animationDelay: (slot * 0.06) + 's',
+    },
+  });
+  if (!state.reduced && motion && motion.enter === 'stack') {
+    el.classList.add('home-fan-spring-in');
+  } else if (!state.reduced && motion && (motion.enter === 'right' || motion.enter === 'left') && slot !== 3) {
+    const edge = motion.enter === 'right' ? 6 : 0;
+    if (slot === edge) el.classList.add(motion.enter === 'right' ? 'home-fan-from-right' : 'home-fan-from-left');
+  }
+  const value = h('div', { className: 'home-fan-value' });
+  _animateHomeFanNumber(value, card, state.reduced);
+  el.appendChild(value);
+  el.appendChild(textEl('div', card.label, 'home-fan-label'));
+  if (card.detail) el.appendChild(textEl('div', card.detail, 'home-fan-detail'));
+  if (card.names && card.names.length) {
+    for (const name of card.names) {
+      el.appendChild(textEl('div', name, 'home-fan-name'));
+    }
+  }
+  if (card.bars && card.bars.length) el.appendChild(_barChart(card.bars));
+  else if (card.weekly && card.weekly.some(v => v > 0)) el.appendChild(_weeklyChart(card.weekly));
+  return el;
+}
+
+function _paintHomeFanDots(state) {
+  while (state.dots.firstChild) state.dots.removeChild(state.dots.firstChild);
+  if (state.cards.length <= HOME_FAN_MAX_VISIBLE) {
+    state.dots.hidden = true;
+    return;
+  }
+  state.dots.hidden = false;
+  state.cards.forEach((card, index) => {
+    const dot = h('button', {
+      className: 'home-fan-dot' + (index === state.centerIndex ? ' is-active' : ''),
+      type: 'button',
+      'aria-label': card.label,
+    });
+    dot.addEventListener('click', (event) => {
+      event.stopPropagation();
+      state.centerIndex = index;
+      _paintHomeFanDeck(state, { enter: 'stack' });
+    });
+    state.dots.appendChild(dot);
+  });
+}
+
+function _paintHomeFanDeck(state, motion) {
+  while (state.deck.firstChild) state.deck.removeChild(state.deck.firstChild);
+  const layout = state.reduced
+    ? [{ cardIndex: state.centerIndex, slot: 3 }]
+    : _homeFanLayout(state.cards.length, state.centerIndex);
+  for (const item of layout) {
+    state.deck.appendChild(_renderHomeFanCard(state.cards[item.cardIndex], item.slot, state, motion));
+  }
+  _paintHomeFanDots(state);
+}
+
+function _onHomeFanKey(event) {
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    _closeHomeInsightFan();
+  }
+}
+
+function _closeHomeInsightFan() {
+  if (!_homeFan) return;
+  document.removeEventListener('keydown', _onHomeFanKey);
+  if (_homeFan.overlay && _homeFan.overlay.parentNode) _homeFan.overlay.remove();
+  _homeFan = null;
+}
+
+function _cycleHomeInsightFan(delta) {
+  if (!_homeFan || _homeFan.cards.length < 2) return;
+  const count = _homeFan.cards.length;
+  _homeFan.centerIndex = ((_homeFan.centerIndex + delta) % count + count) % count;
+  _paintHomeFanDeck(_homeFan, { enter: delta > 0 ? 'right' : 'left' });
+}
+
+function _openHomeInsightFan(data) {
+  const cards = _homeInsightCards(data);
+  if (!cards.length) return;
+  _closeHomeInsightFan();
+  const host = document.querySelector('.main') || document.body;
+  const reduced = _homePrefersReducedMotion();
+  const overlay = h('div', {
+    className: 'home-fan-overlay' + (reduced ? ' home-fan-reduced' : ' home-fan-spring'),
+    role: 'dialog',
+    'aria-modal': 'true',
+    'aria-label': 'Listening insights',
+    tabIndex: '-1',
+  });
+  const back = h('button', {
+    className: 'home-fan-back',
+    type: 'button',
+    'aria-label': 'Close insights',
+  });
+  back.appendChild(svgIcon(ICONS.chevronLeft));
+  back.addEventListener('click', (event) => {
+    event.stopPropagation();
+    _closeHomeInsightFan();
+  });
+  const stage = h('div', { className: 'home-fan-stage' });
+  const prev = h('button', {
+    className: 'home-fan-chevron home-fan-prev',
+    type: 'button',
+    'aria-label': 'Previous insight',
+  });
+  prev.appendChild(svgIcon(ICONS.chevronLeft));
+  const next = h('button', {
+    className: 'home-fan-chevron home-fan-next',
+    type: 'button',
+    'aria-label': 'Next insight',
+  });
+  next.appendChild(svgIcon(ICONS.chevronRight));
+  const deck = h('div', { className: 'home-fan-deck' });
+  const dots = h('div', { className: 'home-fan-dots' });
+  prev.addEventListener('click', (event) => {
+    event.stopPropagation();
+    _cycleHomeInsightFan(-1);
+  });
+  next.addEventListener('click', (event) => {
+    event.stopPropagation();
+    _cycleHomeInsightFan(1);
+  });
+  if (cards.length < 2) {
+    prev.hidden = true;
+    next.hidden = true;
+  }
+  stage.appendChild(prev);
+  stage.appendChild(deck);
+  stage.appendChild(next);
+  overlay.appendChild(back);
+  overlay.appendChild(stage);
+  overlay.appendChild(dots);
+  overlay.addEventListener('click', (event) => {
+    if (event.target === overlay) _closeHomeInsightFan();
+  });
+  _homeFan = {
+    overlay,
+    deck,
+    dots,
+    cards,
+    centerIndex: 0,
+    reduced,
+    widthScale: _homeFanWidthScale(host.clientWidth || 0),
+  };
+  _paintHomeFanDeck(_homeFan, { enter: 'stack' });
+  host.appendChild(overlay);
+  document.addEventListener('keydown', _onHomeFanKey);
+  if (overlay.focus) overlay.focus();
+}
+
+function _bindHomeDataFan(tile, data) {
+  tile._homeData = data;
+  tile.addEventListener('click', (event) => {
+    const target = event.target;
+    if (target && target.closest && target.closest('.bento-on-repeat')) return;
+    _openHomeInsightFan(tile._homeData || data);
+  });
+  a11yClick(tile);
+}
+
+// ---- HOME INSIGHT FAN END ----
 
 // ---- SEARCH VIEW ----
 let searchDebounce = null;
