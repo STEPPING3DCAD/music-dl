@@ -217,6 +217,36 @@ class TestAppJsFeatureMarkers:
             ".album-search-filters .pill:focus-visible"
         )[1].split("}")[0]
 
+    def test_filter_pills_center_labels_and_clear_the_search_rail(self):
+        css = (STATIC_DIR / "style.css").read_text()
+
+        search_area = _css_rule_bodies(css, ".search-area")
+        assert any("gap: 16px" in body for body in search_area)
+
+        search_focus = _css_rule_bodies(css, ".search-input:focus")
+        assert any("0 0 0 4px var(--accent-glow)" in body for body in search_focus)
+
+        row = _css_rule_bodies(css, ".filter-pills")
+        assert row, ".filter-pills rule is missing"
+        assert any(
+            "padding: 8px 2px 0" in body and "align-items: center" in body
+            for body in row
+        ), "top padding must keep 36px chips off the focused search rail"
+
+        pill = _css_rule_bodies(css, ".pill")
+        assert pill, ".pill rule is missing"
+        assert any(
+            "display: flex" in body
+            and "align-items: center" in body
+            and "justify-content: center" in body
+            and "min-height: 36px" in body
+            for body in pill
+        )
+
+        album_pill = _css_rule_bodies(css, ".album-search-filters .pill")
+        assert album_pill, ".album-search-filters .pill rule is missing"
+        assert any("min-height: 28px" in body for body in album_pill)
+
     def test_search_cards_keep_visible_titles_and_square_art(self):
         js = read_gui_js()
         css = (STATIC_DIR / "style.css").read_text()
