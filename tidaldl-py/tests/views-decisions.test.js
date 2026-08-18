@@ -1272,3 +1272,144 @@ describe('artist search card captions', () => {
     expect(rule('.album-gallery').some(body => body.includes('align-items: start'))).toBe(true);
   });
 });
+
+function loadNavStackHelpers() {
+  const start = viewsSource.indexOf('// ---- NAV STACK ----');
+  const end = viewsSource.indexOf('// ---- /NAV STACK ----');
+  const block = start >= 0 && end > start ? viewsSource.slice(start, end) : '';
+  if (!block.includes('function _isTopLevelView')) {
+    throw new Error('nav stack helpers not found');
+  }
+  return new Function(
+    `${block}\nreturn {\n  _isTopLevelView, _isDrillInView, _shouldShowNavBack,\n  _snapshotOutgoing, _pushNav, _popNav, _restoreLibrary,\n  _navMode, _hashchangeNavOpts,\n};`,
+  )();
+}
+
+function artistGallerySource() {
+  return viewsSource
+    .split('async function renderArtistGallery(container, artistName) {')[1]
+    ?.split('// ---- LOCAL ALBUM DETAIL')[0] || '';
+}
+
+function localAlbumDetailSource() {
+  return viewsSource
+    .split('async function renderLocalAlbumDetail(container, artistName, albumName, prefetchedData) {')[1]
+    ?.split('\nasync function ')[0] || '';
+}
+
+function tidalAlbumDetailSource() {
+  return viewsSource
+    .split('async function renderAlbumDetail(container, albumId) {')[1]
+    ?.split('\nfunction ')[0] || '';
+}
+
+function libraryMountSource() {
+  return viewsSource
+    .split('function renderLibrary(container) {')[1]
+    ?.split('\nasync function _showDuplicatePreview')[0] || '';
+}
+
+describe('navigation stack', () => {
+  test('back from a Plays album restores library sort, query, and scroll', () => {
+    const nav = loadNavStackHelpers();
+    const stack = [];
+    const library = { librarySort: 'plays', libraryQuery: 'tetrarch' };
+    const outgoing = nav._snapshotOutgoing('library', library.librarySort, library.libraryQuery, 240);
+
+    expect(nav._navMode({})).toBe('push');
+    nav._pushNav(stack, outgoing);
+    expect(stack).toHaveLength(1);
+
+    library.librarySort = 'artist';
+    library.libraryQuery = '';
+    const restored = nav._popNav(stack);
+    nav._restoreLibrary(restored, library);
+
+    expect(nav._navMode({ back: true })).toBe('back');
+    expect(restored.view).toBe('library');
+    expect(library.librarySort).toBe('plays');
+    expect(library.libraryQuery).toBe('tetrarch');
+    expect(restored.scrollY).toBe(240);
+    expect(stack).toHaveLength(0);
+  });
+
+  test('top-level views do not show the back control', () => {
+    const nav = loadNavStackHelpers();
+    const topLevel = [
+      'home', 'search', 'library', 'recent', 'playlists', 'favorites',
+      'downloads', 'settings', 'djai', 'upgrades', 'recent-added',
+    ];
+
+    topLevel.forEach(view => {
+      expect(nav._isTopLevelView(view)).toBe(true);
+      expect(nav._isDrillInView(view)).toBe(false);
+      expect(nav._shouldShowNavBack(view, 0)).toBe(false);
+      expect(nav._shouldShowNavBack(view, 2)).toBe(false);
+    });
+    expect(nav._shouldShowNavBack('localalbum:A:B', 0)).toBe(false);
+  });
+
+  test('drill-in with a non-empty stack shows the back control', () => {
+    const nav = loadNavStackHelpers();
+    ['artist:Tetrarch', 'localalbum:Tetrarch:Unstable', 'localrelease:abc123', 'album:99'].forEach(view => {
+      expect(nav._isDrillInView(view)).toBe(true);
+      expect(nav._isTopLevelView(view)).toBe(false);
+      expect(nav._shouldShowNavBack(view, 1)).toBe(true);
+    });
+
+    expect(artistGallerySource()).toContain('_navBackControl()');
+    expect(localAlbumDetailSource()).toContain('_navBackControl()');
+    expect(tidalAlbumDetailSource()).toContain('_navBackControl()');
+    expect(viewsSource).toContain("className: 'nav-back'");
+    expect(viewsSource).toContain("aria-label', 'Back'");
+  });
+
+  test('sidebar jump to library clears the stack instead of walking artist then album', () => {
+    const nav = loadNavStackHelpers();
+    const stack = [];
+    nav._pushNav(stack, nav._snapshotOutgoing('home', 'artist', '', 0));
+    nav._pushNav(stack, nav._snapshotOutgoing('artist:Tetrarch', 'artist', '', 0));
+    expect(stack.map(entry => entry.view)).toEqual(['home', 'artist:Tetrarch']);
+
+    expect(nav._navMode({ jump: true })).toBe('jump');
+    expect(nav._navMode({ replace: true })).toBe('jump');
+    stack.length = 0;
+    expect(stack).toEqual([]);
+    expect(nav._shouldShowNavBack('library', stack.length)).toBe(false);
+
+    expect(viewsSource).toMatch(/n\.addEventListener\('click', \(\) => navigate\(n\.dataset\.view,\s*\{\s*jump:\s*true\s*\}\)\)/);
+    expect(viewsSource).toMatch(/navigate\('library',\s*\{\s*jump:\s*true\s*\}\)/);
+    expect(viewsSource).toContain('function navigate(view, opts)');
+  });
+
+  test('Home → artist → album pops album, then artist, then home', () => {
+    const nav = loadNavStackHelpers();
+    const stack = [];
+    nav._pushNav(stack, nav._snapshotOutgoing('home', 'artist', '', 0));
+    nav._pushNav(stack, nav._snapshotOutgoing('artist:Tetrarch', 'artist', '', 12));
+
+    const fromAlbum = nav._popNav(stack);
+    expect(fromAlbum.view).toBe('artist:Tetrarch');
+    expect(nav._shouldShowNavBack(fromAlbum.view, stack.length)).toBe(true);
+
+    const fromArtist = nav._popNav(stack);
+    expect(fromArtist.view).toBe('home');
+    expect(nav._shouldShowNavBack(fromArtist.view, stack.length)).toBe(false);
+    expect(stack).toHaveLength(0);
+  });
+
+  test('hashchange pops when it matches the previous stack entry, otherwise jumps', () => {
+    const nav = loadNavStackHelpers();
+    expect(nav._hashchangeNavOpts('library', 'library', 'library')).toBe(null);
+    expect(nav._hashchangeNavOpts('library', 'localalbum:A:B', 'library')).toEqual({ back: true });
+    expect(nav._hashchangeNavOpts('search', 'localalbum:A:B', 'library')).toEqual({ jump: true });
+  });
+
+  test('library remount keeps the current sort and query instead of wiping search', () => {
+    const mount = libraryMountSource();
+    expect(mount).toBeTruthy();
+    expect(mount).not.toMatch(/^\s*libraryQuery = '';/m);
+    expect(mount).toContain('loadLibraryAlbums(resultsArea, libraryQuery)');
+    expect(mount).toContain('loadLibraryArtistGrouped(resultsArea, libraryQuery)');
+  });
+});

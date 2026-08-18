@@ -482,6 +482,22 @@ class TestAppJsFeatureMarkers:
         assert "error_message: us.error_message || us.error || ''" in js
 
 
+class TestNavBackControl:
+    def test_nav_back_is_a_quiet_chevron_not_a_toolbar(self):
+        css = (STATIC_DIR / "style.css").read_text()
+        js = read_gui_js()
+        assert ".nav-back {" in css
+        rule = css.split(".nav-back {")[1].split("}")[0]
+        assert "background: transparent" in rule
+        assert "var(--text-muted)" in rule
+        assert "width: 24px" in rule
+        assert "min-height: 48px" not in rule
+        assert ".nav-back:hover" in css
+        assert "var(--accent)" in css.split(".nav-back:hover")[1].split("}")[0]
+        assert "function _navBackControl(" in js
+        assert "aria-label', 'Back'" in js
+
+
 class TestLibraryScanStatusLabel:
     def test_sync_button_uses_named_scan_phase(self):
         js = read_gui_js()
