@@ -53,7 +53,7 @@
 | Player | 10 | `.player` |
 | Queue | 50 | `.queue-panel` |
 | Toasts | 100 | `.toast-container` |
-| Overlays | 200 | `.confirm-overlay`, `.shortcuts-overlay` |
+| Overlays | 200 | `.confirm-overlay`, `.shortcuts-overlay`, `.home-fan-overlay` |
 | Wizard | 1000 | `.setup-wizard` |
 | Context menu | 9999 | `.ctx-menu` |
 
@@ -234,11 +234,11 @@ padding: 0;
 
 | Element | Action |
 |---------|--------|
-| Artist tile | Navigate to artist view |
+| Artist tile | Navigate to artist view (`artist:`). Do not open the insight fan. |
 | Most Replayed tile | Play track |
-| On Repeat half | Play track |
-| Genre tile | Expand detail |
-| Stat tile with detail | Toggle expand |
+| On Repeat half | Play track (does not open the fan) |
+| Genre tile | Open the local insight fan overlay |
+| Listening time / tracks / albums tiles | Open the local insight fan overlay |
 
 ### Accessibility
 
@@ -262,8 +262,9 @@ padding: 0;
 - Primary: `cubic-bezier(0.22, 0.61, 0.36, 1)` — nav, view transitions
 - Bounce: `cubic-bezier(0.34, 1.56, 0.64, 1)` — download button animations
 - Expand: `cubic-bezier(0.16, 1, 0.3, 1)` — bento detail reveal
+- Home fan spring: CSS `linear()` sampled from GSAP `elastic.out(1.05, .78)`, 1.2s, 0.06s stagger. No GSAP.
 
-**Reduced motion:** All animations reduced to 0.01ms via `prefers-reduced-motion: reduce`.
+**Reduced motion:** All animations reduced to 0.01ms via `prefers-reduced-motion: reduce`. The Home insight fan also skips the elastic arc and shows one static centered card plus chevrons.
 
 ---
 
@@ -275,6 +276,12 @@ padding: 0;
 - Play button: 42px circle, `--text` bg, `--bg` icon
 - `#now-download` is hidden when the playing track is already on disk (`is_local`, `path` / `local_path`, or audio src `/api/playback/local`). No extra player chrome.
 - `#now-source` reuses the track-row `source-tag` / `local-tag` / `tidal-tag` chip and names `local` or `tidal` from the audio src (`/api/playback/local` vs `/api/playback/stream/`), then on-disk flags vs Tidal id. Hidden when idle.
+
+### Home insight fan
+- Quiet overlay on `.main` (not a hash view). Data tiles stash the already-loaded `GET /home` payload on `_homeData` and open `_openHomeInsightFan`. No extra network call. Play history never leaves the machine.
+- Cards are number/label portraits built only from fields present on that payload: `total_plays`, `listening_time_hours`, `top_artist` / `top_artists`, `most_replayed`, `track_count`, `album_count`, `genre_breakdown`, `weekly_activity`, `this_week`, `recent_albums` (names only). Skip empty cards. Do not invent stats. First-paint `/home` uses `extras=False`, so `recent_albums` is usually absent and that card is skipped.
+- Motion: max 7 visible, center slot 3, published FAN_POSITIONS. Entrance from a stacked deck (`y: 12rem`, `scale: 0.5`) into the arc. Chevrons cycle `centerIndex`. Dots only when there are more than 7 cards. Counts ease; they do not snap.
+- Dismiss: Escape, overlay click, `.home-fan-back`, and `navigate(view, opts)` (sidebar `{ jump: true }` included). `.nav-back` stays the drill-in stack control. Artist tiles stay `navigate('artist:' + name)`.
 
 ### Queue Panel
 - Fixed right, 380px wide, slide-in

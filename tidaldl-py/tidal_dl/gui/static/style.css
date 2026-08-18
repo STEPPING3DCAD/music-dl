@@ -296,6 +296,7 @@ body {
 
 /* ---- MAIN ---- */
 .main {
+  position: relative;
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -2193,6 +2194,191 @@ body {
 }
 .home-dense .bento-insight-line {
   font-size: 0.7rem;
+}
+
+/* ---- HOME INSIGHT FAN (local /home payload, no extra fetch) ---- */
+.home-fan-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 14, 13, 0.72);
+  backdrop-filter: blur(18px) saturate(1.2);
+  -webkit-backdrop-filter: blur(18px) saturate(1.2);
+}
+.home-fan-back {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 3;
+}
+.home-fan-back svg {
+  width: 20px;
+  height: 20px;
+  stroke-width: 2;
+}
+.home-fan-stage {
+  position: relative;
+  width: min(100%, 64rem);
+  height: 24rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+.home-fan-deck {
+  position: relative;
+  width: 14rem;
+  height: 20rem;
+}
+.home-fan-card {
+  position: absolute;
+  inset: 0;
+  width: 14rem;
+  height: 20rem;
+  padding: 18px 16px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-radius: var(--radius);
+  background: var(--glass);
+  border: 1px solid var(--glass-border);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+  color: var(--text);
+  transform-origin: center bottom;
+}
+.home-fan-card.is-center {
+  border-color: rgba(212, 160, 83, 0.28);
+  box-shadow: 0 20px 48px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(212, 160, 83, 0.08);
+}
+.home-fan-value {
+  font-family: var(--serif);
+  font-size: 2rem;
+  line-height: 1.1;
+  color: var(--accent);
+}
+.home-fan-label {
+  font-size: 0.75rem;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.home-fan-detail,
+.home-fan-name {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+.home-fan-card .mini-bar-chart,
+.home-fan-card .mini-weekly-chart {
+  margin-top: auto;
+}
+.home-fan-chevron {
+  position: absolute;
+  top: 50%;
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255, 245, 235, 0.04);
+  color: var(--accent);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 12;
+  transform: translateY(-50%);
+}
+.home-fan-chevron svg {
+  width: 18px;
+  height: 18px;
+  stroke-width: 2;
+}
+.home-fan-prev { left: 12px; }
+.home-fan-next { right: 12px; }
+.home-fan-dots {
+  display: flex;
+  gap: 6px;
+  margin-top: 18px;
+}
+.home-fan-dot {
+  width: 7px;
+  height: 7px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(240, 235, 228, 0.28);
+  cursor: pointer;
+}
+.home-fan-dot.is-active {
+  background: var(--accent);
+}
+
+/* GSAP elastic.out(1.05, .78) sampled as CSS linear() — 1.2s, 0.06s stagger */
+.home-fan-overlay.home-fan-spring .home-fan-spring-in {
+  animation: home-fan-spring-in 1.2s linear(
+    0,
+    0.004 2%,
+    0.16 8%,
+    0.78 22%,
+    1.09 32%,
+    1.05 40%,
+    0.985 52%,
+    1.006 64%,
+    0.999 76%,
+    1
+  ) both;
+}
+.home-fan-overlay.home-fan-spring .home-fan-from-right {
+  animation: home-fan-from-right 0.7s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.home-fan-overlay.home-fan-spring .home-fan-from-left {
+  animation: home-fan-from-left 0.7s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+@keyframes home-fan-spring-in {
+  from {
+    transform: translateX(0) translateY(12rem) rotate(0deg) scale(0.5);
+    opacity: 0;
+  }
+}
+@keyframes home-fan-from-right {
+  from {
+    transform: translateX(40rem) rotate(30deg) scale(0.8);
+    opacity: 0;
+  }
+}
+@keyframes home-fan-from-left {
+  from {
+    transform: translateX(-40rem) rotate(-30deg) scale(0.8);
+    opacity: 0;
+  }
+}
+.home-fan-overlay.home-fan-reduced .home-fan-card {
+  transform: none;
+  animation: none;
+}
+
+@media (max-width: 900px) {
+  .home-fan-stage { height: 22rem; }
+  .home-fan-deck,
+  .home-fan-card {
+    width: 12rem;
+    height: 17rem;
+  }
+  .home-fan-value { font-size: 1.6rem; }
 }
 .bento-artist {
   background: linear-gradient(145deg, #2a1f14, #3d2e1a);

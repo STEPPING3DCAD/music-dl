@@ -551,6 +551,15 @@ second one. First `/home` still must not `Path.is_dir()`/`stat` the NAS
 on the ready path; the client must survive a slow or retried `/home`
 without stacking tiles.
 
+Home data tiles (genre, listening time, tracks, albums) open a local insight
+fan from the already-loaded `/home` payload on `_homeData`. That overlay does
+not call `/home` again, does not enable `extras=True`, and does not send play
+history anywhere. `recent_albums` is extras-only and omitted from first paint;
+the fan skips that card when the field is missing. Artist tiles still navigate
+to `artist:` and are not an insight target. `_closeHomeInsightFan()` runs at
+the start of `navigate(view, opts)` so a sidebar `{ jump: true }` dismisses
+the overlay without replacing the nav stack.
+
 `GET /library/albums` returns the full gallery. When every readable album
 row already has a `release_id`, cards come from those stamp groups plus
 stored `album_grouping_assessments` (possible_duplicate, review payloads,
