@@ -91,6 +91,35 @@ function _currentTrackLocalPath(track) {
   return track.local_path || track.path || null;
 }
 
+function _nowPlayingDownloadHidden(track, audioSrc) {
+  if (track && (track.is_local || track.local_path || track.path)) return true;
+  return String(audioSrc || '').includes('/playback/local');
+}
+
+function _nowPlayingSource(track, audioSrc) {
+  const src = String(audioSrc || '');
+  if (src.includes('/playback/local')) return 'local';
+  if (src.includes('/playback/stream/')) return 'tidal';
+  if (!track) return null;
+  if (track.is_local || track.local_path || track.path) return 'local';
+  if (track.id) return 'tidal';
+  return null;
+}
+
+function _updateNowPlayingSourceChip(track, audioSrc) {
+  const el = document.getElementById('now-source');
+  if (!el) return;
+  const source = _nowPlayingSource(track, audioSrc);
+  if (!source) {
+    el.textContent = '';
+    el.style.display = 'none';
+    return;
+  }
+  el.textContent = source;
+  el.className = 'source-tag ' + (source === 'local' ? 'local-tag' : 'tidal-tag');
+  el.style.display = '';
+}
+
 function _lyricsOpen() {
   return lyricsState.lyricsPanelState !== 'closed';
 }
@@ -642,7 +671,8 @@ function updatePlayerHeart() {
     dlEl.addEventListener('click', async () => {
       const trk = state.queue[state.queueIndex] || (recentlyPlayed && recentlyPlayed[0]);
       if (!trk || !trk.id) { toast('No track to download', 'error'); return; }
-      if (trk.is_local) { toast('Already in your library', 'success'); return; }
+      const audioSrc = (document.getElementById('audio') || {}).src || '';
+      if (_nowPlayingDownloadHidden(trk, audioSrc)) { toast('Already in your library', 'success'); return; }
       dlEl.classList.add('downloading');
       try {
         await apiTidal('/download', { method: 'POST', body: { track_ids: [trk.id] } });
@@ -659,22 +689,20 @@ function updatePlayerHeart() {
   if (!hasTrack) {
     heartEl.style.display = 'none';
     dlEl.style.display = 'none';
+    _updateNowPlayingSourceChip(null, '');
     return;
   }
 
   heartEl.style.display = '';
+  const recent = recentlyPlayed && recentlyPlayed[0];
+  const audioSrc = (document.getElementById('audio') || {}).src || '';
   if (current) {
     const key = current.path || (current.id ? 'tidal:' + current.id : null);
     heartEl.classList.toggle('hearted', !!(key && _favCache[key]));
-    dlEl.style.display = current.is_local ? 'none' : '';
-  } else {
-    // No queue context — check recent + audio src for download eligibility
-    const recent = recentlyPlayed && recentlyPlayed[0];
-    const audioSrc = document.getElementById('audio').src || '';
-    const isStream = audioSrc.includes('/playback/stream/');
-    const isLocal = recent ? recent.is_local : !isStream;
-    dlEl.style.display = isLocal ? 'none' : '';
   }
+  const downloadTrack = current || recent || null;
+  dlEl.style.display = _nowPlayingDownloadHidden(downloadTrack, audioSrc) ? 'none' : '';
+  _updateNowPlayingSourceChip(downloadTrack, audioSrc);
 }
 
 // ---- PLAY COUNT (30-second actual-playback threshold) ----
@@ -751,7 +779,7 @@ function playTrack(track) {
   audio.pause();
   audio.muted = true;
 
-  if (track.is_local) {
+  if (localPath) {
     audio.src = '/api/playback/local?path=' + encodeURIComponent(localPath);
   } else {
     audio.src = '/api/playback/stream/' + track.id;
@@ -826,6 +854,8 @@ function updateNowPlaying(track) {
       };
       nowSub.appendChild(albumSpan);
     }
+
+    _updateNowPlayingSourceChip(track, (document.getElementById('audio') || {}).src || '');
 
     // Quality badge
     const nowQuality = document.getElementById('now-quality');

@@ -1253,6 +1253,10 @@ body {
 }
 .now-art.now-link-art { cursor: pointer; }
 
+.now-sub-row .source-tag {
+  flex-shrink: 0;
+}
+
 .now-sub-row .quality-tag {
   flex-shrink: 0;
   font-size: 9px;

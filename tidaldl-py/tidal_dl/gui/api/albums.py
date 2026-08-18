@@ -153,9 +153,10 @@ def album_lookup(
 ) -> dict:
     """Search Tidal for a matching album and return its full track listing.
 
-    Each track is annotated with ``is_local`` — True when the track already
-    exists in the user's scanned library (matched by ISRC first, then by
-    normalised title + artist).
+    Each track is annotated with ``is_local`` and ``path`` / ``local_path``
+    when this release already has the file. Matching is album-scoped
+    title+artist against the queried library album — never ISRC, which
+    collides across albums.
     """
     from tidalapi.album import Album as TidalAlbum
 
@@ -186,14 +187,13 @@ def album_lookup(
         for artist_name in [_normalize(row.get("artist") or "")]
         if title and artist_name
     }
-    local_titles = {
+    local_by_title_artist = {
         (
             _normalize(row.get("title") or ""),
             _normalize(row.get("artist") or ""),
-            _normalize(row.get("album") or ""),
-        )
+        ): row
         for row in local_rows
-        if _normalize(row.get("title") or "")
+        if _normalize(row.get("title") or "") and _normalize(row.get("artist") or "")
     }
 
     ranked = sorted(
@@ -253,23 +253,27 @@ def album_lookup(
 
     tidal_tracks = best_tracks
 
-    # --- 3. Build local-match sets (ISRC + title/artist) ---
-
-
-    # --- 5. Serialize with is_local annotation (album-scoped only) ---
+    # --- 5. Serialize with album-scoped is_local (never ISRC) ---
     serialized = []
     missing_count = 0
     for t in tidal_tracks:
         data = _serialize_track(t)
         # Override ISRC-based is_local — ISRC is global and causes false positives
         # across albums (same track on different albums shares an ISRC).
-        # Only trust album-scoped triple match: (title, artist, album).
+        # Trust title+artist against this release's library rows so a slightly
+        # different Tidal album string still hides Download and plays the file.
         data["is_local"] = False
+        data.pop("local_path", None)
+        data.pop("path", None)
         t_title = _normalize(data.get("name", ""))
         t_artist = _normalize(data.get("artist", ""))
-        t_album = _normalize(data.get("album", ""))
-        if t_title and (t_title, t_artist, t_album) in local_titles:
+        local_row = local_by_title_artist.get((t_title, t_artist)) if t_title and t_artist else None
+        if local_row:
             data["is_local"] = True
+            path = local_row.get("path") or ""
+            if path:
+                data["local_path"] = path
+                data["path"] = path
         if not data["is_local"]:
             missing_count += 1
         serialized.append(data)

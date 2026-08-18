@@ -584,7 +584,7 @@ than activating stale hard-coded fallback hosts.
 |--------|------|---------|
 | `GET` | `/playlists` | Tidal playlists with local match info |
 | `GET` | `/albums/{album_id}/tracks` | Album detail with track list |
-| `GET` | `/albums/lookup` | Resolve album metadata by artist and album name |
+| `GET` | `/albums/lookup` | Resolve album metadata by artist and album name. Marks `is_local` plus `path` / `local_path` from album-scoped title+artist on that release's library files, not ISRC |
 | `GET` | `/home` | Dashboard stats (top artists, genres, play counts) |
 | `GET` | `/duplicates/preview` | Find ISRC-based duplicates |
 | `POST` | `/duplicates/clean` | Remove duplicate files |
