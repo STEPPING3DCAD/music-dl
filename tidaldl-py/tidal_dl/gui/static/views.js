@@ -4,8 +4,83 @@ const navItems = document.querySelectorAll('.nav-item[data-view]');
 
 let _lastNavHash = '';
 const _viewState = {};
+const _navStack = [];
 
-function navigate(view) {
+// ---- NAV STACK ----
+function _isTopLevelView(view) {
+  return view === 'home' || view === 'search' || view === 'library'
+    || view === 'recent' || view === 'playlists' || view === 'favorites'
+    || view === 'downloads' || view === 'settings' || view === 'djai'
+    || view === 'upgrades' || view === 'recent-added';
+}
+
+function _isDrillInView(view) {
+  const name = String(view || '');
+  return name.startsWith('artist:') || name.startsWith('localalbum:')
+    || name.startsWith('localrelease:') || name.startsWith('album:');
+}
+
+function _shouldShowNavBack(view, stackLen) {
+  return stackLen > 0 && _isDrillInView(view) && !_isTopLevelView(view);
+}
+
+function _snapshotOutgoing(view, sort, query, scrollY) {
+  return {
+    view: view || '',
+    librarySort: sort || 'artist',
+    libraryQuery: query || '',
+    scrollY: scrollY || 0,
+  };
+}
+
+function _pushNav(stack, snapshot) {
+  if (!stack || !snapshot || !snapshot.view) return stack;
+  stack.push(snapshot);
+  return stack;
+}
+
+function _popNav(stack) {
+  if (!stack || !stack.length) return null;
+  return stack.pop();
+}
+
+function _restoreLibrary(snapshot, target) {
+  if (!snapshot || !target) return target;
+  if (snapshot.librarySort != null) target.librarySort = snapshot.librarySort;
+  if (snapshot.libraryQuery != null) target.libraryQuery = snapshot.libraryQuery;
+  return target;
+}
+
+function _navMode(opts) {
+  if (opts && opts.back) return 'back';
+  if (opts && (opts.jump || opts.replace)) return 'jump';
+  return 'push';
+}
+
+function _hashchangeNavOpts(hash, lastNavHash, stackTopView) {
+  if (hash === lastNavHash) return null;
+  if (stackTopView && hash === stackTopView) return { back: true };
+  return { jump: true };
+}
+// ---- /NAV STACK ----
+
+function _navBackControl() {
+  if (!_shouldShowNavBack(state.view, _navStack.length)) return null;
+  const btn = h('button', { type: 'button', className: 'nav-back' });
+  btn.setAttribute('aria-label', 'Back');
+  btn.appendChild(svgIcon(ICONS.back));
+  btn.addEventListener('click', () => navigate(null, { back: true }));
+  return btn;
+}
+
+function navigate(view, opts) {
+  const mode = _navMode(opts);
+  let restore = null;
+  if (mode === 'back') {
+    restore = _popNav(_navStack);
+    view = (restore && restore.view) || view || 'home';
+  }
+
   const safeView = normalizeView(view);
 
   // Save outgoing view state
@@ -14,6 +89,25 @@ function navigate(view) {
     _viewState[state.view] = {
       scrollY: scrollEl ? scrollEl.scrollTop : 0,
     };
+  }
+
+  if (mode === 'jump') {
+    _navStack.length = 0;
+  } else if (mode === 'push' && state.view && state.view !== safeView) {
+    const saved = _viewState[state.view];
+    _pushNav(_navStack, _snapshotOutgoing(
+      state.view,
+      librarySort,
+      libraryQuery,
+      saved ? saved.scrollY : 0,
+    ));
+  }
+
+  if (restore) {
+    const next = _restoreLibrary(restore, { librarySort, libraryQuery });
+    librarySort = next.librarySort;
+    libraryQuery = next.libraryQuery;
+    _viewState[restore.view] = { scrollY: restore.scrollY || 0 };
   }
 
   state.view = safeView;
@@ -86,21 +180,23 @@ function navigate(view) {
 }
 
 navItems.forEach(n => {
-  n.addEventListener('click', () => navigate(n.dataset.view));
+  n.addEventListener('click', () => navigate(n.dataset.view, { jump: true }));
   a11yClick(n);
 });
 
 window.addEventListener('hashchange', () => {
-  const hash = location.hash.slice(1) || 'home';
-  if (hash === _lastNavHash) return; // already handled by navigate()
-  navigate(normalizeView(hash));
+  const hash = normalizeView(location.hash.slice(1) || 'home');
+  const top = _navStack.length ? _navStack[_navStack.length - 1].view : '';
+  const hashOpts = _hashchangeNavOpts(hash, _lastNavHash, top);
+  if (!hashOpts) return; // already handled by navigate()
+  navigate(hash, hashOpts);
 });
 
 // Sidebar Sync Library button
 const navSyncBtn = document.getElementById('nav-sync-library');
 if (navSyncBtn) {
   navSyncBtn.addEventListener('click', async () => {
-    navigate('library');
+    navigate('library', { jump: true });
     const resultsArea = document.querySelector('.results');
     if (!resultsArea) return;
 
@@ -1646,10 +1742,14 @@ function breadcrumb(crumbs) {
 // ---- ARTIST ALBUM GALLERY (local library) ----
 async function renderArtistGallery(container, artistName) {
   const header = h('div', { className: 'artist-gallery-header' });
-  header.appendChild(breadcrumb([
+  const crumbRow = h('div', { className: 'nav-back-row' });
+  const back = _navBackControl();
+  if (back) crumbRow.appendChild(back);
+  crumbRow.appendChild(breadcrumb([
     { label: 'Home', view: 'home' },
     { label: artistName },
   ]));
+  header.appendChild(crumbRow);
   const titleRow = h('div', { className: 'artist-gallery-title-row' });
   titleRow.appendChild(textEl('h1', artistName, 'artist-gallery-title'));
   header.appendChild(titleRow);
@@ -1736,11 +1836,15 @@ async function renderLocalAlbumDetail(container, artistName, albumName, prefetch
   const wrapper = h('div', { className: 'album-detail-view' });
   container.appendChild(wrapper);
 
-  wrapper.appendChild(breadcrumb([
+  const crumbRow = h('div', { className: 'nav-back-row' });
+  const back = _navBackControl();
+  if (back) crumbRow.appendChild(back);
+  crumbRow.appendChild(breadcrumb([
     { label: 'Library', view: 'library' },
     { label: artistName, view: 'artist:' + encodeURIComponent(artistName) },
     { label: albumName },
   ]));
+  wrapper.appendChild(crumbRow);
 
   let coverUrl = (prefetchedData && prefetchedData.cover_url) || '';
   if (!coverUrl && !(prefetchedData && 'cover_url' in prefetchedData)) {
@@ -2029,6 +2133,8 @@ function navigateAlbum(albumId) {
 }
 
 async function renderAlbumDetail(container, albumId) {
+  const back = _navBackControl();
+  if (back) container.appendChild(back);
   const resultsArea = h('div', { className: 'results' });
   container.appendChild(resultsArea);
 
@@ -2669,7 +2775,6 @@ async function loadLibraryRecentAlbumsExpanded(resultsArea, append) {
 function renderLibrary(container) {
   const recentAddedExpanded = state.view === 'recent-added';
   libraryOffset = 0;
-  libraryQuery = '';
   const searchArea = h('div', { className: 'search-area' });
 
   const searchRow = h('div', { className: 'search-row' });
@@ -2742,9 +2847,9 @@ function renderLibrary(container) {
 
     // Load cached results — user clicks Sync Library to scan
     if (librarySort === 'album') {
-      loadLibraryAlbums(resultsArea, '');
+      loadLibraryAlbums(resultsArea, libraryQuery);
     } else if (librarySort === 'artist') {
-      loadLibraryArtistGrouped(resultsArea, '');
+      loadLibraryArtistGrouped(resultsArea, libraryQuery);
     } else {
       loadLibrary(resultsArea, false);
     }
