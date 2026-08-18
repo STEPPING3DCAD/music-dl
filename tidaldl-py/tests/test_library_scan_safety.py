@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import sqlite3
 import threading
 import time
 import wave
@@ -20,9 +19,7 @@ from tidal_dl.helper.library_scanner import (
     scan_directory,
 )
 
-
 PRIOR_CACHE_ROWS = 11_974
-LARGE_KEEP_ROWS = 12_000
 LARGE_RECYCLE_ROWS = 3_000
 SCAN_TIME_BUDGET_SEC = 30.0
 
@@ -283,12 +280,98 @@ class TestSuccessfulSweepHappensAfterCompletion:
         assert str(keep) in paths
         assert str(recycle) not in paths
 
+    def test_fingerprint_fast_path_still_sweeps_stale_recycle_rows(
+        self, library_scan, monkeypatch,
+    ) -> None:
+        import json
+
+        library_api, library_dir, tmp_path = library_scan
+        keep = library_dir / "Horizon Chase" / "Soundtrack" / "keep.wav"
+        recycle = library_dir / "#recycle" / "Soundtrack" / "08 Menu Groove Edit.wav"
+        _write_wav(keep)
+        _write_wav(recycle)
+
+        db = LibraryDB(tmp_path / "library.db")
+        db.open()
+        _seed_row(db, keep, artist="Horizon Chase", title="keep")
+        _seed_row(db, recycle, artist="#recycle", title="08 Menu Groove Edit")
+        finger = json.dumps({
+            "dirs": [str(library_dir)],
+            "mtimes": [os.stat(str(library_dir)).st_mtime],
+            "known_count": 2,
+        }, sort_keys=True)
+        db.set_meta("scan_fingerprint", finger)
+        db.commit()
+        db.close()
+
+        walked = {"count": 0}
+        real_walk = os.walk
+
+        def counting_walk(*args, **kwargs):
+            walked["count"] += 1
+            yield from real_walk(*args, **kwargs)
+
+        monkeypatch.setattr(os, "walk", counting_walk)
+        _run_background_scan(library_api)
+
+        db = LibraryDB(tmp_path / "library.db")
+        db.open()
+        paths = db.known_paths()
+        db.close()
+
+        assert walked["count"] == 0
+        assert str(keep) in paths
+        assert str(recycle) not in paths
+
+    def test_reconcile_does_not_read_skipped_directory_files(
+        self, library_scan, monkeypatch,
+    ) -> None:
+        library_api, library_dir, tmp_path = library_scan
+        keep = library_dir / "Artist" / "Album" / "keep.wav"
+        recycle = library_dir / "#recycle" / "Album" / "stale.wav"
+        _write_wav(keep)
+        _write_wav(recycle)
+
+        db = LibraryDB(tmp_path / "library.db")
+        db.open()
+        db.record(
+            str(keep),
+            status="tagged",
+            artist="Unknown Artist",
+            title="Track 01",
+            album="Unknown Album",
+            metadata_complete=False,
+        )
+        db.record(
+            str(recycle),
+            status="tagged",
+            artist="#recycle",
+            title="Track 02",
+            album="Unknown Album",
+            metadata_complete=False,
+        )
+        db.commit()
+        db.close()
+
+        read_paths: list[str] = []
+        original_read = library_api._read_metadata
+
+        def tracking_read(path, scan_dirs=None):
+            read_paths.append(str(path))
+            return original_read(path, scan_dirs)
+
+        monkeypatch.setattr(library_api, "_read_metadata", tracking_read)
+        _run_background_scan(library_api)
+
+        assert str(recycle) not in read_paths
+        assert any(path.endswith("keep.wav") for path in read_paths)
+
 
 class TestScanStatusIsTruthful:
     def test_status_exposes_named_phase_before_any_file_is_found(
         self, library_scan, monkeypatch,
     ) -> None:
-        library_api, library_dir, _tmp_path = library_scan
+        library_api, _library_dir, _tmp_path = library_scan
         entered = threading.Event()
         release = threading.Event()
         snapshots: list[dict] = []
@@ -327,7 +410,7 @@ class TestScanStatusIsTruthful:
     def test_discovery_increments_scanned_while_total_is_unknown(
         self, library_scan, monkeypatch,
     ) -> None:
-        library_api, library_dir, tmp_path = library_scan
+        library_api, library_dir, _tmp_path = library_scan
         for index in range(6):
             _write_wav(library_dir / "Artist" / f"Album{index}" / f"track{index}.wav")
 
@@ -353,7 +436,7 @@ class TestScanStatusIsTruthful:
         assert final["scanning"] is False
 
     def test_scan_status_endpoint_includes_phase(self, library_scan, client) -> None:
-        library_api, _library_dir, _tmp_path = library_scan
+        _library_api, _library_dir, _tmp_path = library_scan
         response = client.get("/api/library/scan/status", headers=client._host_header)
         assert response.status_code == 200
         payload = response.json()
@@ -413,7 +496,7 @@ class TestWriterLockNotHeldAcrossFilesystem:
     def test_metadata_reads_happen_outside_an_open_write_transaction(
         self, library_scan, monkeypatch,
     ) -> None:
-        library_api, library_dir, tmp_path = library_scan
+        library_api, library_dir, _tmp_path = library_scan
         for index in range(3):
             _write_wav(library_dir / "Artist" / "Album" / f"track{index}.wav")
 

@@ -1039,10 +1039,14 @@ def _reconcile_library_rows(db: LibraryDB, *, scan_dirs: list[Path]) -> int:
     db.commit()
     pending: list[dict] = []
     repaired = 0
-    total = len(worklist)
+    eligible = [
+        row for row in worklist
+        if not path_has_skipped_scan_dir(row["path"])
+    ]
+    total = len(eligible)
     if total:
         _update_scan_progress(phase="repairing", scanned=0, total=total, done=False)
-    for row in worklist:
+    for row in eligible:
         file_path = Path(row["path"])
         if not file_path.is_file():
             continue
@@ -1151,7 +1155,20 @@ def _background_scan(rescan: bool) -> None:
             stored = db.get_meta("scan_fingerprint")
             db.commit()
             if stored == finger:
-                print("[library] Scan directories unchanged — skipping")
+                print("[library] Scan directories unchanged — skipping walk")
+                dropped = drop_skipped_scan_paths(db)
+                if dropped:
+                    print(f"[library] Dropped {dropped} rows under skipped directories")
+                    try:
+                        finger = _json.dumps({
+                            "dirs": sorted(str(d) for d in scan_dirs),
+                            "mtimes": [os.stat(str(d)).st_mtime for d in sorted(scan_dirs)],
+                            "known_count": len(db.known_paths()),
+                        }, sort_keys=True)
+                        db.set_meta("scan_fingerprint", finger)
+                    except OSError:
+                        pass
+                    db.commit()
                 _update_scan_progress(phase="done", scanned=0, total=0, done=True, error=None)
                 _finish_album_scan(db)
                 db = None
