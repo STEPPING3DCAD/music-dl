@@ -347,6 +347,16 @@ class TestAppJsFeatureMarkers:
         assert "loadLibraryRecentShelf" not in js
         assert "library-shelf" not in js
 
+    def test_recently_added_paints_home_loading_hint_before_fetch(self):
+        js = read_gui_js()
+        loader = js.split("async function loadLibraryRecentAlbumsExpanded(resultsArea, append) {")[1].split(
+            "\nfunction renderLibrary(container) {"
+        )[0]
+        before_await = loader.split("await loadLibraryRecentAlbumsPage")[0]
+        assert "home-loading-hint" in before_await
+        assert "Loading albums" in before_await
+        assert "skeleton-row" not in loader
+
     def test_has_sleep_timer(self):
         js = read_gui_js()
         assert "_sleepTimerId" in js, "Sleep timer missing"

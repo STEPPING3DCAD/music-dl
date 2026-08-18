@@ -1,5 +1,7 @@
 """Local album grouping API integration."""
 
+import inspect
+import time
 from pathlib import Path
 
 from tidal_dl.helper.library_db import LibraryDB
@@ -388,6 +390,53 @@ def test_release_tracks_recovers_a_real_hash_when_stamps_are_missing(tmp_path, m
     db.close()
 
 
+def _seed_mac_like_library(db: LibraryDB, *, tracks: int = 11_974, albums: int = 1_565) -> None:
+    """~12k-row / ~1.5k-album fixture matching the live Mac library shape."""
+    assert db._conn
+    tracks_per_album = 7
+    bulk_albums = albums - 1
+    rows = []
+    scanned_at = 1_700_000_000
+    for album_index in range(bulk_albums):
+        artist = f"Artist {album_index // 80}"
+        album = f"Album {album_index:04d}"
+        album_time = scanned_at + album_index
+        for track in range(1, tracks_per_album + 1):
+            rows.append((
+                f"/music/{artist}/{album}/{track:02d}.flac",
+                "tagged",
+                artist,
+                f"Song {track}",
+                album,
+                artist,
+                180,
+                track,
+                tracks_per_album,
+                album_time,
+            ))
+    remainder = tracks - len(rows)
+    for extra in range(max(remainder, 0)):
+        rows.append((
+            f"/music/pad/{extra}.flac",
+            "tagged",
+            "Pad Artist",
+            f"Pad {extra}",
+            "Pad Album",
+            "Pad Artist",
+            180,
+            extra + 1,
+            remainder,
+            scanned_at,
+        ))
+    db._conn.executemany(
+        """INSERT INTO scanned (path, status, artist, title, album, album_artist,
+                                duration, track_number, track_total, scanned_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        rows,
+    )
+    db.commit()
+
+
 def test_recent_albums_groups_only_the_page_not_the_whole_library(tmp_path, monkeypatch):
     from tidal_dl.gui.api import library as library_api
     from tidal_dl.helper import album_grouping
@@ -432,4 +481,120 @@ def test_recent_albums_groups_only_the_page_not_the_whole_library(tmp_path, monk
     assert payload["total"] >= 12
     assert grouped_artists
     assert all(len(artists) < 80 for artists in grouped_artists)
+    db.close()
+
+
+def test_recent_albums_does_not_expand_page_artists_or_use_art_subquery():
+    from tidal_dl.gui.api.library import library_recent_albums
+    from tidal_dl.helper.library_db.browse import BrowseMixin
+
+    endpoint = inspect.getsource(library_recent_albums)
+    page_sql = inspect.getsource(BrowseMixin.recent_albums_page)
+
+    assert "tracks_for_albums" in endpoint
+    assert "tracks_for_artist" not in endpoint
+    assert "s2.art_available" not in page_sql
+    assert "s2.album" not in page_sql
+
+
+def test_recent_albums_first_page_is_cheap_on_a_12k_row_library(tmp_path, monkeypatch):
+    from tidal_dl.gui.api import library as library_api
+
+    db = LibraryDB(tmp_path / "library.db")
+    db.open()
+    _seed_mac_like_library(db)
+    monkeypatch.setattr(library_api, "_get_db", lambda: db)
+    db.all_tracks = _raise_if_whole_library
+
+    library_api.library_recent_albums(limit=12, offset=0)
+    started = time.perf_counter()
+    payload = library_api.library_recent_albums(limit=12, offset=0)
+    warmed_ms = (time.perf_counter() - started) * 1000
+
+    assert payload["limit"] == 12
+    assert len(payload["albums"]) == 12
+    assert payload["total"] >= 1_565
+    assert all(album["id"].startswith("release:") for album in payload["albums"])
+    assert all("cover_url" in album for album in payload["albums"])
+    # Measured: current page SQL is 500–800ms because of a correlated art
+    # subquery; slim page+cards is ~15ms. 250ms matches artist/release and
+    # stays comfortably under the 1s release-gate ceiling.
+    assert warmed_ms < 250
+    db.close()
+
+
+def test_recent_albums_keeps_ids_flags_order_and_various_artists(tmp_path, monkeypatch):
+    from tidal_dl.gui.api import library as library_api
+    from tidal_dl.gui.api.library import _album_cards
+    from tidal_dl.helper import album_grouping
+
+    db = LibraryDB(tmp_path / "library.db")
+    db.open()
+    _seed_pair(db, provider_id="123")
+    for track, artist in enumerate(("Comp A", "Comp B"), start=1):
+        db.record(
+            f"/music/comp/{track}.flac",
+            status="tagged",
+            artist=artist,
+            album_artist="Various Artists",
+            title=f"Comp Song {track}",
+            album="Hits",
+            duration=180,
+            track_number=track,
+            track_total=2,
+        )
+    assert db._conn
+    db._conn.execute(
+        "UPDATE scanned SET scanned_at = 9000000000 WHERE album = 'Hits'"
+    )
+    for index in range(40):
+        _seed_album(
+            db,
+            artist="Artist",
+            album=f"Back Catalog {index}",
+            tracks=2,
+            prefix=f"back{index}",
+        )
+    for index in range(20):
+        _seed_album(
+            db,
+            artist="Zzz Filler",
+            album=f"Filler {index}",
+            tracks=1,
+            prefix=f"filler{index}",
+        )
+    db._conn.execute(
+        "UPDATE scanned SET scanned_at = 2 WHERE album LIKE 'Filler %'"
+    )
+    db._conn.execute(
+        "UPDATE scanned SET scanned_at = 1 WHERE album LIKE 'Back Catalog %'"
+    )
+    db.commit()
+    monkeypatch.setattr(library_api, "_get_db", lambda: db)
+
+    full_ids = {card["id"] for card in _album_cards(db)}
+    grouped_albums: list[set[str]] = []
+    real_build = album_grouping.build_local_album_groups
+
+    def spy_build(rows):
+        grouped_albums.append({str(row.get("album") or "") for row in rows})
+        return real_build(rows)
+
+    monkeypatch.setattr(album_grouping, "build_local_album_groups", spy_build)
+
+    payload = library_api.library_recent_albums(limit=12, offset=0)
+    names = [album["name"] for album in payload["albums"]]
+    by_name = {album["name"]: album for album in payload["albums"]}
+
+    assert names[0] == "Hits"
+    assert by_name["Hits"]["artist"] == "Various Artists"
+    assert {album["id"] for album in payload["albums"]} <= full_ids
+    assert "Album" in by_name
+    assert by_name["Album"]["id"] in full_ids
+    assert payload["total"] >= 12
+    assert grouped_albums
+    assert all(
+        not any(title.startswith("Back Catalog") for title in albums)
+        for albums in grouped_albums
+    )
     db.close()

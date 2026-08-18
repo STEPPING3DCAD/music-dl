@@ -1,5 +1,13 @@
 # Mistakes
 
+## 2026-08-17 — Recently Added stayed blank while a cover-art subquery scanned the library
+
+**What happened:** Recently Added showed only the search shell and filter pills for ~3s. Warmed `/library/recent-albums` was 2.998s / 3.007s on the 11,974-row Mac library after PR 133 cut grouping from 25–53s to ~2.5–3s.
+
+**Root cause:** The remaining cost was not page grouping. `recent_albums_page` `GROUP BY album`'d the whole library with a correlated cover-art subquery that `SCAN`ned the path PK once per album (~500–800ms on a local 12k/1.5k fixture; ~3s on NAS-backed SQLite). The endpoint then discarded that cover data and used `_album_cards`. The route also awaited the API before painting any results copy, so the wait was a blank shell.
+
+**Prevention:** Page recency without per-album cover-art subqueries. Group only the current page titles plus already-stamped release members. Do not call `tracks_for_artist` for every page artist. Paint a Home-style `home-loading-hint` before the fetch. Lock the warmed 12-item page to the same <250ms budget as artist/release.
+
 ## 2026-08-17 — Post-download `rglob` walked Synology `#recycle` and stalled the worker
 
 **What happened:** After a track finished, Downloads History showed Done while Active stayed on "Waiting to start...". The worker was busy. On a Synology library, `scan_new_downloads` used `Path.rglob("*")` on the configured download root, so it recursively entered `#recycle` and other trash trees. Large deleted folders kept the next jobs queued and pegged the worker.

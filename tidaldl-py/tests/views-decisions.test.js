@@ -702,3 +702,135 @@ describe('artist and album loading state', () => {
     expect(detail).toMatch(/Loading tracks|home-loading-hint|skeleton-track/);
   });
 });
+
+function loadRecentAlbumsExpanded(fetchPage) {
+  const functionBody = viewsSource
+    .split('async function loadLibraryRecentAlbumsExpanded(resultsArea, append) {')[1]
+    ?.split('\nfunction renderLibrary(container) {')[0];
+  if (!functionBody) throw new Error('recent albums loader not found');
+
+  function element(tag) {
+    return {
+      tag,
+      children: [],
+      style: {},
+      classList: {
+        add() {},
+        remove() {},
+        contains() { return false; },
+      },
+      appendChild(child) { this.children.push(child); return child; },
+      remove() {},
+      querySelector(selector) {
+        return this.children.find(child =>
+          selector.split('.').every(part => !part || (child.className || '').split(/\s+/).includes(part))
+        ) || null;
+      },
+      set textContent(value) { this._text = String(value); this.children = []; },
+      get textContent() {
+        return (this._text || '') + this.children.map(child => child.textContent).join('');
+      },
+    };
+  }
+  const h = (tag, props = {}, ...children) => {
+    const node = element(tag);
+    Object.assign(node, props);
+    children.forEach(child => child && node.appendChild(child));
+    return node;
+  };
+  const textEl = (tag, value, className) => h(tag, { textContent: value, className });
+  const renderRecentAlbumRow = (album) => textEl('div', album.name || 'album', 'recent-album-row');
+
+  return new Function(
+    'loadLibraryRecentAlbumsPage',
+    'LIBRARY_PAGE_SIZE',
+    'h',
+    'textEl',
+    'renderRecentAlbumRow',
+    '_recentTimeGroup',
+    'toast',
+    'document',
+    `let libraryOffset = 0;
+     let libraryTotal = 0;
+     async function loadLibraryRecentAlbumsExpanded(resultsArea, append) {${functionBody}
+     return loadLibraryRecentAlbumsExpanded;`,
+  )(
+    fetchPage,
+    12,
+    h,
+    textEl,
+    renderRecentAlbumRow,
+    () => 'Today',
+    () => {},
+    { getElementById() { return null; } },
+  );
+}
+
+describe('recently added loading state', () => {
+  test('paints a home-loading-hint before the recent-albums request resolves', async () => {
+    const source = viewsSource
+      .split('async function loadLibraryRecentAlbumsExpanded(resultsArea, append) {')[1]
+      ?.split('\nfunction renderLibrary(container) {')[0];
+    if (!source) throw new Error('recent albums loader not found');
+    const beforeAwait = source.split('await loadLibraryRecentAlbumsPage')[0];
+    expect(beforeAwait).toContain('home-loading-hint');
+    expect(beforeAwait).toMatch(/Loading albums/);
+    expect(source).not.toContain('skeleton-row');
+
+    let resolvePage;
+    const pendingPage = new Promise(resolve => { resolvePage = resolve; });
+    const load = loadRecentAlbumsExpanded(() => pendingPage);
+    const resultsArea = {
+      children: [],
+      firstChild: null,
+      appendChild(child) {
+        this.children.push(child);
+        this.firstChild = this.children[0];
+        return child;
+      },
+      removeChild(child) {
+        this.children = this.children.filter(item => item !== child);
+        this.firstChild = this.children[0] || null;
+        return child;
+      },
+      querySelector() { return null; },
+      get textContent() { return this.children.map(child => child.textContent).join(''); },
+    };
+
+    const pending = load(resultsArea, false);
+    expect(resultsArea.textContent).toContain('Loading albums');
+    expect(resultsArea.children.some(child => child.className === 'home-loading-hint')).toBe(true);
+
+    resolvePage({ albums: [{ name: 'Otra Vez', artist: 'Sandy, PAPO', track_count: 9, recent_at: 1 }], total: 1 });
+    await pending;
+    expect(resultsArea.textContent).not.toContain('Loading albums');
+    expect(resultsArea.textContent).toContain('Otra Vez');
+  });
+
+  test('replaces the hint with an error state when recent albums fail', async () => {
+    const load = loadRecentAlbumsExpanded(async () => { throw new Error('HTTP 500'); });
+    const resultsArea = {
+      children: [],
+      firstChild: null,
+      appendChild(child) {
+        this.children.push(child);
+        this.firstChild = this.children[0];
+        return child;
+      },
+      removeChild(child) {
+        this.children = this.children.filter(item => item !== child);
+        this.firstChild = this.children[0] || null;
+        return child;
+      },
+      querySelector() { return null; },
+      get textContent() { return this.children.map(child => child.textContent).join(''); },
+    };
+
+    await load(resultsArea, false);
+
+    expect(resultsArea.textContent).toContain('Could not load recently added albums');
+    expect(resultsArea.textContent).toContain('HTTP 500');
+    expect(resultsArea.textContent).not.toContain('Loading albums');
+    expect(resultsArea.children.some(child => child.className === 'empty-state')).toBe(true);
+  });
+});

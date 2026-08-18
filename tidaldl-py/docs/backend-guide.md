@@ -517,11 +517,19 @@ use FastAPI's `/api/docs` or `gui/api/__init__.py` for the complete current set.
 | Method | Path | Purpose |
 |--------|------|---------|
 | `GET` | `/library` | Paginated local tracks, grouped by artist |
+| `GET` | `/library/recent-albums` | First page of recently added releases |
 | `POST` | `/library/scan` | Trigger background library scan |
 | `GET` | `/library/scan-status` | Poll scan progress |
 
 Home statistics use the aggregate database queries behind `GET /home`; grouped
 album cards are built only by album-library routes, not during Home loading.
+
+`GET /library/recent-albums` pages album recency in SQL (scan vs download,
+Various Artists when a title has multiple artists) without a per-album
+cover-art subquery. Cards are grouped from the current page titles plus any
+already-stamped release members. It does not expand to every album by the
+page artists and does not run full-library combinations. Cover URLs come from
+that page subset.
 
 ### Search & Download
 
