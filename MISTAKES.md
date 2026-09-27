@@ -1,5 +1,29 @@
 # Mistakes
 
+## 2026-09-27 — A layout scroll cancelled playlist restore, and a later-page retry hammered
+
+**What happened:** Coming back from an album, the browser clamped `#view` onto the short playlist placeholder and fired `scroll`. That was treated as the user scrolling, so the saved offset was dropped. A later-page 429 also retried every 1.5s and toasted every time, and a retry that finished the list never ran the upgrade scan.
+
+**Root cause:** `cancelRestore('scroll')` ran for every scroll, including the clamp. Retry delay was fixed, and `_scanPlaylistUpgrades` was skipped whenever a retry timer was still pending at the end of the first pass.
+
+**Prevention:** Cancel restore only for wheel, touch, pointer/mouse down, scroll keys, and leaving the view. If the track count is already known, size the spacer to `total * 66` before the first page. Later pages use 1.5s, 3s, 6s, 12s, then 24s, capped at 30s, at most 5 automatic retries, one toast per streak. Scan upgrades once when the loaded offset reaches the total. Playlist perf artifacts go to `PLAYLIST_PERF_ARTIFACTS` or the test `tmp_path`.
+
+## 2026-09-27 — A later playlist page 429 replaced rows already on screen
+
+**What happened:** `loadPlaylistTracks` treated every 429 like a first-page failure. After page 1 had painted, a 429 on a later page cleared the list and showed the "Tidal rate limit" empty state.
+
+**Root cause:** The catch always removed `trackList` children. The server already returns HTTP 429 after a capped backoff and leaves earlier pages in the playlist cache, but the client threw that away.
+
+**Prevention:** If any page after the first fails and rows are already rendered, keep those rows, toast `Tidal rate limit — N of M loaded, will retry` (or the non-429 pause toast), and retry that offset on a backoff and on scroll, play, or keyboard. Only a first-page failure may show the empty state. A later-page 429 must stay HTTP 429 and must not drop the cached first page.
+
+## 2026-09-27 — Playlist scroll restore fired while the list was still the placeholder
+
+**What happened:** On the Us playlist the user scrolled `#view` to 20000 and the app saved scrollY 19100. Album then browser-back, album then in-app back, and Home then browser-back all left `#view.scrollTop` around 99–107.
+
+**Root cause:** `_applyPlaylistScrollRestore` and the navigate rAF wrote `scrollTop` while only the loading placeholder was painted (~863 px, clientHeight ~800). The browser clamped the write. The real list reached ~36935 px about 250 ms later and nothing applied the saved offset again.
+
+**Prevention:** Keep a pending restore per view. Size the virtual spacer to `total * PLAYLIST_VIRTUAL_ROW_PX` before assigning `scrollTop`. Re-apply after the first real paint and each page append until the target is within 2 px. A wheel, touch, keyboard, or non-restore scroll cancels it, and leaving the view cancels it. Do not set `scrollTop` to 0 when a saved offset is waiting.
+
 ## 2026-09-27 — Pid file published before the bot process object
 
 **What happened:** `test_bot_control_lifespan_starts_and_stops_configured_bot` failed under QA with `running` still false after polling `/api/bot-control/status` for 2s. A second ordering failed the pid-file read after status had already reported running. A gist 403 from `api.github.com` showed up in that stdout and was not the cause.
@@ -23,6 +47,22 @@
 **Root cause:** `track_file_is_in_output` mutated `downloader.skip_existing` so `_prepare_file_paths_and_skip_logic` would set `skip_file`. That flag is process-wide for the downloader, not per call.
 
 **Prevention:** Compute the dest path and call `check_file_exists` on it. Do not write `skip_existing`.
+
+## 2026-09-27 — Live playlist load statted the SMB share and scrolled the wrong box
+
+**What happened:** PR #194 at 15574bec passed mocked CI, then failed on a Mac whose library is an SMB share (`/Volumes/Music`). The 'Us' playlist (555 entries, 440 unique) took 12 s for the first page and about 2 minutes for the list. Scrolling during load blanked the virtual window. Play started at 50 tracks and finished at 441. Home-back restored scroll 20,000 as 44; browser-back restored 0. A stuck Tidal 429 retried forever.
+
+**Root cause:** Display matching still called `match_local_row` → `resolve_live_library_path`, which `stat`s every candidate on the request path. CI's fake DB never touched the filesystem, and a missing local file stats quickly. `.main` is `overflow: hidden`; `#view` is the scroller. Virtual paint, scroll restore, and listeners read `.main.scrollTop`. Page append dropped rows by track id, so playlist repeats never joined the queue. `_fetch_pages` slept on 429 with no retry cap.
+
+**Prevention:** Paginated display stamps are `tracks_by_isrc` plus the indexed `path` only. A test patches `os.stat` / `Path.exists` / `Path.is_file` to raise during first-page stamping, and a second test stamps a 15k-row `library.db` with paths that are not on disk. Scroll save, restore, virtual paint, and the scroll listener all use `_appScrollEl` (`#view` in the real `index.html` / `style.css`). Queue append is by playlist index, keeps duplicates, and splices shuffle pages into the unplayed tail. Leaving after Play keeps filling; opening another playlist toasts `Playlist queue incomplete`. 429s stop after 3 backoff sleeps and return HTTP 429 `Tidal rate limit; playlist tracks paused`.
+
+## 2026-09-27 — Playlist first-page stamp and virtual list dropped playability and queue
+
+**What happened:** Bugbot on #194 at 7707ffb: paginated `_stamp_sql_only` set `is_local` without `path`/`local_path`, so owned tracks looked unplayable. Virtual paint used raw `.main.scrollTop` while chrome sat above `.tracks`. `paintLoaded` reapplied saved scroll on every remaining page. Play/Shuffle snapshotted the first 50 tracks.
+
+**Root cause:** First-page identity skipped `stamp_track`. Virtual range treated parent scroll as list scroll. Restore ran on every paint. Queue used `loaded.slice()` at click and never appended later pages.
+
+**Prevention:** First-page SQL stamp goes through `stamp_track` (no NAS). Paint uses `_playlistListScrollTop(parent.scrollTop, list.offsetTop)` and 66px border-box rows. Restore is one-shot via `_applyPlaylistScrollRestore`. After Play/Shuffle/play-from-here, `_playlistUnqueuedTracks` appends later pages into `queue`/`queueOriginal`. Client `total` never raises cache size above Tidal `num_tracks` or 10_000.
 
 ## 2026-09-27 — Overlay keycaps reused the settings-card fill
 
@@ -199,6 +239,22 @@
 **Root cause:** Calibration left the final `qa` job advisory. Status reporting was treated as the merge gate. Publishing `discord_bot_process` before the pid file made `running=True` visible before `discord-bot.pid` existed. Settings field-count and lyrics `lyricsBody` wheel assertions were not updated when #186 and the viewport scroller landed.
 
 **Prevention:** Final `qa` job always passes `--enforce`. Check steps still continue so evidence is complete. Publish the bot pid file and `discord_bot_process` under `_bot_lifecycle_lock` (see 2026-09-27). Writing the pid file first without that lock lets status forget a start whose pid is not alive yet. `running=True` means the pid file exists. Settings field-count tests name the new fields, not a magic number alone. Lyrics detach tests lock the viewport listener. Player-bar invariance is the bun lyrics-sync contract: do not hide `#now-heart` / `#now-download` on `.lyrics-open`. LibraryDB probe ceilings must match GitHub-hosted 10k-probe cost (`visible_scanned_path_sql` + `fold_search`), not a quiet laptop. Do not skip or delete a failing test to go green.
+
+## 2026-09-26 — Playlist pages retried Tidal 429s immediately and lost list state
+
+**What happened:** Concurrent remaining-page fetches had no TooManyRequests handling, so a 429 aborted the load or the other worker kept hammering. The virtual list also lived inside the `playlists` hash, so back from an artist/album remounted the card grid and dropped scroll, focus, and selection.
+
+**Root cause:** `_fetch_pages` called `playlist.tracks()` with no pacer. Playlist detail was not a drill-in view, and virtual paint destroyed focused DOM without a selected index.
+
+**Prevention:** Remaining pages honor `TooManyRequests.retry_after` via `TidalApiPacer.note_429` before retrying. Playlist detail is `playlist:<id>` with saved scroll. Arrow keys move a selected index; volume shortcuts skip `.tracks-virtual` / `.track.selected`.
+
+## 2026-09-26 — Playlist click waited for every track plus a full-library NAS stamp
+
+**What happened:** Clicking a playlist froze the UI for seconds. A mocked Tidal client (50-item pages, 200 ms/request, 15 ms NAS stats) measured 1.9s for 50 tracks and 3.4s for a 500-track playlist that then rendered only the first 50.
+
+**Root cause:** `GET /playlists/{id}/tracks` called `playlist.tracks()` with no limit (Tidal caps ~50–100), loaded `db.all_tracks()`, then `_serialize_track` + `_best_local_row` + `present_playable_path` per row (N+1 SQL and two filesystem stats each). The UI awaited that full payload behind an unstyled `skeleton-row`. Cache was TTL-only, no lastUpdated/ETag.
+
+**Prevention:** First page is `limit=50` catalog serialize + SQLite identity only. Remaining pages fetch with concurrency 2. Cache invalidates on last_updated/ETag. Local honesty/NAS stats stay on the unpaginated sync path. Paint `skeleton-track` rows immediately and virtualize lists over 80 tracks.
 
 ## 2026-09-26 — Shortcut strip showed Cmd/Ctrl as one wide string
 
